@@ -11,7 +11,7 @@
 # Then `nixos-rebuild switch`. The app runs on port 8453 by default.
 # Put a reverse proxy (nginx, caddy) in front for TLS.
 
-{ config, lib, pkgs }:
+{ config, lib, pkgs, ... }:
 
 let
   cfg = config.services.feedecho;

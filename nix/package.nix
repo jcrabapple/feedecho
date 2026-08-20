@@ -1,12 +1,13 @@
 # Standalone package derivation (for non-flake NixOS users)
 # Used by nix/module.nix default when not consuming via flake.nix.
 { lib
-, python ? python3
+, python3
+, pythonPkg ? python3
 , fetchFromGitHub ? null
 , src ? null
 }:
 
-python.pkgs.buildPythonApplication {
+pythonPkg.pkgs.buildPythonApplication {
   pname = "feedecho";
   version = "1.5.0";
 
@@ -19,9 +20,9 @@ python.pkgs.buildPythonApplication {
 
   format = "pyproject";
 
-  nativeBuildInputs = [ python.pkgs.hatchling ];
+  nativeBuildInputs = [ pythonPkg.pkgs.hatchling ];
 
-  propagatedBuildInputs = with python.pkgs; [
+  propagatedBuildInputs = with pythonPkg.pkgs; [
     fastapi
     uvicorn
     jinja2
@@ -31,7 +32,7 @@ python.pkgs.buildPythonApplication {
     apscheduler
   ];
 
-  nativeCheckInputs = with python.pkgs; [ pytest pytest-asyncio ];
+  nativeCheckInputs = with pythonPkg.pkgs; [ pytest pytest-asyncio ];
 
   checkPhase = ''
     runHook preCheck
@@ -43,7 +44,7 @@ python.pkgs.buildPythonApplication {
 
   # Expose the Python interpreter so the module can derive the correct
   # site-packages path without hardcoding "python3.12".
-  passthru.python = python;
+  passthru.python = pythonPkg;
 
   meta = with lib; {
     description = "Self-hosted RSS feed cross-poster";

@@ -56,9 +56,9 @@ let
     type = "github";
     owner = "jcrabapple";
     repo = "feedecho";
-    rev = "v1.5.0";
+    rev = "v1.9.0";
   };
-  feedechoPkg = pkgs.callPackage (feedechoSrc + "/nix/package.nix") { };
+  feedechoPkg = pkgs.callPackage (feedechoSrc + "/nix/package.nix") { src = feedechoSrc; };
 in {
   # Import the module and pass the package
   imports = [ (feedechoSrc + "/nix/module.nix") ];
@@ -74,11 +74,13 @@ in {
 }
 ```
 
-**Note:** The `fetchTree` hash in `nix/package.nix` is `lib.fakeHash` by default.
-Replace it with the real hash after the first build:
+**Note:** Passing `src = feedechoSrc` builds from your fetched checkout, so no
+dependency hash is needed. If you omit `src`, `nix/package.nix` falls back to
+fetching from GitHub and needs its `fetchFromGitHub` hash set — it is
+`lib.fakeHash` by default. Replace it after the first build:
 
 ```bash
-nix-prefetch-url --unpack https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.5.0.tar.gz
+nix-prefetch-url --unpack https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.9.0.tar.gz
 ```
 
 ## Auth token

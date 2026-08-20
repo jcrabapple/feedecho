@@ -103,9 +103,47 @@ in {
 
         # Hardening
         NoNewPrivileges = true;
+
+        # Process isolation
+        PrivateMounts = true;
         PrivateTmp = true;
-        ProtectSystem = "strict";
+        RemoveIPC = true;
+
+        # Filesystem
         ProtectHome = true;
+        ProtectSystem = "strict";
+        UMask = "0077";
+
+        # Kernel
+        ProtectClock = true;
+        ProtectControlGroups = true;
+        ProtectHostname = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectKernelTunables = true;
+        ProtectProc = "invisible";
+
+        # Capabilities
+        AmbientCapabilities = [ ];
+        CapabilityBoundingSet = [ ];
+        RestrictSUIDSGID = true;
+
+        # Memory
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+
+        # Devices
+        PrivateDevices = true;
+
+        # Network
+        # HTTP(S) and Unix sockets for the web UI, outbound feed/API polling,
+        # SMTP, and DNS resolution via the resolver socket.
+        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" "AF_NETLINK" ];
+
+        # Misc
+        KeyringMode = "private";
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
       };
 
       # Read the auth token from the credential file and exec uvicorn.

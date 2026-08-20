@@ -17,7 +17,7 @@
         in
         python.pkgs.buildPythonApplication {
           pname = "feedecho";
-          version = "1.5.0";
+          version = "1.9.0";
           src = ./.;
           format = "pyproject";
 
@@ -46,8 +46,20 @@
           doCheck = false;
 
           # Expose the Python interpreter so the NixOS module can derive
-          # the correct site-packages path.
-          passthru.python = python;
+          # the correct site-packages path, plus a consolidated runtime
+          # env (uvicorn + all deps) so the module can exec uvicorn.
+          passthru = {
+            inherit python;
+            env = python.withPackages (ps: with ps; [
+              fastapi
+              uvicorn
+              jinja2
+              python-multipart
+              feedparser
+              httpx
+              apscheduler
+            ]);
+          };
 
           meta = with pkgs.lib; {
             description = "Self-hosted RSS feed cross-poster — route feed items to Mastodon";
@@ -64,7 +76,7 @@
         { config, lib, pkgs', ... }:
         import ./nix/module.nix {
           inherit config lib;
-          pkgs = pkgs // { feedecho-pkg = mkPackage pkgs; };
+          pkgs = pkgs // { feedecho-flake-pkg = mkPackage pkgs; };
         };
     in
     {

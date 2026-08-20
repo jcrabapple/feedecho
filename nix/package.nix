@@ -9,12 +9,12 @@
 
 pythonPkg.pkgs.buildPythonApplication {
   pname = "feedecho";
-  version = "1.5.0";
+  version = "1.9.0";
 
   src = if src != null then src else fetchFromGitHub {
     owner = "jcrabapple";
     repo = "feedecho";
-    rev = "v1.5.0";
+    rev = "v1.9.0";
     hash = lib.fakeHash; # replace after first build: `nix-prefetch-url --unpack <url>`
   };
 
@@ -43,8 +43,21 @@ pythonPkg.pkgs.buildPythonApplication {
   doCheck = false;
 
   # Expose the Python interpreter so the module can derive the correct
-  # site-packages path without hardcoding "python3.12".
-  passthru.python = pythonPkg;
+  # site-packages path without hardcoding "python3.12". Also expose a
+  # consolidated runtime environment (uvicorn + all deps) so the module
+  # can exec uvicorn from a single path.
+  passthru = {
+    python = pythonPkg;
+    env = pythonPkg.withPackages (ps: with ps; [
+      fastapi
+      uvicorn
+      jinja2
+      python-multipart
+      feedparser
+      httpx
+      apscheduler
+    ]);
+  };
 
   meta = with lib; {
     description = "Self-hosted RSS feed cross-poster";

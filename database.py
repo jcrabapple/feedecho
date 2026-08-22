@@ -201,11 +201,53 @@ def init_db() -> None:
         """)
 
         db.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL DEFAULT '',
+                plan TEXT NOT NULL DEFAULT 'trial',
+                trial_ends_at TIMESTAMP,
+                email_verified INTEGER NOT NULL DEFAULT 0,
+                suspended INTEGER NOT NULL DEFAULT 0,
+                stripe_customer_id TEXT DEFAULT '',
+                stripe_subscription_id TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Single-tenant placeholder: all data belongs to user 1 when the
+        # app runs without accounts (FEEDCHO_MODE=single).
+        db.execute("INSERT OR IGNORE INTO users (id, email) VALUES (1, 'local')")
+
+        # Owned tables carry user_id. Existing single-tenant databases
+        # backfill to user 1 via the column default.
+        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts"):
+            _add_column_if_missing(
+                db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
+            )
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                user_id INTEGER NOT NULL DEFAULT 1,
+                key TEXT NOT NULL,
+                value TEXT,
+                PRIMARY KEY (user_id, key)
+            )
+        """)
+        if "user_id" not in _column_names(db, "settings"):
+            # Migrate legacy single-key settings tables: backfill to user 1.
+            db.execute("ALTER TABLE settings RENAME TO settings_legacy")
+            db.execute("""
+                CREATE TABLE settings (
+                    user_id INTEGER NOT NULL DEFAULT 1,
+                    key TEXT NOT NULL,
+                    value TEXT,
+                    PRIMARY KEY (user_id, key)
+                )
+            """)
+            db.execute(
+                "INSERT INTO settings (user_id, key, value) SELECT 1, key, value FROM settings_legacy"
+            )
+            db.execute("DROP TABLE settings_legacy")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS posted_items (

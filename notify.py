@@ -98,9 +98,11 @@ def _set_notify_state(echo_id: int, value: str | None) -> None:
         if value is None:
             db.execute("DELETE FROM settings WHERE key = ?", (key,))
         else:
+            # user_id is pinned to 1 here: notify state is single-tenant
+            # bookkeeping; multi-tenant scoping lands in the auth work.
             db.execute(
-                "INSERT INTO settings (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                "INSERT INTO settings (user_id, key, value) VALUES (1, ?, ?) "
+                "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
 

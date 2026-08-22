@@ -9,7 +9,7 @@ Built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echo
 - **RSS/Atom/JSON feed support** via feedparser
 - **Mastodon OAuth** — connect accounts with one click, no manual token creation
 - **Bluesky support** — connect accounts with an App Password; posts get auto-detected link facets, 300-grapheme truncation, and image embeds with alt text
-- **Template engine** with variables: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date:iso }}`, `{{ date:short }}`, `{{ hashtags }}`
+- **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
 - **Multiple accounts** — post to multiple Mastodon instances and Bluesky accounts
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Post history** with success/failure tracking and error messages
@@ -146,6 +146,11 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 
 ## Template Variables
 
+Templates are sandboxed Jinja2, so they support conditionals, filters, and
+direct access to the item dict. The variables table below lists the flat
+variables; the `{{ item }}` dict exposes every parsed field (`{{ item.title }}`,
+`{{ item['link'] }}`, `{{ item['tags'][0] }}`).
+
 | Variable | Description |
 |----------|-------------|
 | `{{ title }}` | Post title |
@@ -154,9 +159,28 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 | `{{ content }}` | Full post content (HTML stripped to plain text) |
 | `{{ author }}` | Author name |
 | `{{ date }}` | Publication date (raw) |
-| `{{ date:iso }}` | ISO 8601 date (2024-01-15T09:30:00) |
-| `{{ date:short }}` | Short date (2024-01-15) |
+| `{{ date_iso }}` | ISO 8601 date (2024-01-15T09:30:00) |
+| `{{ date_short }}` | Short date (2024-01-15) |
+| `{{ tags }}` | Raw tag list |
 | `{{ hashtags }}` | Feed tags as #hashtags |
+| `{{ image_url }}` | First image URL from the item |
+| `{{ feed_name }}` | Name of the source feed |
+
+Legacy spellings `{{ date:iso }}` and `{{ date:short }}` keep working.
+
+Examples:
+
+```
+{% if summary %}{{ title }} - {{ summary | truncate(90) }}{% else %}{{ title }} {{ link }}{% endif %}
+{{ title }} by {{ author | default('unknown', true) }} {{ link }}
+{{ feed_name }}: {{ title }} {{ link }}
+```
+
+The echo form has a **Preview** button that renders the current template
+against the feed's three most recent items, and template syntax errors are
+rejected at save time. Rendered posts longer than the platform limit are
+truncated before posting (500 chars Mastodon, 300 graphemes Bluesky); use
+`| truncate(N)` to control where the cut happens.
 
 ## Code Breakdown
 

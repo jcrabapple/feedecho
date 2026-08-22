@@ -105,4 +105,4 @@ class TestAvailableVariables:
 
     def test_includes_date_iso(self):
         variables = available_variables()
-        assert any(v["var"] == "{{ date:iso }}" for v in variables)
+        assert any(v["var"] == "{{ date_iso }}" for v in variables)

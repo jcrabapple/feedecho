@@ -29,7 +29,7 @@ from bluesky import (
     session_expiry as bluesky_session_expiry,
     test_connection as test_bluesky_connection,
 )
-from template_engine import render_template, available_variables
+from template_engine import render_template, available_variables, validate_template
 from scheduler import start_scheduler, stop_scheduler, check_feed
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
@@ -37,7 +37,7 @@ from email_sender import get_smtp_settings, test_smtp_connection
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("feedecho")
 
-app = FastAPI(title="FeedEcho", version="1.9.2")
+app = FastAPI(title="FeedEcho", version="1.10.0")
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -830,6 +830,17 @@ VALID_DEST_TYPES = {"mastodon", "email", "bluesky"}
 VALID_FILTER_MODES = {"exclude", "include"}
 
 
+def _validate_echo_template(template: str) -> None:
+    """Reject templates the Jinja2 engine cannot parse at save time.
+
+    Without this, a syntax error only surfaces later as a gave_up post.
+    """
+    try:
+        validate_template(template)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Template error: {e}")
+
+
 @app.post("/api/echoes")
 async def add_echo(
     feed_id: int = Form(...),
@@ -857,6 +868,8 @@ async def add_echo(
     # Digest mode is email-only
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
+
+    _validate_echo_template(template)
 
     # Resolve destination_id based on type
     if destination_type == "mastodon":
@@ -928,6 +941,8 @@ async def edit_echo(
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
 
+    _validate_echo_template(template)
+
     if destination_type == "mastodon":
         destination_id = account_id
         if not destination_id:
@@ -990,24 +1005,51 @@ async def preview_template(
     template: str = Form(...),
     feed_id: int = Form(...),
 ):
-    """Preview a template against the latest feed item."""
+    """Preview a template rendered against the feed's most recent items.
+
+    Renders the given template against up to 3 recent feed items so users
+    can check output before saving an echo. The template is validated
+    first; syntax errors return 400 with the Jinja2 error message.
+    """
+    try:
+        validate_template(template)
+    except Exception as e:
+        return JSONResponse(
+            {"success": False, "error": f"Template syntax error: {e}"},
+            status_code=400,
+        )
+
     with get_db() as db:
         feed = db.execute(
             "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
         ).fetchone()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
+
     try:
         feed_data = fetch_feed(feed["url"])
-        if not feed_data["items"]:
-            return {"success": False, "error": "Feed has no items"}
-        item = feed_data["items"][0]
-        rendered = render_template(template, item)
-        return {"success": True, "rendered": rendered, "item_title": item["title"]}
     except SSRFError as e:
-        return {"success": False, "error": str(e)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return JSONResponse({"success": False, "error": str(e)}, status_code=400)
+    except Exception:
+        logger.warning("Template preview: feed %s fetch failed", feed_id, exc_info=True)
+        return JSONResponse(
+            {"success": False, "error": "Could not fetch the feed"}, status_code=502
+        )
+
+    items = (feed_data.get("items") or [])[:3]
+    previews = []
+    for item in items:
+        try:
+            rendered = render_template(template, item, feed_name=feed["name"])
+        except Exception as e:
+            return JSONResponse(
+                {"success": False, "error": f"Render error: {e}"}, status_code=400
+            )
+        previews.append(
+            {"title": item.get("title") or "(untitled)", "rendered": rendered}
+        )
+
+    return {"success": True, "items": previews}
 
 
 # ── API: OAuth ───────────────────────────────────────────────────────────────

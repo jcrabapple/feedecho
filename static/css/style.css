@@ -551,6 +551,64 @@ code {
     border-color: var(--primary);
 }
 
+/* Template preview panel (echo forms) */
+.template-preview {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.template-preview-btn {
+    margin-top: 0.4rem;
+}
+
+.preview-item {
+    padding: 0.5rem 0;
+    border-top: 1px solid var(--border);
+}
+
+.preview-item:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+.preview-item:last-child {
+    padding-bottom: 0;
+}
+
+.preview-title {
+    margin: 0 0 0.3rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.preview-item pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 0.95rem;
+    color: var(--text);
+}
+
+.preview-error {
+    margin: 0;
+    color: var(--danger);
+}
+
+.template-help {
+    margin-top: 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.template-help p {
+    margin: 0.3rem 0;
+}
+
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {

@@ -224,7 +224,7 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
 
         all_succeeded = True
         for echo in echoes:
-            if not process_echo(echo, item):
+            if not process_echo(echo, item, feed_name=feed_name):
                 all_succeeded = False
 
         if not all_succeeded:
@@ -245,10 +245,10 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
     else:
         _update_last_fetched(feed_id, lease_token)
 
-    _retry_due_failures(feed_id, echoes)
+    _retry_due_failures(feed_id, echoes, feed_name=feed_name)
 
 
-def _retry_due_failures(feed_id: int, echoes) -> None:
+def _retry_due_failures(feed_id: int, echoes, feed_name: str = "") -> None:
     """Reprocess failed rows whose backoff has elapsed, regardless of cursor.
 
     Normal cursor replay only covers items at-or-after the cursor. Failed rows
@@ -303,7 +303,7 @@ def _retry_due_failures(feed_id: int, echoes) -> None:
             continue
         echo = echoes_by_id.get(row["echo_id"])
         if echo is not None:
-            process_echo(echo, item)
+            process_echo(echo, item, feed_name=feed_name)
 
 
 def db_feed_url(feed_id: int) -> str:
@@ -433,8 +433,11 @@ def _record_filtered(echo_id: int, item: dict) -> None:
         )
 
 
-def process_echo(echo, item: dict) -> bool:
-    """Deliver one item to one echo using an atomic pending-row claim."""
+def process_echo(echo, item: dict, feed_name: str = "") -> bool:
+    """Deliver one item to one echo using an atomic pending-row claim.
+
+    feed_name is optional context for template rendering ({{ feed_name }}).
+    """
     echo_id = echo["id"]
     item_id = item["id"]
 
@@ -462,7 +465,7 @@ def process_echo(echo, item: dict) -> bool:
     posted_id, claim_token = claimed
 
     try:
-        content = render_template(echo["template"], item)
+        content = render_template(echo["template"], item, feed_name=feed_name)
     except Exception:
         logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
         gave_up = _fail_post(posted_id, claim_token, echo_id, "Template rendering failed")

@@ -207,6 +207,7 @@ function editEcho(echoId) {
             <div class="form-row">
                 <label>Template
                     <textarea name="template" rows="3">${escapeHTML(template)}</textarea>
+                    <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
                 </label>
             </div>
             <div class="form-row">
@@ -268,6 +269,49 @@ function cancelEdit(echoId) {
     if (row && editState.has(echoId)) {
         row.innerHTML = editState.get(echoId);
         editState.delete(echoId);
+    }
+}
+
+async function previewTemplate(btn) {
+    const form = btn.closest('form');
+    if (!form) return;
+
+    const templateField = form.querySelector('textarea[name="template"]');
+    const feedSelect = form.querySelector('select[name="feed_id"]');
+    if (!templateField || !feedSelect) return;
+    if (!feedSelect.value) {
+        alert('Select a feed first, then preview.');
+        return;
+    }
+
+    let box = btn.parentElement.querySelector('.template-preview');
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'template-preview';
+        btn.parentElement.appendChild(box);
+    }
+    box.innerHTML = '<p class="hint">Rendering against latest feed items...</p>';
+
+    const body = new FormData();
+    body.append('template', templateField.value);
+    body.append('feed_id', feedSelect.value);
+
+    try {
+        const resp = await fetch('/api/preview', { method: 'POST', body });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            box.innerHTML = `<p class="preview-error">${escapeHTML(data.error || resp.statusText)}</p>`;
+            return;
+        }
+        if (!data.items || data.items.length === 0) {
+            box.innerHTML = '<p class="hint">This feed has no items to preview.</p>';
+            return;
+        }
+        box.innerHTML = data.items.map((it) =>
+            `<div class="preview-item"><p class="preview-title">${escapeHTML(it.title)}</p><pre>${escapeHTML(it.rendered)}</pre></div>`
+        ).join('');
+    } catch (e) {
+        box.innerHTML = `<p class="preview-error">${escapeHTML('Request failed: ' + e.message)}</p>`;
     }
 }
 

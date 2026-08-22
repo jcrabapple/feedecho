@@ -278,7 +278,11 @@ async function previewTemplate(btn) {
 
     const templateField = form.querySelector('textarea[name="template"]');
     const feedSelect = form.querySelector('select[name="feed_id"]');
-    if (!templateField || !feedSelect) return;
+    if (!templateField) return;
+    if (!feedSelect) {
+        alert('Preview needs a feed selector on this form.');
+        return;
+    }
     if (!feedSelect.value) {
         alert('Select a feed first, then preview.');
         return;

@@ -104,6 +104,26 @@ class TestLegacyCompatibility:
     def test_whitespace_insensitive(self):
         assert render_template("{{   title   }}", ITEM) == "A Post Title"
 
+    def test_literal_prose_with_token_text_preserved(self):
+        # "date:iso" outside {{ }} is plain text and must not be rewritten.
+        template = "Format date:iso is the spec. {{ title }} {{ date:iso }}"
+        assert render_template(template, ITEM) == (
+            "Format date:iso is the spec. A Post Title 2024-01-15T09:30:00"
+        )
+
+    def test_normalize_handles_multiple_expressions(self):
+        template = "{{ title }} | {{ date:short }} | {{ date:iso }}"
+        assert render_template(template, ITEM) == (
+            "A Post Title | 2024-01-15 | 2024-01-15T09:30:00"
+        )
+
+    def test_first_filter_on_empty_tags(self):
+        item = dict(ITEM, tags=[])
+        assert render_template("{{ item['tags'] | first }}", item) == ""
+
+    def test_first_filter_on_present_tags(self):
+        assert render_template("{{ item['tags'] | first }}", ITEM) == "python"
+
 
 class TestValidation:
     def test_valid_template_passes(self):

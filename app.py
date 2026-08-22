@@ -37,7 +37,7 @@ from email_sender import get_smtp_settings, test_smtp_connection
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("feedecho")
 
-app = FastAPI(title="FeedEcho", version="1.10.0")
+app = FastAPI(title="FeedEcho", version="1.10.1")
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -153,6 +153,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    _revalidate_stored_templates()
     start_scheduler()
     logger.info("FeedEcho started")
     yield
@@ -830,6 +831,30 @@ VALID_DEST_TYPES = {"mastodon", "email", "bluesky"}
 VALID_FILTER_MODES = {"exclude", "include"}
 
 
+def _revalidate_stored_templates() -> None:
+    """Log stored templates that no longer parse under the Jinja2 engine.
+
+    Templates saved by the old regex engine could contain literal ``{%``
+    or ``{#`` text that is now real Jinja2 syntax. Save-time validation
+    only protects new edits, so revalidate everything at startup and
+    warn instead of letting those echoes silently gave_up at render time.
+    """
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, feed_id, template FROM echoes WHERE deleted_at IS NULL"
+        ).fetchall()
+    for row in rows:
+        try:
+            validate_template(row["template"])
+        except Exception as e:
+            logger.warning(
+                "Echo %s: stored template no longer parses and will give up at "
+                "render time (edit the echo to fix): %s",
+                row["id"],
+                e,
+            )
+
+
 def _validate_echo_template(template: str) -> None:
     """Reject templates the Jinja2 engine cannot parse at save time.
 
@@ -1001,7 +1026,7 @@ async def delete_echo(echo_id: int):
 # ── API: Preview ────────────────────────────────────────────────────────────
 
 @app.post("/api/preview")
-async def preview_template(
+def preview_template(
     template: str = Form(...),
     feed_id: int = Form(...),
 ):

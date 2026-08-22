@@ -35,19 +35,22 @@ def _seed_feed(name="Example Feed", url="https://example.com/feed.xml"):
         return cursor.lastrowid
 
 
-def _seed_echo(feed_id, template="{{ title }} {{ link }}", destination_type="mastodon"):
+def _seed_account():
     with get_db() as db:
-        db.execute(
+        cursor = db.execute(
             "INSERT INTO accounts (name, username, instance, access_token)"
             " VALUES ('Test', 'test', 'https://example.com', 'tok')"
         )
-        account = db.execute(
-            "SELECT id FROM accounts ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        return cursor.lastrowid
+
+
+def _seed_echo(feed_id, template="{{ title }} {{ link }}", destination_type="mastodon"):
+    account_id = _seed_account()
+    with get_db() as db:
         cursor = db.execute(
             "INSERT INTO echoes (feed_id, destination_type, destination_id, template)"
             " VALUES (?, ?, ?, ?)",
-            (feed_id, destination_type, account["id"], template),
+            (feed_id, destination_type, account_id, template),
         )
         return cursor.lastrowid
 
@@ -178,19 +181,20 @@ class TestPreviewEndpoint:
 
 
 class TestEchoFormValidation:
-    def _mastodon_form(self, feed_id, template):
+    def _mastodon_form(self, feed_id, account_id, template):
         return {
             "feed_id": str(feed_id),
             "destination_type": "mastodon",
-            "account_id": "1",
+            "account_id": str(account_id),
             "template": template,
         }
 
     def test_add_echo_rejects_bad_template(self, client):
         feed_id = _seed_feed()
+        account_id = _seed_account()
         resp = client.post(
             "/api/echoes",
-            data=self._mastodon_form(feed_id, "{% if summary %}broken"),
+            data=self._mastodon_form(feed_id, account_id, "{% if summary %}broken"),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -198,9 +202,10 @@ class TestEchoFormValidation:
 
     def test_add_echo_accepts_valid_template(self, client):
         feed_id = _seed_feed()
+        account_id = _seed_account()
         resp = client.post(
             "/api/echoes",
-            data=self._mastodon_form(feed_id, "{{ title }} - {{ link }}"),
+            data=self._mastodon_form(feed_id, account_id, "{{ title }} - {{ link }}"),
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -212,9 +217,10 @@ class TestEchoFormValidation:
 
     def test_add_echo_bad_template_inserts_nothing(self, client):
         feed_id = _seed_feed()
+        account_id = _seed_account()
         client.post(
             "/api/echoes",
-            data=self._mastodon_form(feed_id, "{% if summary %}broken"),
+            data=self._mastodon_form(feed_id, account_id, "{% if summary %}broken"),
             follow_redirects=False,
         )
         with get_db() as db:
@@ -226,7 +232,8 @@ class TestEchoFormValidation:
     def test_edit_echo_rejects_bad_template(self, client):
         feed_id = _seed_feed()
         echo_id = _seed_echo(feed_id)
-        form = self._mastodon_form(feed_id, "{% if summary %}broken")
+        account_id = _seed_account()
+        form = self._mastodon_form(feed_id, account_id, "{% if summary %}broken")
         form["echo_id"] = str(echo_id)
         resp = client.post(
             f"/api/echoes/{echo_id}/edit",
@@ -235,3 +242,39 @@ class TestEchoFormValidation:
         )
         assert resp.status_code == 400
         assert "Template error" in resp.json()["detail"]
+
+
+class TestStartupRevalidation:
+    def test_logs_warning_for_broken_stored_template(self, client, caplog):
+        import logging
+
+        import app as app_module
+
+        feed_id = _seed_feed()
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO echoes (feed_id, destination_type, destination_id, template)"
+                " VALUES (?, 'mastodon', ?, ?)",
+                (feed_id, _seed_account(), "{% if summary %}broken"),
+            )
+
+        with caplog.at_level(logging.WARNING):
+            app_module._revalidate_stored_templates()
+
+        assert any(
+            "no longer parses" in record.message for record in caplog.records
+        )
+
+    def test_no_warning_for_valid_stored_template(self, client, caplog):
+        import logging
+
+        import app as app_module
+
+        _seed_echo(_seed_feed())
+
+        with caplog.at_level(logging.WARNING):
+            app_module._revalidate_stored_templates()
+
+        assert not any(
+            "no longer parses" in record.message for record in caplog.records
+        )

@@ -466,9 +466,14 @@ def process_echo(echo, item: dict, feed_name: str = "") -> bool:
 
     try:
         content = render_template(echo["template"], item, feed_name=feed_name)
-    except Exception:
+    except Exception as e:
         logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
-        gave_up = _fail_post(posted_id, claim_token, echo_id, "Template rendering failed")
+        gave_up = _fail_post(
+            posted_id,
+            claim_token,
+            echo_id,
+            f"Template rendering failed: {e}",
+        )
         return gave_up
 
     if not content.strip():

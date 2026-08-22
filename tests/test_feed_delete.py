@@ -23,10 +23,13 @@ def temp_db(monkeypatch):
 
 
 @pytest.fixture
-def client(temp_db):
-    from app import app
+def client(temp_db, monkeypatch):
+    import app as app_module
 
-    return TestClient(app)
+    # Shared-secret auth must not leak in from the ambient environment —
+    # otherwise a FEEDCHO_AUTH_TOKEN in the shell breaks every request here.
+    monkeypatch.setattr(app_module, "_AUTH_TOKEN", None)
+    return TestClient(app_module.app)
 
 
 def _seed():

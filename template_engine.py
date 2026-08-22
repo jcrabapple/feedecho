@@ -35,6 +35,11 @@ _LEGACY_DATE_TOKENS = {
     "date:short": "date_short",
 }
 
+# Only rewrite inside {{ ... }} expressions. A blanket str.replace would
+# also mangle string literals and plain template prose that mentions the
+# token text (e.g. "format: date:iso").
+_EXPRESSION_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+
 
 def _format_date(date_str: str | None, fmt: str) -> str:
     """Format a date string using the given format string."""
@@ -60,10 +65,19 @@ def _format_hashtags(tags) -> str:
 
 
 def _normalize(template: str) -> str:
-    """Rewrite legacy colon date tokens into Jinja2-safe identifiers."""
-    for old, new in _LEGACY_DATE_TOKENS.items():
-        template = template.replace(old, new)
-    return template
+    """Rewrite legacy colon date tokens into Jinja2-safe identifiers.
+
+    Only inside ``{{ ... }}`` expressions, leaving string literals and
+    plain template text untouched.
+    """
+
+    def _fix_expression(match: re.Match) -> str:
+        inner = match.group(1)
+        for old, new in _LEGACY_DATE_TOKENS.items():
+            inner = inner.replace(old, new)
+        return "{{" + inner + "}}"
+
+    return _EXPRESSION_RE.sub(_fix_expression, template)
 
 
 def _build_context(item: dict, feed_name: str = "") -> dict:

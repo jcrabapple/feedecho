@@ -149,7 +149,8 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 Templates are sandboxed Jinja2, so they support conditionals, filters, and
 direct access to the item dict. The variables table below lists the flat
 variables; the `{{ item }}` dict exposes every parsed field (`{{ item.title }}`,
-`{{ item['link'] }}`, `{{ item['tags'][0] }}`).
+`{{ item['link'] }}`, `{{ item['tags'] | first }}`). Indexing into an empty
+or missing list raises at render time — use `| first` or `| default(...)`.
 
 | Variable | Description |
 |----------|-------------|

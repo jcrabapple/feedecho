@@ -39,9 +39,9 @@ class TestModeFlag:
     def test_defaults_are_sane(self, monkeypatch):
         _clean_env(monkeypatch)
         s = _reload_settings()
-        assert s.AUTH_TOKEN == ""
+        assert s.AUTH_TOKEN is None
         assert s.DATABASE_URL == ""
-        assert s.CALLBACK_URL == ""
+        assert s.CALLBACK_URL == "https://feedecho.example.com/oauth/callback"
         assert s.DB_PATH.name == "feedecho.db"
 
 

@@ -24,18 +24,40 @@ def qmark(sql: str) -> str:
     """Translate ``?`` placeholders to ``%s`` for Postgres.
 
     Single-quoted string literals are skipped: ``?`` inside them is left
-    alone and ``%`` is escaped to ``%%`` (psycopg3 treats bare ``%`` in
-    literals as a placeholder). No-op when the dialect is sqlite.
+    alone, ``%`` is escaped to ``%%`` (psycopg3 treats bare ``%`` in
+    literals as a placeholder), and SQL-standard doubled quotes
+    (``'it''s'``) are handled so a ``?`` after an escaped quote stays
+    inside the literal. No-op when the dialect is sqlite.
+
+    Deliberately out of scope: ``E'...'`` backslash escapes and
+    dollar-quoted strings — FeedEcho's SQL never uses them.
     """
     if dialect() != "postgres":
         return sql
-    parts = sql.split("'")
-    for i, part in enumerate(parts):
-        if i % 2 == 0:  # outside a string literal
-            parts[i] = part.replace("?", "%s")
-        else:  # inside a string literal
-            parts[i] = part.replace("%", "%%")
-    return "'".join(parts)
+    out = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch != "'":
+            out.append("%s" if ch == "?" else ch)
+            i += 1
+            continue
+        # Enter a string literal: copy verbatim until the closing quote.
+        out.append(ch)
+        i += 1
+        while i < n:
+            if sql[i] == "'":
+                if i + 1 < n and sql[i + 1] == "'":  # doubled quote escape
+                    out.append("''")
+                    i += 2
+                    continue
+                out.append("'")
+                i += 1
+                break
+            out.append("%%" if sql[i] == "%" else sql[i])
+            i += 1
+    return "".join(out)
 
 
 class _PgConnection:
@@ -112,6 +134,21 @@ def _column_names(db, table_name: str) -> set[str]:
     return {row["name"] for row in db.execute(f"PRAGMA table_info({table_name})")}
 
 
+def _has_unique_on(db, table_name: str, columns: set[str]) -> bool:
+    """True if the table has a UNIQUE index covering exactly `columns`.
+
+    SQLite-only helper: detects inline UNIQUE constraints (autoindexes)
+    so migrations can be idempotent across restarts.
+    """
+    for idx in db.execute(f"PRAGMA index_list({table_name})"):
+        if not idx["unique"]:
+            continue
+        cols = {r["name"] for r in db.execute(f"PRAGMA index_info({idx['name']})")}
+        if cols == columns:
+            return True
+    return False
+
+
 def _add_column_if_missing(
     db,
     table_name: str,
@@ -150,6 +187,7 @@ def init_db_sqlite() -> None:
                 username TEXT DEFAULT '',
                 instance TEXT NOT NULL,
                 access_token TEXT NOT NULL,
+                user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -183,6 +221,9 @@ def init_db_sqlite() -> None:
                 last_item_id TEXT,
                 lease_token TEXT,
                 lease_expires_at TIMESTAMP,
+                paused INTEGER NOT NULL DEFAULT 0,
+                deleted_at TIMESTAMP,
+                user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -210,6 +251,14 @@ def init_db_sqlite() -> None:
                 template TEXT NOT NULL DEFAULT '{{ title }} {{ link }}',
                 visibility TEXT DEFAULT 'public',
                 enabled INTEGER DEFAULT 1,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                filter_keywords TEXT DEFAULT '',
+                filter_mode TEXT NOT NULL DEFAULT 'exclude',
+                content_warning TEXT DEFAULT '',
+                attach_image INTEGER NOT NULL DEFAULT 0,
+                delivery_mode TEXT NOT NULL DEFAULT 'instant',
+                drip_limit INTEGER NOT NULL DEFAULT 0,
+                deleted_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
             )
@@ -274,8 +323,10 @@ def init_db_sqlite() -> None:
             CREATE TABLE IF NOT EXISTS email_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                email TEXT NOT NULL,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, email)
             )
         """)
 
@@ -283,14 +334,16 @@ def init_db_sqlite() -> None:
             CREATE TABLE IF NOT EXISTS bluesky_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                handle TEXT NOT NULL UNIQUE,
+                handle TEXT NOT NULL,
                 app_password TEXT NOT NULL,
                 did TEXT DEFAULT '',
                 pds TEXT DEFAULT '',
                 access_jwt TEXT DEFAULT '',
                 refresh_jwt TEXT DEFAULT '',
                 session_expires_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, handle)
             )
         """)
 
@@ -319,6 +372,64 @@ def init_db_sqlite() -> None:
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
 
+        # Migrate single-column UNIQUE constraints to per-user composite
+        # constraints so different tenants can use the same destination
+        # email/handle. Identical behavior in single mode (user_id is
+        # always 1). Recreate-table pattern, guarded by _has_unique_on so
+        # it is idempotent across restarts.
+        if not _has_unique_on(db, "email_accounts", {"user_id", "email"}):
+            db.execute("DROP TABLE IF EXISTS email_accounts_legacy")
+            db.execute(
+                "ALTER TABLE email_accounts RENAME TO email_accounts_legacy"
+            )
+            db.execute("""
+                CREATE TABLE email_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, email)
+                )
+            """)
+            db.execute(
+                "INSERT INTO email_accounts (id, name, email, user_id, created_at)"
+                " SELECT id, name, email, user_id, created_at"
+                " FROM email_accounts_legacy"
+            )
+            db.execute("DROP TABLE email_accounts_legacy")
+
+        if not _has_unique_on(db, "bluesky_accounts", {"user_id", "handle"}):
+            db.execute("DROP TABLE IF EXISTS bluesky_accounts_legacy")
+            db.execute(
+                "ALTER TABLE bluesky_accounts RENAME TO bluesky_accounts_legacy"
+            )
+            db.execute("""
+                CREATE TABLE bluesky_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    handle TEXT NOT NULL,
+                    app_password TEXT NOT NULL,
+                    did TEXT DEFAULT '',
+                    pds TEXT DEFAULT '',
+                    access_jwt TEXT DEFAULT '',
+                    refresh_jwt TEXT DEFAULT '',
+                    session_expires_at TIMESTAMP,
+                    user_id INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, handle)
+                )
+            """)
+            db.execute(
+                "INSERT INTO bluesky_accounts (id, name, handle, app_password,"
+                " did, pds, access_jwt, refresh_jwt, session_expires_at,"
+                " user_id, created_at)"
+                " SELECT id, name, handle, app_password, did, pds, access_jwt,"
+                " refresh_jwt, session_expires_at, user_id, created_at"
+                " FROM bluesky_accounts_legacy"
+            )
+            db.execute("DROP TABLE bluesky_accounts_legacy")
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 user_id INTEGER NOT NULL DEFAULT 1,
@@ -329,6 +440,9 @@ def init_db_sqlite() -> None:
         """)
         if "user_id" not in _column_names(db, "settings"):
             # Migrate legacy single-key settings tables: backfill to user 1.
+            # The guard keeps the app startable if a partial migration or
+            # backup restore left a settings_legacy table behind.
+            db.execute("DROP TABLE IF EXISTS settings_legacy")
             db.execute("ALTER TABLE settings RENAME TO settings_legacy")
             db.execute("""
                 CREATE TABLE settings (
@@ -355,6 +469,8 @@ def init_db_sqlite() -> None:
                 claimed_at TIMESTAMP,
                 claim_token TEXT,
                 attempt_count INTEGER NOT NULL DEFAULT 0,
+                post_url TEXT,
+                next_retry_at TIMESTAMP,
                 posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
             )
@@ -455,7 +571,7 @@ def init_db_postgres() -> None:
                 username TEXT DEFAULT '',
                 instance TEXT NOT NULL,
                 access_token TEXT NOT NULL,
-                user_id INTEGER NOT NULL DEFAULT 1,
+                user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -473,7 +589,7 @@ def init_db_postgres() -> None:
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
                 deleted_at TIMESTAMP,
-                user_id INTEGER NOT NULL DEFAULT 1,
+                user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -487,7 +603,7 @@ def init_db_postgres() -> None:
                 template TEXT NOT NULL DEFAULT '{{ title }} {{ link }}',
                 visibility TEXT DEFAULT 'public',
                 enabled INTEGER DEFAULT 1,
-                user_id INTEGER NOT NULL DEFAULT 1,
+                user_id BIGINT NOT NULL DEFAULT 1,
                 filter_keywords TEXT DEFAULT '',
                 filter_mode TEXT NOT NULL DEFAULT 'exclude',
                 content_warning TEXT DEFAULT '',
@@ -539,9 +655,10 @@ def init_db_postgres() -> None:
             CREATE TABLE IF NOT EXISTS email_accounts (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                user_id INTEGER NOT NULL DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                email TEXT NOT NULL,
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, email)
             )
         """)
 
@@ -549,21 +666,22 @@ def init_db_postgres() -> None:
             CREATE TABLE IF NOT EXISTS bluesky_accounts (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
-                handle TEXT NOT NULL UNIQUE,
+                handle TEXT NOT NULL,
                 app_password TEXT NOT NULL,
                 did TEXT DEFAULT '',
                 pds TEXT DEFAULT '',
                 access_jwt TEXT DEFAULT '',
                 refresh_jwt TEXT DEFAULT '',
                 session_expires_at TIMESTAMP,
-                user_id INTEGER NOT NULL DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, handle)
             )
         """)
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
-                user_id INTEGER NOT NULL DEFAULT 1,
+                user_id BIGINT NOT NULL DEFAULT 1,
                 key TEXT NOT NULL,
                 value TEXT,
                 PRIMARY KEY (user_id, key)

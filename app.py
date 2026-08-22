@@ -504,10 +504,10 @@ def add_bluesky_account(
             """
             INSERT INTO bluesky_accounts (
                 name, handle, app_password, did, pds,
-                access_jwt, refresh_jwt, session_expires_at
+                access_jwt, refresh_jwt, session_expires_at, user_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(handle) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(user_id, handle) DO UPDATE SET
                 name = excluded.name,
                 app_password = excluded.app_password,
                 did = excluded.did,

@@ -67,6 +67,24 @@ class TestQmarkTranslation:
             "AND id = %s AND name = %s"
         )
 
+    def test_doubled_quote_inside_literal_stays_in_literal(self, monkeypatch):
+        self._force_postgres(monkeypatch)
+        sql = "SELECT * FROM t WHERE name = 'don''t ?' AND id = ?"
+        assert database.qmark(sql) == (
+            "SELECT * FROM t WHERE name = 'don''t ?' AND id = %s"
+        )
+
+    def test_doubled_quote_and_percent_escaping(self, monkeypatch):
+        self._force_postgres(monkeypatch)
+        sql = "WHERE a = 'it''s 100%' AND b = ?"
+        assert database.qmark(sql) == "WHERE a = 'it''s 100%%' AND b = %s"
+
+    def test_question_marks_only_inside_literals(self, monkeypatch):
+        self._force_postgres(monkeypatch)
+        assert database.qmark("WHERE x = '??' AND y = '?'") == (
+            "WHERE x = '??' AND y = '?'"
+        )
+
 
 class TestPgConnectionMissingDriver:
     def test_clear_error_when_psycopg_missing(self, monkeypatch):
@@ -83,11 +101,31 @@ class TestPgConnectionMissingDriver:
 
 
 class TestSchemaParity:
-    def _tables_from(self, fn):
-        source = inspect.getsource(fn)
-        return set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", source))
+    def _tables_and_columns(self, fn):
+        src = inspect.getsource(fn)
+        tables = {}
+        for m in re.finditer(
+            r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*?)\)\s*\"\"\"", src, re.S
+        ):
+            name, body = m.group(1), m.group(2)
+            cols = set()
+            for line in body.splitlines():
+                line = line.strip().rstrip(",")
+                if not line or line.startswith("--"):
+                    continue
+                if line.startswith(("UNIQUE(", "PRIMARY KEY", "FOREIGN KEY")):
+                    continue
+                cols.add(line.split()[0])
+            tables[name] = cols
+        return tables
 
     def test_pg_schema_covers_same_tables_as_sqlite(self):
-        sqlite_tables = self._tables_from(database.init_db_sqlite)
-        pg_tables = self._tables_from(database.init_db_postgres)
-        assert pg_tables == sqlite_tables
+        sqlite_tables = self._tables_and_columns(database.init_db_sqlite)
+        pg_tables = self._tables_and_columns(database.init_db_postgres)
+        assert set(pg_tables) == set(sqlite_tables)
+
+    def test_pg_schema_columns_match_sqlite_per_table(self):
+        sqlite_tables = self._tables_and_columns(database.init_db_sqlite)
+        pg_tables = self._tables_and_columns(database.init_db_postgres)
+        for table in sqlite_tables:
+            assert pg_tables[table] == sqlite_tables[table], table

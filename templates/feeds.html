@@ -48,7 +48,7 @@
                 <button class="btn-sm" onclick="fetchNow({{ feed.id }})">Fetch</button>
                 <button class="btn-sm" onclick="pauseFeed({{ feed.id }})">{{ 'Resume' if feed.paused else 'Pause' }}</button>
                 <form method="post" action="/api/feeds/{{ feed.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this feed and all its echoes?')">Delete</button>
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this feed? Echoes and post history are preserved.')">Delete</button>
                 </form>
             </td>
         </tr>

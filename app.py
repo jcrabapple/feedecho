@@ -37,7 +37,7 @@ from email_sender import get_smtp_settings, test_smtp_connection
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("feedecho")
 
-app = FastAPI(title="FeedEcho", version="1.9.1")
+app = FastAPI(title="FeedEcho", version="1.9.2")
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -227,7 +227,9 @@ async def dashboard(request: Request):
         bluesky_accounts = db.execute(
             "SELECT COUNT(*) as c FROM bluesky_accounts"
         ).fetchone()["c"]
-        feeds = db.execute("SELECT * FROM feeds ORDER BY name").fetchall()
+        feeds = db.execute(
+            "SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY name"
+        ).fetchall()
         echoes = db.execute("""
             SELECT e.*, f.name as feed_name,
                    CASE
@@ -240,6 +242,7 @@ async def dashboard(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            WHERE e.deleted_at IS NULL
             ORDER BY e.created_at DESC
         """).fetchall()
         recent_posts = db.execute("""
@@ -278,11 +281,13 @@ async def dashboard(request: Request):
 @app.get("/feeds", response_class=HTMLResponse)
 async def feeds_page(request: Request):
     with get_db() as db:
-        feeds = db.execute("SELECT * FROM feeds ORDER BY name").fetchall()
+        feeds = db.execute(
+            "SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY name"
+        ).fetchall()
         feed_echoes = {}
         for f in feeds:
             feed_echoes[f["id"]] = db.execute(
-                "SELECT COUNT(*) as c FROM echoes WHERE feed_id = ?", (f["id"],)
+                "SELECT COUNT(*) as c FROM echoes WHERE feed_id = ? AND deleted_at IS NULL", (f["id"],)
             ).fetchone()["c"]
     return render("feeds.html", request, feeds=feeds, feed_echoes=feed_echoes)
 
@@ -315,9 +320,12 @@ async def echoes_page(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            WHERE e.deleted_at IS NULL
             ORDER BY e.created_at DESC
         """).fetchall()
-        feeds = db.execute("SELECT * FROM feeds ORDER BY name").fetchall()
+        feeds = db.execute(
+            "SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY name"
+        ).fetchall()
         mastodon_accounts = db.execute(
             "SELECT id, name, username, instance FROM accounts ORDER BY name"
         ).fetchall()
@@ -540,7 +548,9 @@ def delete_bluesky_account(request: Request, account_id: int):
         dependent = db.execute(
             """
             SELECT COUNT(*) as c FROM echoes
-             WHERE destination_type = 'bluesky' AND destination_id = ?
+             WHERE destination_type = 'bluesky'
+               AND destination_id = ?
+               AND deleted_at IS NULL
             """,
             (account_id,),
         ).fetchone()["c"]
@@ -686,8 +696,23 @@ async def add_feed(
 
 @app.post("/api/feeds/{feed_id}/delete")
 async def delete_feed(feed_id: int):
+    """Soft-delete a feed. Echoes and post history are preserved.
+
+    A hard DELETE would cascade (echoes -> posted_items/digest_items) and wipe
+    the cross-post audit trail, so feeds are only marked deleted_at. The feed
+    disappears from listings and is skipped by the scheduler, but its echo
+    config and history remain on the /echoes and /history pages.
+    """
     with get_db() as db:
-        db.execute("DELETE FROM feeds WHERE id = ?", (feed_id,))
+        db.execute(
+            """
+            UPDATE feeds
+               SET deleted_at = datetime('now')
+             WHERE id = ?
+               AND deleted_at IS NULL
+            """,
+            (feed_id,),
+        )
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -695,7 +720,9 @@ async def delete_feed(feed_id: int):
 async def test_feed(feed_id: int):
     """Fetch a feed and return preview of items."""
     with get_db() as db:
-        feed = db.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+        feed = db.execute(
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+        ).fetchone()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
     try:
@@ -717,7 +744,9 @@ async def test_feed(feed_id: int):
 async def init_feed(feed_id: int):
     """Initialize a feed's last_item_id so it only posts new items going forward."""
     with get_db() as db:
-        feed = db.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+        feed = db.execute(
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+        ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
         try:
@@ -736,7 +765,9 @@ async def init_feed(feed_id: int):
 @app.post("/api/feeds/{feed_id}/pause")
 async def pause_feed(feed_id: int):
     with get_db() as db:
-        feed = db.execute("SELECT paused FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+        feed = db.execute(
+            "SELECT paused FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+        ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
         new_val = 0 if feed["paused"] else 1
@@ -859,7 +890,9 @@ async def add_echo(
 @app.post("/api/echoes/{echo_id}/toggle")
 async def toggle_echo(echo_id: int):
     with get_db() as db:
-        echo = db.execute("SELECT enabled FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+        echo = db.execute(
+            "SELECT enabled FROM echoes WHERE id = ? AND deleted_at IS NULL", (echo_id,)
+        ).fetchone()
         if not echo:
             raise HTTPException(status_code=404, detail="Echo not found")
         new_val = 0 if echo["enabled"] else 1
@@ -911,7 +944,9 @@ async def edit_echo(
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
     with get_db() as db:
-        echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+        echo = db.execute(
+            "SELECT * FROM echoes WHERE id = ? AND deleted_at IS NULL", (echo_id,)
+        ).fetchone()
         if not echo:
             raise HTTPException(status_code=404, detail="Echo not found")
         db.execute(
@@ -928,8 +963,23 @@ async def edit_echo(
 
 @app.post("/api/echoes/{echo_id}/delete")
 async def delete_echo(echo_id: int):
+    """Soft-delete an echo so its posted-item history survives.
+
+    A hard DELETE cascades to posted_items/digest_items and erases the
+    cross-post audit trail. Marking deleted_at and disabling the echo removes
+    it from listings and stops delivery while keeping its history intact.
+    """
     with get_db() as db:
-        db.execute("DELETE FROM echoes WHERE id = ?", (echo_id,))
+        db.execute(
+            """
+            UPDATE echoes
+               SET deleted_at = datetime('now'),
+                   enabled = 0
+             WHERE id = ?
+               AND deleted_at IS NULL
+            """,
+            (echo_id,),
+        )
     return RedirectResponse(url="/echoes", status_code=303)
 
 
@@ -942,7 +992,9 @@ async def preview_template(
 ):
     """Preview a template against the latest feed item."""
     with get_db() as db:
-        feed = db.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+        feed = db.execute(
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+        ).fetchone()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
     try:

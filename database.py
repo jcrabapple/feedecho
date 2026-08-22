@@ -97,6 +97,9 @@ def init_db() -> None:
         _add_column_if_missing(db, "feeds", "lease_token", "TEXT")
         _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
         _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")
+        # Soft-delete marker: feeds are never hard-deleted by the app so that
+        # echo configuration and posted-item history survive as an audit trail.
+        _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
 
         echo_columns = _column_names(db, "echoes")
         if (
@@ -130,6 +133,7 @@ def init_db() -> None:
         _add_column_if_missing(
             db, "echoes", "delivery_mode", "TEXT NOT NULL DEFAULT 'instant'"
         )
+        _add_column_if_missing(db, "echoes", "deleted_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS digest_items (

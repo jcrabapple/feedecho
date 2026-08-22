@@ -60,7 +60,8 @@ class TestEchoes:
                 "INSERT INTO echoes (feed_id, destination_type, destination_id, template) VALUES (?, ?, ?, ?)",
                 (1, "mastodon", 1, "{{ title }}"),
             )
-            # Delete feed should cascade-delete echo
+            # Direct SQL DELETE still cascades (schema-level safety net);
+            # the app itself soft-deletes feeds to preserve history.
             db.execute("DELETE FROM feeds WHERE id = 1")
             echoes = db.execute("SELECT * FROM echoes").fetchall()
             assert len(echoes) == 0

@@ -156,7 +156,9 @@ def check_feed(feed_id: int) -> None:
 
 def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
     with get_db() as db:
-        feed = db.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+        feed = db.execute(
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+        ).fetchone()
         if not feed:
             logger.warning("Feed %s not found", feed_id)
             return
@@ -306,7 +308,9 @@ def _retry_due_failures(feed_id: int, echoes) -> None:
 
 def db_feed_url(feed_id: int) -> str:
     with get_db() as db:
-        row = db.execute("SELECT url FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+        row = db.execute(
+            "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+        ).fetchone()
     if not row:
         raise ValueError(f"Feed {feed_id} not found")
     return row["url"]
@@ -1080,6 +1084,8 @@ def flush_digests() -> None:
              WHERE e.destination_type = 'email'
                AND e.delivery_mode = 'digest'
                AND e.enabled = 1
+               AND f.deleted_at IS NULL
+               AND e.deleted_at IS NULL
         """).fetchall()
 
     if not pending_echoes:
@@ -1160,9 +1166,10 @@ def check_all_feeds() -> None:
         feeds = db.execute("""
             SELECT id, name
               FROM feeds
-             WHERE last_fetched IS NULL
-                OR REPLACE(last_fetched, 'T', ' ') <=
-                   datetime('now', '-' || poll_interval || ' minutes')
+             WHERE deleted_at IS NULL
+               AND (last_fetched IS NULL
+                    OR REPLACE(last_fetched, 'T', ' ') <=
+                       datetime('now', '-' || poll_interval || ' minutes'))
         """).fetchall()
 
     for feed in feeds:

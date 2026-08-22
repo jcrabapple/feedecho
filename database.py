@@ -1,19 +1,92 @@
-"""Database layer — SQLite with WAL mode and concurrency-safe migrations."""
+"""Database layer — SQLite (single mode) or PostgreSQL (multi mode).
+
+Every query in the codebase is written with ``?`` placeholders and runs
+unchanged on both backends: :func:`qmark` translates ``?`` to ``%s`` when
+the dialect is postgres, and ``get_db`` yields a connection whose
+``execute`` performs that translation. Rows support ``row["col"]`` on both
+backends (sqlite3.Row / psycopg dict_row).
+"""
 
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+import settings
 from settings import DB_PATH
+
+
+def dialect() -> str:
+    """'postgres' when running multi-tenant against DATABASE_URL, else 'sqlite'."""
+    return "postgres" if (settings.MULTI and settings.DATABASE_URL) else "sqlite"
+
+
+def qmark(sql: str) -> str:
+    """Translate ``?`` placeholders to ``%s`` for Postgres.
+
+    Single-quoted string literals are skipped: ``?`` inside them is left
+    alone and ``%`` is escaped to ``%%`` (psycopg3 treats bare ``%`` in
+    literals as a placeholder). No-op when the dialect is sqlite.
+    """
+    if dialect() != "postgres":
+        return sql
+    parts = sql.split("'")
+    for i, part in enumerate(parts):
+        if i % 2 == 0:  # outside a string literal
+            parts[i] = part.replace("?", "%s")
+        else:  # inside a string literal
+            parts[i] = part.replace("%", "%%")
+    return "'".join(parts)
+
+
+class _PgConnection:
+    """Thin adapter over psycopg3 so callers keep writing db.execute(sql, ?)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        return self._conn.execute(qmark(sql), params)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+
+def _pg_connect():
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise RuntimeError(
+            "PostgreSQL mode requires the psycopg package: "
+            "pip install 'feedecho[postgres]'"
+        ) from exc
+    return psycopg.connect(
+        settings.DATABASE_URL, row_factory=psycopg.rows.dict_row
+    )
 
 
 @contextmanager
 def get_db():
-    """Yield a SQLite connection, closing it when done.
+    """Yield a connection, committing on clean exit, rolling back on error.
 
-    Uses busy_timeout=30s for write contention. WAL mode is set once
-    during init_db, not per-connection.
+    Postgres connections commit/rollback via psycopg's transaction
+    context manager; SQLite connections use WAL mode (set once during
+    init_db) with busy_timeout=30s for write contention.
     """
+    if dialect() == "postgres":
+        conn = _pg_connect()
+        try:
+            with conn:  # commits on success, rolls back on exception
+                yield _PgConnection(conn)
+        finally:
+            conn.close()
+        return
+
     conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
@@ -28,16 +101,29 @@ def get_db():
         conn.close()
 
 
-def _column_names(db: sqlite3.Connection, table_name: str) -> set[str]:
+def _column_names(db, table_name: str) -> set[str]:
+    if dialect() == "postgres":
+        rows = db.execute(
+            "SELECT column_name AS name FROM information_schema.columns"
+            " WHERE table_name = ?",
+            (table_name,),
+        ).fetchall()
+        return {row["name"] for row in rows}
     return {row["name"] for row in db.execute(f"PRAGMA table_info({table_name})")}
 
 
 def _add_column_if_missing(
-    db: sqlite3.Connection,
+    db,
     table_name: str,
     column_name: str,
     column_definition: str,
 ) -> None:
+    if dialect() == "postgres":
+        db.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "
+            f"{column_name} {column_definition}"
+        )
+        return
     if column_name not in _column_names(db, table_name):
         db.execute(
             f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
@@ -45,7 +131,15 @@ def _add_column_if_missing(
 
 
 def init_db() -> None:
-    """Create and migrate the application schema."""
+    """Create and migrate the schema for the active dialect."""
+    if dialect() == "postgres":
+        init_db_postgres()
+    else:
+        init_db_sqlite()
+
+
+def init_db_sqlite() -> None:
+    """Create and migrate the SQLite application schema."""
     with get_db() as db:
         db.execute("PRAGMA journal_mode=WAL")
 
@@ -327,6 +421,225 @@ def init_db() -> None:
             DELETE FROM oauth_states
             WHERE consumed_at IS NOT NULL
                OR expires_at <= datetime('now', '-1 day')
+        """)
+
+
+def init_db_postgres() -> None:
+    """Create the PostgreSQL application schema (multi-tenant).
+
+    Mirrors init_db_sqlite at the post-migration state: fresh Postgres
+    installs get the final schema directly. No singleton user row — real
+    accounts come from /register. Keep the table set in sync with
+    init_db_sqlite; the schema-parity test enforces it.
+    """
+    with get_db() as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL DEFAULT '',
+                plan TEXT NOT NULL DEFAULT 'trial',
+                trial_ends_at TIMESTAMP,
+                email_verified INTEGER NOT NULL DEFAULT 0,
+                suspended INTEGER NOT NULL DEFAULT 0,
+                stripe_customer_id TEXT DEFAULT '',
+                stripe_subscription_id TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                username TEXT DEFAULT '',
+                instance TEXT NOT NULL,
+                access_token TEXT NOT NULL,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS feeds (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                feed_type TEXT DEFAULT 'rss',
+                poll_interval INTEGER DEFAULT 15,
+                last_fetched TIMESTAMP,
+                last_item_id TEXT,
+                lease_token TEXT,
+                lease_expires_at TIMESTAMP,
+                paused INTEGER NOT NULL DEFAULT 0,
+                deleted_at TIMESTAMP,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS echoes (
+                id BIGSERIAL PRIMARY KEY,
+                feed_id INTEGER NOT NULL,
+                destination_type TEXT NOT NULL DEFAULT 'mastodon',
+                destination_id INTEGER NOT NULL,
+                template TEXT NOT NULL DEFAULT '{{ title }} {{ link }}',
+                visibility TEXT DEFAULT 'public',
+                enabled INTEGER DEFAULT 1,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                filter_keywords TEXT DEFAULT '',
+                filter_mode TEXT NOT NULL DEFAULT 'exclude',
+                content_warning TEXT DEFAULT '',
+                attach_image INTEGER NOT NULL DEFAULT 0,
+                delivery_mode TEXT NOT NULL DEFAULT 'instant',
+                drip_limit INTEGER NOT NULL DEFAULT 0,
+                deleted_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS digest_items (
+                id BIGSERIAL PRIMARY KEY,
+                echo_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                item_title TEXT,
+                item_url TEXT,
+                rendered_content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(echo_id, item_id),
+                FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_digest_items_echo
+            ON digest_items(echo_id)
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS drip_items (
+                id BIGSERIAL PRIMARY KEY,
+                echo_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                item_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(echo_id, item_id),
+                FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_drip_items_echo
+            ON drip_items(echo_id)
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS email_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS bluesky_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                handle TEXT NOT NULL UNIQUE,
+                app_password TEXT NOT NULL,
+                did TEXT DEFAULT '',
+                pds TEXT DEFAULT '',
+                access_jwt TEXT DEFAULT '',
+                refresh_jwt TEXT DEFAULT '',
+                session_expires_at TIMESTAMP,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                user_id INTEGER NOT NULL DEFAULT 1,
+                key TEXT NOT NULL,
+                value TEXT,
+                PRIMARY KEY (user_id, key)
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS posted_items (
+                id BIGSERIAL PRIMARY KEY,
+                echo_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                item_title TEXT,
+                item_url TEXT,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                claimed_at TIMESTAMP,
+                claim_token TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                post_url TEXT,
+                next_retry_at TIMESTAMP,
+                posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS oauth_apps (
+                id BIGSERIAL PRIMARY KEY,
+                instance TEXT NOT NULL UNIQUE,
+                client_id TEXT NOT NULL,
+                client_secret TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                nonce TEXT PRIMARY KEY,
+                instance TEXT NOT NULL,
+                session_binding TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                consumed_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_items_echo
+            ON posted_items(echo_id, posted_at DESC)
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_posted_items_echo_item
+            ON posted_items(echo_id, item_id)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_items_reclaim
+            ON posted_items(status, claimed_at)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_echoes_feed
+            ON echoes(feed_id)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feeds_lease
+            ON feeds(lease_expires_at)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_oauth_states_expiry
+            ON oauth_states(expires_at)
+        """)
+
+        # Best-effort cleanup of expired/consumed state rows.
+        db.execute("""
+            DELETE FROM oauth_states
+            WHERE consumed_at IS NOT NULL
+               OR expires_at <= NOW() - INTERVAL '1 day'
         """)
 
 

@@ -1,12 +1,10 @@
 """Database layer — SQLite with WAL mode and concurrency-safe migrations."""
 
-import os
 import sqlite3
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.environ.get("FEEDCHO_DB_PATH", BASE_DIR / "feedecho.db"))
+from settings import DB_PATH
 
 
 @contextmanager

@@ -55,7 +55,8 @@ OAUTH_SESSION_MAX_AGE = 10 * 60
 #   - Cookie: feedecho_auth=<token>   (set by the login page)
 #   - X-Auth-Token: <token>           (for API/programmatic access)
 # If the env var is unset, auth is disabled (original behavior).
-_AUTH_TOKEN = os.environ.get("FEEDCHO_AUTH_TOKEN")
+# (Single-tenant mode only; multi mode replaces this with sessions.)
+from settings import AUTH_TOKEN as _AUTH_TOKEN
 
 # Paths exempt from auth: health check + static files + OAuth callback.
 # Only /oauth/callback must be reachable without a cookie (Mastodon redirects

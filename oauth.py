@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -13,18 +12,12 @@ import httpx
 
 from database import get_db
 from feed_parser import SSRFError, validate_outbound_url
+from settings import AUTH_TOKEN, CALLBACK_URL, STATE_SECRET
 
-CALLBACK_URL = os.environ.get(
-    "FEEDCHO_CALLBACK_URL",
-    "https://feedecho.example.com/oauth/callback",
-)
 SCOPES = "read write"
 STATE_TTL_SECONDS = 10 * 60
 
-_STATE_SECRET = os.environ.get(
-    "FEEDCHO_AUTH_TOKEN",
-    os.environ.get("FEEDCHO_STATE_SECRET", secrets.token_urlsafe(32)),
-).encode("utf-8")
+_STATE_SECRET = (AUTH_TOKEN or STATE_SECRET or secrets.token_urlsafe(32)).encode("utf-8")
 
 
 def _now() -> datetime:

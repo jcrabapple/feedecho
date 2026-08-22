@@ -44,6 +44,33 @@ class TestAccounts:
             assert rows[0]["access_token"] == "token123"
 
 
+class TestDripItemsMigration:
+    def test_attempts_column_added_to_legacy_table(self, temp_db):
+        # Simulate a DB created by the first 1.11.0 schema draft, which
+        # shipped drip_items without the attempts column.
+        with get_db() as db:
+            db.execute("DROP TABLE drip_items")
+            db.execute(
+                """
+                CREATE TABLE drip_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    echo_id INTEGER NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_json TEXT NOT NULL,
+                    queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(echo_id, item_id),
+                    FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
+                )
+                """
+            )
+
+        init_db()
+
+        with get_db() as db:
+            cols = {row["name"] for row in db.execute("PRAGMA table_info(drip_items)")}
+        assert "attempts" in cols
+
+
 class TestEchoes:
     def test_cascade_delete_with_feed(self, temp_db):
         with get_db() as db:

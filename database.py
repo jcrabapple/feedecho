@@ -172,6 +172,11 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_drip_items_echo
             ON drip_items(echo_id)
         """)
+        # Migrate drip_items tables created by the initial 1.11.0 schema
+        # draft, which predated the attempts column.
+        _add_column_if_missing(
+            db, "drip_items", "attempts", "INTEGER NOT NULL DEFAULT 0"
+        )
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS email_accounts (

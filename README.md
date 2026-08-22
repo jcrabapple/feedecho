@@ -14,6 +14,7 @@ Built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echo
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Post history** with success/failure tracking and error messages
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
+- **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
 - **Image attachments** — automatically upload the feed item's first image (Mastodon and Bluesky)
 - **AI alt text** — optionally generate image descriptions via an OpenAI-compatible vision API

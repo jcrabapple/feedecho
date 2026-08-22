@@ -880,6 +880,7 @@ async def add_echo(
     content_warning: str = Form(""),
     attach_image: str = Form(""),
     delivery_mode: str = Form("instant"),
+    drip_limit: int = Form(0),
     enabled: str = Form(""),
 ):
     if destination_type not in VALID_DEST_TYPES:
@@ -893,6 +894,8 @@ async def add_echo(
     # Digest mode is email-only
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
+    if drip_limit < 0 or drip_limit > 1000:
+        raise HTTPException(status_code=400, detail="Drip limit must be between 0 and 1000")
 
     _validate_echo_template(template)
 
@@ -916,11 +919,11 @@ async def add_echo(
         db.execute(
             """INSERT INTO echoes (feed_id, destination_type, destination_id, template, visibility,
                                    filter_keywords, filter_mode, content_warning, attach_image,
-                                   delivery_mode, enabled)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   delivery_mode, drip_limit, enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             delivery_mode, is_enabled),
+             delivery_mode, drip_limit, is_enabled),
         )
     return RedirectResponse(url="/echoes", status_code=303)
 
@@ -953,6 +956,7 @@ async def edit_echo(
     content_warning: str = Form(""),
     attach_image: str = Form(""),
     delivery_mode: str = Form("instant"),
+    drip_limit: int = Form(0),
     enabled: str = Form(""),
 ):
     if destination_type not in VALID_DEST_TYPES:
@@ -965,6 +969,8 @@ async def edit_echo(
         raise HTTPException(status_code=400, detail="Invalid delivery mode")
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
+    if drip_limit < 0 or drip_limit > 1000:
+        raise HTTPException(status_code=400, detail="Drip limit must be between 0 and 1000")
 
     _validate_echo_template(template)
 
@@ -992,11 +998,12 @@ async def edit_echo(
         db.execute(
             """UPDATE echoes SET feed_id = ?, destination_type = ?, destination_id = ?,
                template = ?, visibility = ?, filter_keywords = ?, filter_mode = ?,
-               content_warning = ?, attach_image = ?, delivery_mode = ?, enabled = ?
+               content_warning = ?, attach_image = ?, delivery_mode = ?, drip_limit = ?,
+               enabled = ?
                WHERE id = ?""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             delivery_mode, is_enabled, echo_id),
+             delivery_mode, drip_limit, is_enabled, echo_id),
         )
     return RedirectResponse(url="/echoes", status_code=303)
 

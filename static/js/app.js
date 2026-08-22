@@ -151,6 +151,7 @@ function editEcho(echoId) {
     const contentWarning = row.dataset.contentWarning || '';
     const attachImage = row.dataset.attachImage === '1';
     const deliveryMode = row.dataset.deliveryMode || 'instant';
+    const dripLimit = row.dataset.dripLimit || '0';
     const enabled = row.dataset.enabled === '1';
 
     const feedOpts = document.getElementById('feed-options').innerHTML;
@@ -235,6 +236,11 @@ function editEcho(echoId) {
                         <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (one email per item)</option>
                         <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
                     </select>
+                </label>
+            </div>
+            <div class="form-row">
+                <label>Max posts per hour
+                    <input type="number" name="drip_limit" min="0" max="1000" value="${dripLimit}">
                 </label>
             </div>
             <div class="form-row edit-actions">

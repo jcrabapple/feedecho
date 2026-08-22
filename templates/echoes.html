@@ -106,6 +106,12 @@
             <span class="hint" style="margin: 0.2rem 0 0;">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only.</span>
         </label>
     </div>
+    <div class="form-row">
+        <label>Max posts per hour
+            <input type="number" name="drip_limit" min="0" max="1000" value="0" style="max-width: 8rem;">
+            <span class="hint" style="margin: 0.2rem 0 0;">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this.</span>
+        </label>
+    </div>
     <details class="template-vars">
         <summary>Available template variables</summary>
         <table class="vars-table">
@@ -153,6 +159,7 @@
             data-content-warning="{{ echo.content_warning | e if echo.content_warning else '' }}"
             data-attach-image="{{ echo.attach_image }}"
             data-delivery-mode="{{ echo.delivery_mode }}"
+            data-drip-limit="{{ echo.drip_limit }}"
             data-enabled="{{ echo.enabled }}">
             <td data-label="Feed">{{ echo.feed_name }}</td>
             <td data-label="Destination">
@@ -176,6 +183,9 @@
                 {% endif %}
                 {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
                 <br><span class="badge badge-info">DIGEST</span>
+                {% endif %}
+                {% if echo.drip_limit %}
+                <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
                 {% endif %}
             </td>
             <td data-label="Visibility">{{ '—' if echo.destination_type == 'bluesky' else echo.visibility }}</td>

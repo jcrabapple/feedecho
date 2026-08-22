@@ -133,6 +133,9 @@ def init_db() -> None:
         _add_column_if_missing(
             db, "echoes", "delivery_mode", "TEXT NOT NULL DEFAULT 'instant'"
         )
+        _add_column_if_missing(
+            db, "echoes", "drip_limit", "INTEGER NOT NULL DEFAULT 0"
+        )
         _add_column_if_missing(db, "echoes", "deleted_at", "TIMESTAMP")
 
         db.execute("""
@@ -151,6 +154,22 @@ def init_db() -> None:
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_digest_items_echo
             ON digest_items(echo_id)
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS drip_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                echo_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                item_json TEXT NOT NULL,
+                queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(echo_id, item_id),
+                FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_drip_items_echo
+            ON drip_items(echo_id)
         """)
 
         db.execute("""

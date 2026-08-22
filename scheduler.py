@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,7 @@ MASTODON_MAX_CHARS = 500
 BLUESKY_MAX_GRAPHEMES = 300
 PENDING_RECLAIM_SECONDS = 10 * 60
 FEED_LEASE_SECONDS = 15 * 60
+DRIP_QUEUE_CAP = 30
 
 
 def _now() -> str:
@@ -436,6 +438,10 @@ def _record_filtered(echo_id: int, item: dict) -> None:
 def process_echo(echo, item: dict, feed_name: str = "") -> bool:
     """Deliver one item to one echo using an atomic pending-row claim.
 
+    Items past a drip rate limit are held in the drip queue (status
+    'queued') instead of dispatching immediately; flush_drips() releases
+    them as the rate window allows.
+
     feed_name is optional context for template rendering ({{ feed_name }}).
     """
     echo_id = echo["id"]
@@ -463,6 +469,149 @@ def process_echo(echo, item: dict, feed_name: str = "") -> bool:
         return _post_succeeded(echo_id, item_id)
 
     posted_id, claim_token = claimed
+
+    if _drip_applies(echo) and _drip_rate(echo_id) >= _drip_limit(echo):
+        return _queue_for_drip(echo, item, posted_id, claim_token)
+
+    return _render_and_dispatch(echo, item, feed_name, posted_id, claim_token)
+
+
+def _drip_limit(echo) -> int:
+    """The echo's drip rate limit (posts/hour); 0 disables drip."""
+    try:
+        return int(echo["drip_limit"] or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return 0
+
+
+def _drip_applies(echo) -> bool:
+    """Drip applies to rate-limited echoes with instant delivery only.
+
+    Digest-mode echoes already batch on their own schedule, so a drip
+    limit would double-throttle them.
+    """
+    if _drip_limit(echo) <= 0:
+        return False
+    try:
+        delivery_mode = echo["delivery_mode"] or "instant"
+    except (KeyError, IndexError):
+        delivery_mode = "instant"
+    return delivery_mode != "digest"
+
+
+def _drip_rate(echo_id: int) -> int:
+    """Successful posts by this echo within the sliding 60-minute window."""
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT COUNT(*) AS n FROM posted_items
+             WHERE echo_id = ?
+               AND status = 'success'
+               AND posted_at >= datetime('now', '-60 minutes')
+            """,
+            (echo_id,),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+def _queue_for_drip(echo, item: dict, posted_id: int, claim_token: str) -> bool:
+    """Hold an item until the drip window has room.
+
+    Marks the posted row 'queued' (terminal for the cursor, same as
+    digest mode) and stores the item payload for flush_drips(). When the
+    queue is full the item is dropped as gave_up so an oversubscribed
+    feed cannot pile up an unbounded backlog.
+    """
+    echo_id = echo["id"]
+    item_id = item["id"]
+
+    with get_db() as db:
+        row = db.execute(
+            "SELECT COUNT(*) AS n FROM drip_items WHERE echo_id = ?", (echo_id,)
+        ).fetchone()
+    if row["n"] >= DRIP_QUEUE_CAP:
+        logger.warning(
+            "Echo %s: drip queue full (%d); dropping item %s",
+            echo_id,
+            DRIP_QUEUE_CAP,
+            item_id,
+        )
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo_id,
+            f"Drip queue full ({DRIP_QUEUE_CAP} pending); item dropped",
+            permanent=True,
+        )
+
+    # 'raw' holds feedparser internals (struct_time etc.) that are not
+    # JSON-serializable and never used for rendering.
+    payload = {k: v for k, v in item.items() if k != "raw"}
+    with get_db() as db:
+        db.execute(
+            """
+            INSERT INTO drip_items (echo_id, item_id, item_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(echo_id, item_id) DO NOTHING
+            """,
+            (echo_id, item_id, json.dumps(payload)),
+        )
+
+    ok = _update_post(posted_id, claim_token, "queued")
+    if ok:
+        record_success(echo_id)
+        logger.info("Echo %s: item %s held for drip release", echo_id, item_id)
+    return ok
+
+
+def _reclaim_queued(echo_id: int, item_id: str) -> tuple[int, str] | None:
+    """Transition a queued posted row back to pending with a fresh claim.
+
+    Returns (posted_id, claim_token), or None if the row is no longer
+    queued (already released or finalized by another worker).
+    """
+    claim_token = secrets.token_urlsafe(32)
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT id FROM posted_items
+             WHERE echo_id = ? AND item_id = ? AND status = 'queued'
+            """,
+            (echo_id, item_id),
+        ).fetchone()
+        if not row:
+            return None
+        result = db.execute(
+            """
+            UPDATE posted_items
+               SET status = 'pending',
+                   claimed_at = ?,
+                   claim_token = ?,
+                   attempt_count = attempt_count + 1
+             WHERE id = ? AND status = 'queued'
+            """,
+            (_now(), claim_token, row["id"]),
+        )
+        if result.rowcount != 1:
+            return None
+    return row["id"], claim_token
+
+
+def _render_and_dispatch(
+    echo,
+    item: dict,
+    feed_name: str,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Render the echo template and dispatch to the destination sender.
+
+    Shared by process_echo (fresh feed items) and flush_drips (released
+    queue items) so both paths get identical rendering, failure handling,
+    and image/alt-text/CW behavior.
+    """
+    echo_id = echo["id"]
+    item_id = item["id"]
 
     try:
         content = render_template(echo["template"], item, feed_name=feed_name)
@@ -1072,6 +1221,70 @@ def _queue_for_digest(
     return ok
 
 
+def flush_drips() -> None:
+    """Release queued drip items whose rate window has room.
+
+    Called by the drip scheduler job every 10 minutes. Each held item is
+    re-rendered with the echo's current template and dispatched through
+    the normal per-destination senders, so images, alt text, and content
+    warnings behave exactly like instant posts. Failures fall back to the
+    standard retry/gave_up flow; a failed item re-enters the drip queue
+    on its next retry if the window is still full.
+    """
+    with get_db() as db:
+        pending = db.execute(
+            """
+            SELECT d.id AS drip_id, d.item_id, d.item_json, e.*,
+                   f.name AS feed_name, f.deleted_at AS feed_deleted_at
+              FROM drip_items d
+              JOIN echoes e ON d.echo_id = e.id
+              JOIN feeds f ON e.feed_id = f.id
+             ORDER BY d.id ASC
+            """
+        ).fetchall()
+
+    for row in pending:
+        echo_id = row["id"]
+        if not row["enabled"] or row["deleted_at"] or row["feed_deleted_at"]:
+            continue
+
+        limit = _drip_limit(row)
+        if limit > 0 and _drip_rate(echo_id) >= limit:
+            continue
+
+        try:
+            item = json.loads(row["item_json"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Drip queue: unreadable payload %s for echo %s; dropping",
+                row["drip_id"],
+                echo_id,
+            )
+            with get_db() as db:
+                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+            continue
+
+        claimed = _reclaim_queued(echo_id, row["item_id"])
+        if claimed is None:
+            # The posted row is no longer queued; remove the orphaned
+            # queue entry so it is not reconsidered forever.
+            with get_db() as db:
+                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+            continue
+
+        posted_id, claim_token = claimed
+        with get_db() as db:
+            db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+
+        logger.info(
+            "Echo %s: releasing dripped item %s (%d in window)",
+            echo_id,
+            row["item_id"],
+            _drip_rate(echo_id),
+        )
+        _render_and_dispatch(dict(row), item, row["feed_name"] or "", posted_id, claim_token)
+
+
 def flush_digests() -> None:
     """Send pending digest items as batched emails and finalize them.
 
@@ -1215,6 +1428,18 @@ def start_scheduler() -> None:
     )
     # Run a digest flush shortly after startup
     scheduler.add_job(flush_digests, "date", id="startup_digest_flush", replace_existing=True)
+
+    # Drip flush job — releases queued items as their rate windows allow
+    scheduler.add_job(
+        flush_drips,
+        trigger=IntervalTrigger(minutes=10),
+        id="flush_drips",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # Run a drip flush shortly after startup
+    scheduler.add_job(flush_drips, "date", id="startup_drip_flush", replace_existing=True)
 
 
 def stop_scheduler() -> None:

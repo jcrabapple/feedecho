@@ -9,12 +9,12 @@
 
 pythonPkg.pkgs.buildPythonApplication {
   pname = "feedecho";
-  version = "1.10.1";
+  version = "1.11.0";
 
   src = if src != null then src else fetchFromGitHub {
     owner = "jcrabapple";
     repo = "feedecho";
-    rev = "v1.10.1";
+    rev = "v1.11.0";
     hash = lib.fakeHash; # replace after first build: `nix-prefetch-url --unpack <url>`
   };
 

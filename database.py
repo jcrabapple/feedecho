@@ -162,6 +162,7 @@ def init_db() -> None:
                 echo_id INTEGER NOT NULL,
                 item_id TEXT NOT NULL,
                 item_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
                 queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(echo_id, item_id),
                 FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE

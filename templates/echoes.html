@@ -99,17 +99,17 @@
     </div>
     <div class="form-row" id="digest-fields" style="display: none;">
         <label>Delivery mode
-            <select name="delivery_mode">
+            <select name="delivery_mode" onchange="toggleDestFields()">
                 <option value="instant">Instant (one email per item)</option>
                 <option value="digest">Digest (batch items into one email, sent hourly)</option>
             </select>
             <span class="hint" style="margin: 0.2rem 0 0;">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only.</span>
         </label>
     </div>
-    <div class="form-row">
+    <div class="form-row" id="drip-fields">
         <label>Max posts per hour
             <input type="number" name="drip_limit" min="0" max="1000" value="0" style="max-width: 8rem;">
-            <span class="hint" style="margin: 0.2rem 0 0;">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
         </label>
     </div>
     <details class="template-vars">
@@ -184,7 +184,7 @@
                 {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
                 <br><span class="badge badge-info">DIGEST</span>
                 {% endif %}
-                {% if echo.drip_limit %}
+                {% if echo.drip_limit and echo.delivery_mode != 'digest' %}
                 <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
                 {% endif %}
             </td>
@@ -234,6 +234,11 @@ function toggleDestFields() {
     document.getElementById('bluesky-fields').style.display = destType === 'bluesky' ? '' : 'none';
     const digestFields = document.getElementById('digest-fields');
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
+    const dripFields = document.getElementById('drip-fields');
+    if (dripFields) {
+        const deliveryMode = document.querySelector('select[name="delivery_mode"]');
+        dripFields.style.display = (deliveryMode && deliveryMode.value === 'digest') ? 'none' : '';
+    }
 }
 toggleDestFields();
 </script>

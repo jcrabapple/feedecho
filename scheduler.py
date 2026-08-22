@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -48,6 +49,23 @@ BLUESKY_MAX_GRAPHEMES = 300
 PENDING_RECLAIM_SECONDS = 10 * 60
 FEED_LEASE_SECONDS = 15 * 60
 DRIP_QUEUE_CAP = 30
+# Releases per flush on the unlimited (limit removed) path, to avoid
+# dumping a stale backlog as one burst.
+DRIP_DOWNGRADE_BATCH = 10
+
+# Per-echo locks serializing drip rate checks across the feed-check and
+# flush threads, so concurrent workers cannot exceed the hourly cap.
+_drip_locks: dict[int, threading.Lock] = {}
+_drip_locks_guard = threading.Lock()
+
+
+def _drip_lock(echo_id: int) -> threading.Lock:
+    with _drip_locks_guard:
+        lock = _drip_locks.get(echo_id)
+        if lock is None:
+            lock = threading.Lock()
+            _drip_locks[echo_id] = lock
+        return lock
 
 
 def _now() -> str:
@@ -470,8 +488,13 @@ def process_echo(echo, item: dict, feed_name: str = "") -> bool:
 
     posted_id, claim_token = claimed
 
-    if _drip_applies(echo) and _drip_rate(echo_id) >= _drip_limit(echo):
-        return _queue_for_drip(echo, item, posted_id, claim_token)
+    if _drip_applies(echo):
+        # Serialize the rate check + dispatch per echo so the flush job
+        # and feed checks cannot both see an open window and exceed the cap.
+        with _drip_lock(echo_id):
+            if _drip_rate(echo_id) >= _drip_limit(echo):
+                return _queue_for_drip(echo, item, posted_id, claim_token)
+            return _render_and_dispatch(echo, item, feed_name, posted_id, claim_token)
 
     return _render_and_dispatch(echo, item, feed_name, posted_id, claim_token)
 
@@ -559,7 +582,9 @@ def _queue_for_drip(echo, item: dict, posted_id: int, claim_token: str) -> bool:
 
     ok = _update_post(posted_id, claim_token, "queued")
     if ok:
-        record_success(echo_id)
+        # Deliberately no record_success() here: queueing is not a
+        # delivery, and clearing the failure-notify state on a hold would
+        # suppress alerts for echoes that are not actually delivering.
         logger.info("Echo %s: item %s held for drip release", echo_id, item_id)
     return ok
 
@@ -569,6 +594,10 @@ def _reclaim_queued(echo_id: int, item_id: str) -> tuple[int, str] | None:
 
     Returns (posted_id, claim_token), or None if the row is no longer
     queued (already released or finalized by another worker).
+
+    Deliberately does not bump attempt_count: release attempts are
+    tracked on the drip_items row so failed releases can retry from the
+    stored payload without burning the normal retry budget.
     """
     claim_token = secrets.token_urlsafe(32)
     with get_db() as db:
@@ -586,8 +615,7 @@ def _reclaim_queued(echo_id: int, item_id: str) -> tuple[int, str] | None:
             UPDATE posted_items
                SET status = 'pending',
                    claimed_at = ?,
-                   claim_token = ?,
-                   attempt_count = attempt_count + 1
+                   claim_token = ?
              WHERE id = ? AND status = 'queued'
             """,
             (_now(), claim_token, row["id"]),
@@ -1221,20 +1249,109 @@ def _queue_for_digest(
     return ok
 
 
+def _requeue_drip_failure(
+    echo_id: int,
+    item_id: str,
+    item_json: str,
+    attempts: int,
+    posted_id: int,
+) -> None:
+    """Return a failed drip release to the queue, or gave_up at the cap.
+
+    Retries run from the stored payload, so items that have rotated out
+    of the feed are never lost the way a feed-based retry would lose
+    them. Release attempts are counted on the drip_items row.
+    """
+    attempts += 1
+    cap = max_attempts()
+    if cap > 0 and attempts >= cap:
+        with get_db() as db:
+            db.execute(
+                """UPDATE posted_items
+                      SET status = 'gave_up',
+                          error_message = ?,
+                          claimed_at = NULL,
+                          claim_token = NULL,
+                          posted_at = CURRENT_TIMESTAMP
+                    WHERE id = ?""",
+                (f"Drip release gave up after {attempts} attempts", posted_id),
+            )
+        record_failure(echo_id)
+        logger.error(
+            "Echo %s: drip release gave up for item %s after %s attempts",
+            echo_id,
+            item_id,
+            attempts,
+        )
+        return
+
+    with get_db() as db:
+        result = db.execute(
+            """UPDATE posted_items
+                  SET status = 'queued',
+                      claimed_at = NULL,
+                      claim_token = NULL,
+                      next_retry_at = NULL,
+                      posted_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'failed'""",
+            (posted_id,),
+        )
+        if result.rowcount != 1:
+            # The row moved on (e.g. claimed by the retry sweep); the
+            # normal path owns it now.
+            return
+        db.execute(
+            """INSERT INTO drip_items (echo_id, item_id, item_json, attempts)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(echo_id, item_id) DO UPDATE SET attempts = excluded.attempts""",
+            (echo_id, item_id, item_json, attempts),
+        )
+    logger.info(
+        "Echo %s: dripped item %s release failed; re-queued (attempt %d)",
+        echo_id,
+        item_id,
+        attempts,
+    )
+
+
+def _discard_drip_backlog(echo_id: int, reason: str) -> None:
+    """Finalize an echo's queued drip rows as gave_up and clear the queue.
+
+    A disabled or deleted echo must not hold items indefinitely: on
+    re-enable they would dump as stale posts, and the queue cap would
+    keep silently dropping new items meanwhile. History records what was
+    discarded and why.
+    """
+    with get_db() as db:
+        db.execute(
+            """UPDATE posted_items
+                  SET status = 'gave_up',
+                      error_message = ?,
+                      claimed_at = NULL,
+                      claim_token = NULL,
+                      posted_at = CURRENT_TIMESTAMP
+                WHERE echo_id = ? AND status = 'queued'""",
+            (reason, echo_id),
+        )
+        db.execute("DELETE FROM drip_items WHERE echo_id = ?", (echo_id,))
+    logger.info("Echo %s: %s", echo_id, reason)
+
+
 def flush_drips() -> None:
     """Release queued drip items whose rate window has room.
 
     Called by the drip scheduler job every 10 minutes. Each held item is
     re-rendered with the echo's current template and dispatched through
     the normal per-destination senders, so images, alt text, and content
-    warnings behave exactly like instant posts. Failures fall back to the
-    standard retry/gave_up flow; a failed item re-enters the drip queue
-    on its next retry if the window is still full.
+    warnings behave exactly like instant posts. Failed releases return to
+    the queue and retry from the stored payload. Disabled or deleted
+    echoes have their backlog discarded as gave_up. Removing the limit
+    entirely drains the queue in bounded batches per flush.
     """
     with get_db() as db:
         pending = db.execute(
             """
-            SELECT d.id AS drip_id, d.item_id, d.item_json, e.*,
+            SELECT d.id AS drip_id, d.item_id, d.item_json, d.attempts, e.*,
                    f.name AS feed_name, f.deleted_at AS feed_deleted_at
               FROM drip_items d
               JOIN echoes e ON d.echo_id = e.id
@@ -1243,46 +1360,76 @@ def flush_drips() -> None:
             """
         ).fetchall()
 
+    discarded: set[int] = set()
+    released: dict[int, int] = {}
+
     for row in pending:
         echo_id = row["id"]
-        if not row["enabled"] or row["deleted_at"] or row["feed_deleted_at"]:
+        if echo_id in discarded:
             continue
 
-        limit = _drip_limit(row)
-        if limit > 0 and _drip_rate(echo_id) >= limit:
+        if row["deleted_at"] or row["feed_deleted_at"]:
+            _discard_drip_backlog(echo_id, "Echo deleted; drip backlog discarded")
+            discarded.add(echo_id)
+            continue
+        if not row["enabled"]:
+            _discard_drip_backlog(echo_id, "Echo disabled; drip backlog discarded")
+            discarded.add(echo_id)
             continue
 
-        try:
-            item = json.loads(row["item_json"])
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(
-                "Drip queue: unreadable payload %s for echo %s; dropping",
-                row["drip_id"],
+        # Serialize with process_echo so concurrent workers cannot both
+        # see an open window and exceed the hourly cap.
+        with _drip_lock(echo_id):
+            limit = _drip_limit(row)
+            if limit > 0 and _drip_rate(echo_id) >= limit:
+                continue
+            if limit <= 0 and released.get(echo_id, 0) >= DRIP_DOWNGRADE_BATCH:
+                # Limit removed: drain the stale backlog in batches
+                # instead of one burst.
+                continue
+
+            try:
+                item = json.loads(row["item_json"])
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "Drip queue: unreadable payload %s for echo %s; dropping",
+                    row["drip_id"],
+                    echo_id,
+                )
+                with get_db() as db:
+                    db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+                continue
+
+            claimed = _reclaim_queued(echo_id, row["item_id"])
+            if claimed is None:
+                # The posted row is no longer queued; remove the orphaned
+                # queue entry so it is not reconsidered forever.
+                with get_db() as db:
+                    db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+                continue
+
+            posted_id, claim_token = claimed
+            with get_db() as db:
+                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+
+            logger.info(
+                "Echo %s: releasing dripped item %s (%d in window)",
                 echo_id,
+                row["item_id"],
+                _drip_rate(echo_id),
             )
-            with get_db() as db:
-                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
-            continue
+            _render_and_dispatch(dict(row), item, row["feed_name"] or "", posted_id, claim_token)
 
-        claimed = _reclaim_queued(echo_id, row["item_id"])
-        if claimed is None:
-            # The posted row is no longer queued; remove the orphaned
-            # queue entry so it is not reconsidered forever.
-            with get_db() as db:
-                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
-            continue
-
-        posted_id, claim_token = claimed
-        with get_db() as db:
-            db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
-
-        logger.info(
-            "Echo %s: releasing dripped item %s (%d in window)",
-            echo_id,
-            row["item_id"],
-            _drip_rate(echo_id),
-        )
-        _render_and_dispatch(dict(row), item, row["feed_name"] or "", posted_id, claim_token)
+            if _row_state(echo_id, row["item_id"]) == "failed":
+                _requeue_drip_failure(
+                    echo_id,
+                    row["item_id"],
+                    row["item_json"],
+                    row["attempts"],
+                    posted_id,
+                )
+            else:
+                released[echo_id] = released.get(echo_id, 0) + 1
 
 
 def flush_digests() -> None:

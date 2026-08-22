@@ -287,9 +287,25 @@ class TestFlushDrips:
         assert len(posted) == 2
         assert _drip_row_count(database, 1) == 0
 
-    def test_flush_skips_disabled_echo(self, env, monkeypatch):
+    def test_flush_downgrade_drains_in_bounded_batches(self, env, monkeypatch):
         database, scheduler, _ = env
-        _seed(env, drip_limit=2, enabled=0)
+        _seed(env, drip_limit=0)
+        for i in range(12):
+            _queue_item(database, 1, f"item-{i}", _item(id=f"item-{i}"))
+
+        posted = []
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: posted.append(kw) or {"id": "x"})
+
+        scheduler.flush_drips()
+
+        # Removing the limit must not dump the whole stale backlog at once.
+        assert len(posted) == scheduler.DRIP_DOWNGRADE_BATCH
+        assert _drip_row_count(database, 1) == 2
+
+    def test_flush_skips_echo_with_no_room_and_keeps_payload(self, env, monkeypatch):
+        database, scheduler, _ = env
+        _seed(env, drip_limit=1)
+        _record_success(database, item_id="item-0")
         _queue_item(database, 1, "item-1", _item())
 
         posted = []
@@ -299,8 +315,25 @@ class TestFlushDrips:
 
         assert posted == []
         assert _state(database, 1, "item-1") == "queued"
+        assert _drip_row_count(database, 1) == 1
 
-    def test_flush_release_dispatch_failure_marks_failed(self, env, monkeypatch):
+    def test_disabled_echo_backlog_discarded(self, env, monkeypatch):
+        database, scheduler, _ = env
+        _seed(env, drip_limit=2, enabled=0)
+        _queue_item(database, 1, "item-1", _item())
+
+        posted = []
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: posted.append(kw) or {"id": "x"})
+
+        scheduler.flush_drips()
+
+        # No stale burst on re-enable: the backlog is finalized as
+        # gave_up and recorded in history.
+        assert posted == []
+        assert _state(database, 1, "item-1") == "gave_up"
+        assert _drip_row_count(database, 1) == 0
+
+    def test_failed_release_returns_item_to_queue(self, env, monkeypatch):
         database, scheduler, _ = env
         _seed(env, drip_limit=2)
         _queue_item(database, 1, "item-1", _item())
@@ -309,41 +342,41 @@ class TestFlushDrips:
             raise RuntimeError("network down")
 
         monkeypatch.setattr(scheduler, "post_status", boom)
-
         scheduler.flush_drips()
 
-        # Failure falls back to the normal retry path; queue entry is gone
-        # so the retry sweep can re-queue via process_echo.
-        assert _state(database, 1, "item-1") in ("failed", "gave_up")
+        # Payload preserved: the item returns to the queue instead of the
+        # feed-dependent retry path, so it survives feed rotation.
+        assert _state(database, 1, "item-1") == "queued"
+        assert _drip_row_count(database, 1) == 1
+        with database.get_db() as db:
+            attempts = db.execute(
+                "SELECT attempts FROM drip_items WHERE echo_id = 1 AND item_id = 'item-1'"
+            ).fetchone()["attempts"]
+        assert attempts == 1
+
+        # A later flush with a working destination delivers from the
+        # stored payload, no feed fetch involved.
+        posted = []
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: posted.append(kw) or {"id": "x"})
+        scheduler.flush_drips()
+        assert len(posted) == 1
+        assert _state(database, 1, "item-1") == "success"
         assert _drip_row_count(database, 1) == 0
 
-    def test_failed_item_requeues_when_window_still_full(self, env, monkeypatch):
+    def test_release_gives_up_after_attempt_cap(self, env, monkeypatch):
         database, scheduler, _ = env
-        echo = _seed(env, drip_limit=1)
+        _seed(env, drip_limit=5)
         _queue_item(database, 1, "item-1", _item())
 
-        # Window has room at flush time, so the release is attempted and
-        # the dispatch fails into the normal retry path.
         def boom(**kw):
             raise RuntimeError("network down")
 
         monkeypatch.setattr(scheduler, "post_status", boom)
-        scheduler.flush_drips()
-        assert _state(database, 1, "item-1") in ("failed", "gave_up")
-        assert _drip_row_count(database, 1) == 0
+        for _ in range(scheduler.max_attempts()):
+            scheduler.flush_drips()
 
-        # Fill the window and make the failed row immediately reclaimable:
-        # the normal pipeline re-queues it instead of dispatching.
-        _record_success(database, item_id="item-0")
-        with database.get_db() as db:
-            db.execute(
-                "UPDATE posted_items SET next_retry_at = NULL"
-                " WHERE echo_id = 1 AND item_id = 'item-1'"
-            )
-        monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "x"})
-        assert scheduler.process_echo(echo, _item()) is True
-        assert _state(database, 1, "item-1") == "queued"
-        assert _drip_row_count(database, 1) == 1
+        assert _state(database, 1, "item-1") == "gave_up"
+        assert _drip_row_count(database, 1) == 0
 
 
 class TestDripAPI:

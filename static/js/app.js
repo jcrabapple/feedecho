@@ -232,13 +232,13 @@ function editEcho(echoId) {
             </div>
             <div class="form-row" id="edit-digest-fields-${echoId}" style="${emailStyle}">
                 <label>Delivery mode
-                    <select name="delivery_mode">
+                    <select name="delivery_mode" onchange="toggleEditDest(${echoId})">
                         <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (one email per item)</option>
                         <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
                     </select>
                 </label>
             </div>
-            <div class="form-row">
+            <div class="form-row" id="edit-drip-fields-${echoId}">
                 <label>Max posts per hour
                     <input type="number" name="drip_limit" min="0" max="1000" value="${dripLimit}">
                 </label>
@@ -268,6 +268,11 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-bluesky-fields-${echoId}`).style.display = destType === 'bluesky' ? '' : 'none';
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
+    const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);
+    if (dripFields) {
+        const deliveryMode = document.querySelector(`#edit-digest-fields-${echoId} select[name="delivery_mode"]`);
+        dripFields.style.display = (deliveryMode && deliveryMode.value === 'digest') ? 'none' : '';
+    }
 }
 
 function cancelEdit(echoId) {

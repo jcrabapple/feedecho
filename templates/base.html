@@ -56,6 +56,11 @@
     <main>
         {% block content %}{% endblock %}
     </main>
+    {% if MULTI %}
+    <footer class="site-footer">
+        <a href="/about">About</a> · <a href="/howto">How To</a>
+    </footer>
+    {% endif %}
     <script src="/static/js/app.js?v=15"></script>
 </body>
 </html>

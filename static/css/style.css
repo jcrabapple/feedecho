@@ -483,6 +483,16 @@ button:hover { background: var(--primary-hover); }
 .howto-steps { margin: 0.5rem 0 1rem 1.25rem; line-height: 1.7; }
 .howto-steps li { margin-bottom: 0.4rem; }
 
+/* Site footer (multi mode) */
+.site-footer {
+    margin-top: 2rem;
+    padding: 1rem 0;
+    border-top: 1px solid var(--border);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.site-footer a { color: var(--text-muted); margin-right: 0.75rem; }
+
 @media (max-width: 640px) {
     .btn-sm {
         min-height: 40px;

@@ -156,6 +156,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/verify-email",
         "/forgot-password",
         "/reset-password",
+        # Public hosted-service disclosure page.
+        "/about",
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
@@ -983,6 +985,14 @@ async def history_page(request: Request):
 @app.get("/howto", response_class=HTMLResponse)
 async def howto_page(request: Request):
     return render("howto.html", request)
+
+
+@app.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request):
+    from auth import _require_multi
+
+    _require_multi()  # hosted-service disclosure; 404 in self-hosted mode
+    return render("about.html", request)
 
 
 @app.get("/settings", response_class=HTMLResponse)

@@ -59,6 +59,18 @@ class TestAboutPage:
             resp = c.get("/about")
         assert resp.status_code == 404
 
+    def test_single_mode_with_auth_token_redirects_not_404(self, monkeypatch, tmp_path):
+        # With token auth enabled, the middleware gate fires before the
+        # route's _require_multi: unauthenticated /about redirects to
+        # login (documented behavior — the 404 only holds post-auth).
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "sekret")
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "single3.db")
+        database.init_db()
+        with TestClient(app) as c:
+            resp = c.get("/about", headers={"accept": "text/html"}, follow_redirects=False)
+        assert resp.status_code in (302, 303)
+
     def test_no_footer_in_single_mode(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "MULTI", False)
         monkeypatch.setattr(settings, "AUTH_TOKEN", None)

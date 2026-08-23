@@ -63,6 +63,20 @@ def _require_multi() -> None:
         raise HTTPException(status_code=404, detail="Not found")
 
 
+def is_admin(uid: int) -> bool:
+    """Whether the given user is an admin.
+
+    Read fresh from the database on every call — never from session
+    claims — so demotions take effect immediately even with a valid
+    session token. Non-existent users are not admins.
+    """
+    with get_db() as db:
+        row = db.execute(
+            "SELECT is_admin FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+    return bool(row and row["is_admin"])
+
+
 def _now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 

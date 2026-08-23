@@ -176,6 +176,24 @@ class TestPostgresMigration:
             ).fetchall()
         assert "user_id" in {c["column_name"] for c in columns}
 
+    def test_users_has_is_admin_column(self, pg_env):
+        database.init_db()
+        with database.get_db() as db:
+            columns = db.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                 WHERE table_name = 'users'
+                """
+            ).fetchall()
+            assert "is_admin" in {c["column_name"] for c in columns}
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (1, 'local', '')"
+            )
+            row = db.execute(
+                "SELECT is_admin FROM users WHERE id = 1"
+            ).fetchone()
+        assert row["is_admin"] == 0
+
 
 @requires_pg
 class TestAppOnPostgres:

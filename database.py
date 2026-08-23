@@ -356,6 +356,7 @@ def init_db_sqlite() -> None:
                 trial_ends_at TIMESTAMP,
                 email_verified INTEGER NOT NULL DEFAULT 0,
                 suspended INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0,
                 stripe_customer_id TEXT DEFAULT '',
                 stripe_subscription_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -371,6 +372,8 @@ def init_db_sqlite() -> None:
             _add_column_if_missing(
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
+        # Admin flag for hosted mode (A2); never auto-granted.
+        _add_column_if_missing(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0")
 
         # Migrate single-column UNIQUE constraints to per-user composite
         # constraints so different tenants can use the same destination
@@ -560,6 +563,7 @@ def init_db_postgres() -> None:
                 trial_ends_at TIMESTAMP,
                 email_verified INTEGER NOT NULL DEFAULT 0,
                 suspended INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0,
                 stripe_customer_id TEXT DEFAULT '',
                 stripe_subscription_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -762,6 +766,9 @@ def init_db_postgres() -> None:
             WHERE consumed_at IS NOT NULL
                OR expires_at <= NOW() - INTERVAL '1 day'
         """)
+
+        # Admin flag for hosted mode (A2); never auto-granted.
+        _add_column_if_missing(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0")
 
 
 init_db()

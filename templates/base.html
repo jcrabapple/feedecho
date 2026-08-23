@@ -38,6 +38,7 @@
             <a href="/echoes" class="{% if request.url.path == '/echoes' %}active{% endif %}">Echoes</a>
             <a href="/history" class="{% if request.url.path == '/history' %}active{% endif %}">History</a>
             <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
+            <a href="/howto" class="{% if request.url.path == '/howto' %}active{% endif %}">How To</a>
             {% if MULTI and is_admin %}
             <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Admin</a>
             {% endif %}

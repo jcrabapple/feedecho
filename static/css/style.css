@@ -479,6 +479,10 @@ button:hover { background: var(--primary-hover); }
 .flash-ok { background: var(--success-wash); color: var(--success); border: 1px solid var(--success); }
 .flash-error { background: var(--danger-wash); color: var(--danger); border: 1px solid var(--danger); }
 
+/* How To page */
+.howto-steps { margin: 0.5rem 0 1rem 1.25rem; line-height: 1.7; }
+.howto-steps li { margin-bottom: 0.4rem; }
+
 @media (max-width: 640px) {
     .btn-sm {
         min-height: 40px;

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}How To — FeedEcho{% endblock %}
+{% block content %}
+<h1>How To</h1>
+<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, or email. Everything is built from three pieces: feeds, accounts, and echoes.</p>
+
+<section>
+    <h2>1. Add a feed</h2>
+    <p>A feed is any RSS, Atom, or JSON feed URL — a blog, a news site, a podcast, a subreddit.</p>
+    <ol class="howto-steps">
+        <li>Open <a href="/feeds">Feeds</a>.</li>
+        <li>Paste the feed URL into the <strong>Add feed</strong> form.</li>
+        <li>Set the <strong>poll interval</strong> — how often FeedEcho checks for new items (default 15 minutes). Lower intervals check more often; keep this reasonable for the feed's server.</li>
+        <li>Click <strong>Add</strong>. FeedEcho records the newest item without posting it, so adding a feed never floods your accounts with the existing backlog.</li>
+    </ol>
+    <p class="hint">Some sites don't publish a feed link. If the URL loads in a feed reader, it works in FeedEcho. Search engines can help: try <code>site:example.com rss</code>.</p>
+</section>
+
+<section>
+    <h2>2. Add an account</h2>
+    <p>An account is a destination FeedEcho can post to. Three kinds are supported.</p>
+    <h3>Mastodon</h3>
+    <ol class="howto-steps">
+        <li>Open <a href="/accounts">Accounts</a>.</li>
+        <li>Under <strong>Connect Mastodon via OAuth</strong>, enter your instance URL (for example <code>https://mastodon.social</code>).</li>
+        <li>Approve the authorization prompt on your instance. The account is added automatically.</li>
+    </ol>
+    <h3>Bluesky</h3>
+    <ol class="howto-steps">
+        <li>In the Bluesky app, open Settings → Privacy and security → App passwords and create one.</li>
+        <li>Under <strong>Connect Bluesky</strong>, enter your handle and the app password.</li>
+        <li>Click <strong>Connect</strong>. The handle is resolved to your personal data server automatically.</li>
+    </ol>
+    <h3>Email</h3>
+    <ol class="howto-steps">
+        <li>Under <strong>Add email account</strong>, enter a name and the destination address.</li>
+        <li>In <a href="/settings">Settings</a>, configure SMTP so FeedEcho can send on your behalf.</li>
+        <li>Use the <strong>Test</strong> button to confirm delivery before relying on it.</li>
+    </ol>
+</section>
+
+<section>
+    <h2>3. Create an echo</h2>
+    <p>An echo connects one feed to one account with rules for what gets posted.</p>
+    <ol class="howto-steps">
+        <li>Open <a href="/echoes">Echoes</a> and click <strong>New echo</strong>.</li>
+        <li>Pick the <strong>feed</strong> and the <strong>account</strong>.</li>
+        <li>Write a <strong>template</strong> for the post. Variables like <code>{{ '{{ title }}' }}</code> and <code>{{ '{{ link }}' }}</code> pull from each feed item — see <a href="/#template-variables">Template Variables</a> for the full list.</li>
+        <li>Optional rules:
+            <ul>
+                <li><strong>Filter keywords</strong> — post only items containing a keyword, or skip items containing it.</li>
+                <li><strong>Content warning</strong> — for Mastodon, adds a spoiler label and marks posts sensitive.</li>
+                <li><strong>Digest</strong> — email destinations only; batches items into one email per hour instead of sending per item.</li>
+            </ul>
+        </li>
+        <li>Save. New feed items post on the next poll, up to the drip limit you set.</li>
+    </ol>
+</section>
+
+<section>
+    <h2>Good to know</h2>
+    <ul>
+        <li><strong>History</strong> keeps a record of every post and every failure, with retries for transient errors.</li>
+        <li><strong>Deleting</strong> a feed or echo is soft: history is preserved.</li>
+        <li><strong>Failure alerts</strong>: configure a notify email in Settings to hear about repeated failures.</li>
+    </ul>
+</section>
+{% endblock %}

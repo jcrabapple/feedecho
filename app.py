@@ -980,6 +980,11 @@ async def history_page(request: Request):
     return render("history.html", request, posts=posts)
 
 
+@app.get("/howto", response_class=HTMLResponse)
+async def howto_page(request: Request):
+    return render("howto.html", request)
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     uid = current_user_id(request)

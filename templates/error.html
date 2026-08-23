@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} — FeedEcho{% endblock %}
+{% block content %}
+<div class="error-page">
+    <h1>{{ code }}</h1>
+    <p>{{ message }}</p>
+    <a href="/">Back to dashboard</a>
+</div>
+{% endblock %}

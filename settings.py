@@ -22,6 +22,7 @@ CALLBACK_URL = os.environ.get(
 )
 STATE_SECRET = os.environ.get("FEEDCHO_STATE_SECRET", "")
 BASE_URL = os.environ.get("FEEDCHO_BASE_URL", "")
+ADMIN_EMAIL = os.environ.get("FEEDCHO_ADMIN_EMAIL", "")
 SESSION_SECRET = os.environ.get("FEEDCHO_SESSION_SECRET", "")
 ALLOW_SQLITE_FALLBACK = (
     os.environ.get("FEEDCHO_ALLOW_SQLITE_FALLBACK", "") == "1"

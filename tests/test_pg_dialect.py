@@ -229,3 +229,30 @@ class TestAppOnPostgres:
             resp = c.get("/")
         assert resp.status_code == 200
         assert "Dashboard" in resp.text
+
+    def test_admin_page_renders_on_pg(self, pg_env, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import auth as auth_mod
+        import security
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, is_admin)"
+                " VALUES (9, 'boss@example.com', '', 1)"
+            )
+            db.execute(
+                "INSERT INTO users (id, email, password_hash)"
+                " VALUES (10, 'minion@example.com', '')"
+            )
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(9, "boss@example.com"))
+            resp = c.get("/admin")
+        assert resp.status_code == 200
+        assert "boss@example.com" in resp.text
+        assert "minion@example.com" in resp.text

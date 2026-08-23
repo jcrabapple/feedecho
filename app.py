@@ -271,11 +271,16 @@ def _trial_context(request: Request) -> dict:
         return {}
     with get_db() as db:
         row = db.execute(
-            "SELECT email, plan, trial_ends_at FROM users WHERE id = ?", (uid,)
+            "SELECT email, plan, trial_ends_at, is_admin FROM users WHERE id = ?",
+            (uid,),
         ).fetchone()
     if not row:
         return {}
-    ctx = {"current_user_email": row["email"], "plan": row["plan"] or "trial"}
+    ctx = {
+        "current_user_email": row["email"],
+        "plan": row["plan"] or "trial",
+        "is_admin": bool(row["is_admin"]),
+    }
     ends = row["trial_ends_at"]
     if ends:
         try:
@@ -326,11 +331,31 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_config()
     init_db()
+    _bootstrap_admin()
     _revalidate_stored_templates()
     start_scheduler()
     logger.info("FeedEcho started")
     yield
     stop_scheduler()
+
+
+def _bootstrap_admin() -> None:
+    """Promote the user named by FEEDCHO_ADMIN_EMAIL (idempotent).
+
+    The hosted deployment has no other bootstrap path: the first admin is
+    promoted from the environment, then manages the rest from the admin
+    dashboard. No-op when unset or in single mode.
+    """
+    if not settings.MULTI or not settings.ADMIN_EMAIL:
+        return
+    with get_db() as db:
+        cur = db.execute(
+            "UPDATE users SET is_admin = 1 WHERE email = ? AND is_admin = 0",
+            (settings.ADMIN_EMAIL,),
+        )
+        changed = cur.rowcount if hasattr(cur, "rowcount") else 0
+    if changed:
+        logger.info("Promoted FEEDCHO_ADMIN_EMAIL user to admin")
 
 
 app.router.lifespan_context = lifespan
@@ -469,6 +494,100 @@ async def dashboard(request: Request):
         }
     return render("dashboard.html", request, feeds=feeds, echoes=echoes,
                   recent_posts=recent_posts, stats=stats)
+
+
+# ── Admin ─────────────────────────────────────────────────────────────────────
+
+def _admin_uid_or_none(request: Request) -> int | None:
+    """The admin's user id, or None when the caller is not an admin.
+
+    404 in single mode (admin routes don't exist there); None in multi
+    mode when the authenticated user lacks the role.
+    """
+    from auth import _require_multi
+
+    _require_multi()
+    uid = current_user_id(request)
+    return uid if auth.is_admin(uid) else None
+
+
+def _admin_stats(db) -> dict:
+    rows = db.execute(
+        "SELECT COUNT(*) AS n,"
+        " SUM(CASE WHEN is_admin = 1 THEN 1 ELSE 0 END) AS admins,"
+        " SUM(CASE WHEN suspended = 1 THEN 1 ELSE 0 END) AS suspended,"
+        " SUM(CASE WHEN email_verified = 1 THEN 1 ELSE 0 END) AS verified,"
+        " SUM(CASE WHEN plan = 'trial' AND trial_ends_at > CURRENT_TIMESTAMP"
+        " THEN 1 ELSE 0 END) AS active_trials"
+        " FROM users WHERE email != 'local'"
+    ).fetchone()
+    return {k: (rows[k] or 0) for k in ("n", "admins", "suspended", "verified", "active_trials")}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    with get_db() as db:
+        users = db.execute("""
+            SELECT id, email, plan, trial_ends_at, email_verified,
+                   suspended, is_admin, created_at
+              FROM users
+             WHERE email != 'local'
+             ORDER BY created_at DESC
+        """).fetchall()
+        stats = _admin_stats(db)
+    return render("admin.html", request, users=users, stats=stats)
+
+
+@app.post("/admin/users/{user_id}/suspend")
+async def admin_toggle_suspend(user_id: int, request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    if user_id == uid:
+        raise HTTPException(status_code=400, detail="You cannot suspend your own account")
+    with get_db() as db:
+        row = db.execute(
+            "SELECT suspended FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        db.execute(
+            "UPDATE users SET suspended = ? WHERE id = ?",
+            (0 if row["suspended"] else 1, user_id),
+        )
+        action = "unsuspended" if row["suspended"] else "suspended"
+    logger.info("Admin %s %s user %s", uid, action, user_id)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.post("/admin/users/{user_id}/admin")
+async def admin_toggle_admin(user_id: int, request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    with get_db() as db:
+        row = db.execute(
+            "SELECT is_admin FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        if row["is_admin"] and user_id == uid:
+            raise HTTPException(
+                status_code=400, detail="You cannot demote your own account"
+            )
+        db.execute(
+            "UPDATE users SET is_admin = ? WHERE id = ?",
+            (0 if row["is_admin"] else 1, user_id),
+        )
+        action = "demoted" if row["is_admin"] else "promoted"
+    logger.info("Admin %s %s user %s", uid, action, user_id)
+    return RedirectResponse(url="/admin", status_code=302)
 
 
 @app.get("/feeds", response_class=HTMLResponse)

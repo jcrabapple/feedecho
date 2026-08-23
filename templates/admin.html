@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Admin — FeedEcho{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <span class="stat-value">{{ stats.n }}</span>
+        <span class="stat-label">Users</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ stats.active_trials }}</span>
+        <span class="stat-label">Active trials</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ stats.verified }}</span>
+        <span class="stat-label">Email verified</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ stats.suspended }}</span>
+        <span class="stat-label">Suspended</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ stats.admins }}</span>
+        <span class="stat-label">Admins</span>
+    </div>
+</div>
+
+<section id="users">
+    <h2>Users</h2>
+    {% if users %}
+    <div class="data-table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Email</th>
+                <th>Plan</th>
+                <th>Verified</th>
+                <th>Status</th>
+                <th>Role</th>
+                <th>Joined</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td data-label="Email">{{ u.email }}</td>
+                <td data-label="Plan">{{ u.plan }}</td>
+                <td data-label="Verified">{{ 'Yes' if u.email_verified else 'No' }}</td>
+                <td data-label="Status">
+                    {% if u.suspended %}<span class="badge badge-danger">Suspended</span>
+                    {% else %}<span class="badge badge-success">Active</span>{% endif %}
+                </td>
+                <td data-label="Role">
+                    {% if u.is_admin %}<span class="badge badge-info">Admin</span>
+                    {% else %}<span class="badge badge-muted">User</span>{% endif %}
+                </td>
+                <td data-label="Joined">{{ u.created_at }}</td>
+                <td data-label="Actions">
+                    <form method="post" action="/admin/users/{{ u.id }}/suspend" class="inline-form">
+                        <button type="submit" class="btn-sm {% if not u.suspended %}btn-danger{% endif %}">
+                            {{ 'Unsuspend' if u.suspended else 'Suspend' }}
+                        </button>
+                    </form>
+                    <form method="post" action="/admin/users/{{ u.id }}/admin" class="inline-form">
+                        <button type="submit" class="btn-sm {% if not u.is_admin %}btn-danger{% endif %}">
+                            {{ 'Demote' if u.is_admin else 'Make admin' }}
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p>No users yet.</p>
+    {% endif %}
+</section>
+{% endblock %}

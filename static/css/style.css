@@ -455,6 +455,14 @@ button:hover { background: var(--primary-hover); }
 .btn-danger:hover { background: var(--danger); filter: brightness(1.12); }
 .action-cell { white-space: nowrap; }
 
+/* Error page (admin 403, etc.) */
+.error-page {
+    max-width: 30rem;
+    margin: 3rem auto;
+    text-align: center;
+}
+.error-page h1 { font-size: 3rem; margin-bottom: 0.5rem; }
+
 @media (max-width: 640px) {
     .btn-sm {
         min-height: 40px;

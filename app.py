@@ -45,7 +45,7 @@ logging_setup.setup_logging()
 logger = logging.getLogger("feedecho")
 access_logger = logging.getLogger("feedecho.access")
 
-app = FastAPI(title="FeedEcho", version="1.12.1")
+app = FastAPI(title="FeedEcho", version="1.13.0")
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")

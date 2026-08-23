@@ -32,16 +32,21 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   docker compose: postgres + feedecho + caddy, all healthy), DNS A record via
   Porkbun (id 577733457, TTL 600, direct — no Cloudflare proxy), Caddy TLS.
   Jason's account jcrabapple@fastmail.us registered (password:
-  FEEDCHO_ADMIN_PASSWORD in Infisical, dev env). 411 tests green (local sqlite
-  suite), 9/9 pg green.
-- NOT STARTED (new scope, Jason 2026-08-22): structured logging, admin user
-  role (is_admin), admin dashboard, admin email settings (verification +
-  password-reset emails), email verification in signup flow, user password
-  reset. Docs: basic How To page (add feeds, add accounts, create echoes)
-  for BOTH self-hosted and hosted modes; hosted-only About landing page
-  disclosing privacy + security practices. Phase 4 (billing): Stripe
-  card-gated trial, B2 backups, Cloudflare proxy decision. Private beta
-  targeted months 3-4.
+  FEEDCHO_ADMIN_PASSWORD in Infisical, dev env).
+- DONE (next-phase items 1-8, each with a Kimi K3 review closed): structured
+  logging (logging_setup.py LogRecordFactory + RequestIdMiddleware +
+  FEEDCHO_LOG_LEVEL); admin role (users.is_admin + auth.is_admin fresh-read +
+  FEEDCHO_ADMIN_EMAIL bootstrap); admin dashboard (/admin users/stats +
+  suspend/unsuspend/promote/demote with self-guards + last-admin guards);
+  admin email settings (system_settings table + system SMTP with masking +
+  validation); email verification (email_tokens, verify/resend, scheduler
+  gate for unverified owners); password reset (forgot/reset with peek-consume,
+  per-IP + per-user throttles, session_epoch invalidation); How To page
+  (both modes); About page (hosted-only public disclosure). 501 sqlite +
+  13 pg tests green.
+- NOT STARTED: Phase 4 (billing): Stripe card-gated trial, B2 backups,
+  Cloudflare proxy decision. Private beta targeted months 3-4. The current
+  unreleased master (post-v1.12.1) has NOT been deployed to the VPS yet.
 
 ## 4. Key Decisions (and why)
 

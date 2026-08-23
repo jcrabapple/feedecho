@@ -123,7 +123,7 @@ def _session_key() -> bytes:
     ).digest()
 
 
-def sign_session(user_id: int, email: str) -> str:
+def sign_session(user_id: int, email: str, epoch: int = 0) -> str:
     """Return a signed session token: base64url(claims).hexsig."""
     payload = _b64(
         json.dumps(
@@ -131,6 +131,7 @@ def sign_session(user_id: int, email: str) -> str:
                 "aud": _SESSION_AUD,
                 "uid": user_id,
                 "email": email,
+                "ep": epoch,
                 "exp": int(time.time()) + SESSION_TTL_SECONDS,
             }
         ).encode()
@@ -166,6 +167,13 @@ def read_session(token: str | bytes) -> dict | None:
         uid = data.get("uid")
         if isinstance(uid, bool) or not isinstance(uid, int):
             return None
-        return {"user_id": uid, "email": str(data.get("email", ""))}
+        epoch = data.get("ep", 0)
+        if isinstance(epoch, bool) or not isinstance(epoch, int):
+            return None
+        return {
+            "user_id": uid,
+            "email": str(data.get("email", "")),
+            "epoch": epoch,
+        }
     except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
         return None

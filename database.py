@@ -357,6 +357,7 @@ def init_db_sqlite() -> None:
                 email_verified INTEGER NOT NULL DEFAULT 0,
                 suspended INTEGER NOT NULL DEFAULT 0,
                 is_admin INTEGER NOT NULL DEFAULT 0,
+                session_epoch INTEGER NOT NULL DEFAULT 0,
                 stripe_customer_id TEXT DEFAULT '',
                 stripe_subscription_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -622,6 +623,7 @@ def init_db_postgres() -> None:
                 email_verified INTEGER NOT NULL DEFAULT 0,
                 suspended INTEGER NOT NULL DEFAULT 0,
                 is_admin INTEGER NOT NULL DEFAULT 0,
+                session_epoch INTEGER NOT NULL DEFAULT 0,
                 stripe_customer_id TEXT DEFAULT '',
                 stripe_subscription_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -827,6 +829,9 @@ def init_db_postgres() -> None:
 
         # Admin flag for hosted mode (A2); never auto-granted.
         _add_column_if_missing(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0")
+        # Session epoch: bumped on password reset, invalidating all prior
+        # session cookies for the user.
+        _add_column_if_missing(db, "users", "session_epoch", "INTEGER NOT NULL DEFAULT 0")
 
         _init_shared_tables(db)
 

@@ -209,14 +209,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         token = request.cookies.get("feedecho_session")
         claims = security.read_session(token) if token else None
         if claims:
-            # Suspension is enforced per request, not just at login: a
-            # valid HMAC session for a suspended account is rejected.
+            # Suspension and session-epoch are enforced per request, not
+            # just at login: a valid HMAC session for a suspended account,
+            # or one issued before the last password reset, is rejected.
             with get_db() as db:
                 row = db.execute(
-                    "SELECT suspended FROM users WHERE id = ?",
+                    "SELECT suspended, session_epoch FROM users WHERE id = ?",
                     (claims["user_id"],),
                 ).fetchone()
-            if row and not row["suspended"]:
+            if (
+                row
+                and not row["suspended"]
+                and row["session_epoch"] == claims.get("epoch", 0)
+            ):
                 request.state.user_id = claims["user_id"]
                 return await call_next(request)
 

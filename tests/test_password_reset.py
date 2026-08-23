@@ -1,5 +1,7 @@
 """Password reset: request flow, token peek/consume, password change."""
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -48,6 +50,10 @@ class TestForgotFlow:
                 follow_redirects=False,
             )
         assert resp.status_code == 200
+        for _ in range(100):  # email dispatch is a background thread
+            if sent:
+                break
+            time.sleep(0.05)
         assert sent and sent[0][0] == "reset@example.com"
         body = sent[0][2]
         assert "/reset-password?token=" in body
@@ -129,12 +135,9 @@ class TestResetSubmit:
             )
         assert resp.status_code == 200
         assert "Passwords do not match" in resp.text
-        # Fresh token embedded so the form stays submittable
-        import re
-
-        m = re.search(r'name="token" value="([^"]+)"', resp.text)
-        assert m
-        assert verification.peek_token(m.group(1), "reset") == UID
+        # The SAME token is re-rendered (peek, not consume+reissue)
+        assert f'name="token" value="{token}"' in resp.text
+        assert verification.peek_token(token, "reset") == UID
         # Password unchanged
         with database.get_db() as db:
             row = db.execute(
@@ -197,4 +200,25 @@ class TestForgotThrottle:
         before = len(sent)
         with TestClient(app) as c:
             c.post("/forgot-password", data={"email": "reset@example.com"})
+        time.sleep(0.3)  # allow any background dispatch to (not) happen
         assert len(sent) == before  # throttled: no send
+
+
+    def test_reset_invalidates_existing_sessions(self, multi_env):
+        with database.get_db() as db:
+            db.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (UID,))
+        old_cookie = security.sign_session(UID, "reset@example.com", epoch=0)
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", old_cookie)
+            assert c.get("/").status_code == 200  # session valid pre-reset
+        token = verification.issue_token(UID, "reset")
+        with TestClient(app) as c:
+            c.post(
+                "/reset-password",
+                data={"token": token, "password": "newpassword1", "confirm": "newpassword1"},
+                follow_redirects=False,
+            )
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", old_cookie)
+            resp = c.get("/", follow_redirects=False)
+        assert resp.status_code in (302, 303, 401)  # epoch bumped: dead session

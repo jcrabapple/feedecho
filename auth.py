@@ -36,7 +36,15 @@ _MAX_REGISTER_ATTEMPTS = 10
 _REGISTER_WINDOW_SECONDS = 10 * 60
 _register_attempts: dict[str, list[float]] = {}
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_RE = re.compile(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$")
+
+
+# Forgot-password IP throttle: 5 requests per IP per 10 minutes. Keeps an
+# unauthenticated email-sending endpoint from rotating across the whole
+# address space (per-user token throttle alone doesn't bound total sends).
+_forgot_attempts: dict[str, list[float]] = {}
+_FORGOT_LIMIT = 5
+_FORGOT_WINDOW = 600
 _MIN_PASSWORD_LENGTH = 8
 _MAX_PASSWORD_LENGTH = 1024
 _TRIAL_DAYS = 14
@@ -149,10 +157,16 @@ def _clear_failures(ip: str) -> None:
         _login_attempts.pop(ip, None)
 
 
-def _set_session_cookie(response: RedirectResponse, user_id: int, email: str, request: Request) -> None:
+def _set_session_cookie(
+    response: RedirectResponse,
+    user_id: int,
+    email: str,
+    request: Request,
+    epoch: int = 0,
+) -> None:
     response.set_cookie(
         key=COOKIE_NAME,
-        value=sign_session(user_id, email),
+        value=sign_session(user_id, email, epoch),
         httponly=True,
         samesite="lax",
         secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
@@ -306,7 +320,8 @@ def login_submit(
     email = email.strip().lower()
     with get_db() as db:
         user = db.execute(
-            "SELECT id, email, password_hash, suspended FROM users WHERE email = ?",
+            "SELECT id, email, password_hash, suspended, session_epoch"
+            " FROM users WHERE email = ?",
             (email,),
         ).fetchone()
     if user is None:
@@ -329,7 +344,7 @@ def login_submit(
         )
 
     response = RedirectResponse(url="/", status_code=302)
-    _set_session_cookie(response, user["id"], user["email"], request)
+    _set_session_cookie(response, user["id"], user["email"], request, user["session_epoch"])
     return response
 
 
@@ -341,36 +356,62 @@ def logout():
 
 # ── Password reset ────────────────────────────────────────────────────────────
 
+def _forgot_throttled(ip: str) -> bool:
+    now = time.time()
+    bucket = [t for t in _forgot_attempts.get(ip, []) if now - t < _FORGOT_WINDOW]
+    _forgot_attempts[ip] = bucket
+    return len(bucket) >= _FORGOT_LIMIT
+
+
 def forgot_page(request: Request):
     _require_multi()
     return _render_auth(request, "forgot_password.html")
 
 
+def _send_reset_email(user_id: int, email: str) -> None:
+    """Issue a reset token and email the link (runs in a worker thread).
+
+    Called fire-and-forget so the HTTP response never waits on SMTP —
+    this also removes the timing oracle between known/unknown addresses.
+    """
+    import verification
+    from email_sender import send_system_email
+
+    try:
+        if not verification.resend_allowed(user_id, "reset"):
+            return
+        token = verification.issue_token(user_id, "reset")
+        link = f"{settings.BASE_URL.rstrip('/')}/reset-password?token={token}"
+        send_system_email(
+            email,
+            "Reset your FeedEcho password",
+            f"Reset your FeedEcho password by opening this link:\n\n{link}\n\n"
+            "This link expires in 24 hours. If you did not request a reset, you can ignore this email.",
+        )
+    except Exception:  # noqa: BLE001 — enumeration-safe; ERROR level so a
+        logging.getLogger("feedecho").error(  # broken mailer is detectable
+            "Password reset email failed for user %s", user_id, exc_info=True
+        )
+
+
 def forgot_submit(request: Request, email: str = Form("")):
     _require_multi()
     email = email.strip().lower()
-    # Uniform response: never reveal whether an account exists.
-    with get_db() as db:
-        user = db.execute(
-            "SELECT id, email FROM users WHERE email = ?", (email,)
-        ).fetchone()
-    if user is not None:
-        try:
-            import verification
-            from email_sender import send_system_email
+    # Uniform response: never reveal whether an account exists. The email
+    # dispatch happens in a background thread (see _send_reset_email), so
+    # the response time is identical for known and unknown addresses.
+    ip = _client_ip(request)
+    if not _forgot_throttled(ip):
+        with get_db() as db:
+            user = db.execute(
+                "SELECT id, email FROM users WHERE email = ?", (email,)
+            ).fetchone()
+        if user is not None:
+            _forgot_attempts.setdefault(ip, []).append(time.time())
+            import asyncio
 
-            if verification.resend_allowed(user["id"], "reset"):
-                token = verification.issue_token(user["id"], "reset")
-                link = f"{settings.BASE_URL.rstrip('/')}/reset-password?token={token}"
-                send_system_email(
-                    user["email"],
-                    "Reset your FeedEcho password",
-                    f"Reset your FeedEcho password by opening this link:\n\n{link}\n\n"
-                    "This link expires in 24 hours. If you did not request a reset, you can ignore this email.",
-                )
-        except Exception:  # noqa: BLE001 — enumeration-safe; log internally
-            logging.getLogger("feedecho").warning(
-                "Password reset email failed for %s", email, exc_info=True
+            asyncio.create_task(
+                asyncio.to_thread(_send_reset_email, user["id"], user["email"])
             )
     return _render_auth(request, "forgot_password.html", sent=True)
 
@@ -398,7 +439,10 @@ def reset_submit(
     _require_multi()
     import verification
 
-    uid = verification.consume_token(token, "reset") if token else None
+    # Peek first: validation errors re-render with the SAME token (no
+    # reissue, no throttle bypass, no reset-window extension). The token
+    # is consumed only after the new password passes validation.
+    uid = verification.peek_token(token, "reset") if token else None
     if uid is None:
         return _render_auth(
             request, "reset_password.html",
@@ -412,21 +456,24 @@ def reset_submit(
     if password != confirm:
         errors.append("Passwords do not match.")
     if errors:
-        # Re-issue a fresh token so the form stays submittable after the
-        # validation error consumed the original one.
-        fresh = verification.issue_token(uid, "reset")
         return _render_auth(
             request, "reset_password.html",
-            error=" ".join(errors), token=fresh,
+            error=" ".join(errors), token=token,
+        )
+
+    if verification.consume_token(token, "reset") is None:
+        return _render_auth(
+            request, "reset_password.html",
+            error="This reset link is invalid or has expired.",
         )
 
     with get_db() as db:
+        # Bump the session epoch: every previously issued session cookie
+        # for this user dies with the password change.
         db.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
+            "UPDATE users SET password_hash = ?,"
+            " session_epoch = session_epoch + 1 WHERE id = ?",
             (hash_password(password), uid),
         )
     logging.getLogger("feedecho").info("User %s reset their password", uid)
-    # Sessions are stateless HMAC tokens and cannot be individually
-    # revoked; the user is redirected to login, and the password change
-    # takes effect for all FUTURE logins.
     return RedirectResponse(url="/login?reset=1", status_code=302)

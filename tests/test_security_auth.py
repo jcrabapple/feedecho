@@ -39,7 +39,7 @@ class TestSessionTokens:
         self._secret(monkeypatch)
         token = security.sign_session(42, "user@example.com")
         claims = security.read_session(token)
-        assert claims == {"user_id": 42, "email": "user@example.com"}
+        assert claims == {"user_id": 42, "email": "user@example.com", "epoch": 0}
 
     def test_tampered_payload_rejected(self, monkeypatch):
         self._secret(monkeypatch)

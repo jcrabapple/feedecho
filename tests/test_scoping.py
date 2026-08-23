@@ -187,3 +187,67 @@ class TestSettingsIsolation:
         assert [(r["user_id"], r["value"]) for r in rows] == [
             (A_ID, "smtp.a.example.com")
         ]
+
+
+class TestOAuthBinding:
+    def test_oauth_connect_binds_state_to_user(self, env, client_a, monkeypatch):
+        import oauth as oauth_module
+
+        monkeypatch.setattr(
+            "app.get_authorize_url",
+            lambda instance, session_binding, user_id=None: oauth_module._sign_state(
+                instance, session_binding, user_id=user_id
+            ),
+        )
+        client_a.get("/oauth/connect", params={"instance": "https://dmv.community"})
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT user_id FROM oauth_states"
+            ).fetchall()
+        assert [r["user_id"] for r in rows] == [A_ID]
+
+    def test_oauth_callback_writes_account_under_session_user(
+        self, env, client_a, monkeypatch
+    ):
+        import oauth as oauth_module
+
+        # Real state token generation (no network), fake the rest.
+        monkeypatch.setattr(
+            "app.get_authorize_url",
+            lambda instance, session_binding, user_id=None: oauth_module._sign_state(
+                instance, session_binding, user_id=user_id
+            ),
+        )
+        monkeypatch.setattr(
+            "app.exchange_code",
+            lambda instance, code: {"access_token": "tok"},
+        )
+        monkeypatch.setattr(
+            "app.verify_credentials",
+            lambda instance, token: {"username": "user", "display_name": "Display"},
+        )
+
+        resp = client_a.get(
+            "/oauth/connect",
+            params={"instance": "https://dmv.community"},
+            follow_redirects=False,
+        )
+        # Starlette percent-encodes the pipe characters in the Location
+        # header; Mastodon echoes the state back through the query string
+        # decoded, so unquote to model that round trip.
+        from urllib.parse import unquote
+
+        state_token = unquote(resp.headers["location"])
+
+        cb = client_a.get(
+            "/oauth/callback",
+            params={"code": "c", "state": state_token},
+            follow_redirects=False,
+        )
+        assert cb.status_code == 303
+
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT user_id, username FROM accounts"
+            ).fetchall()
+        assert [(r["user_id"], r["username"]) for r in rows] == [(A_ID, "user")]

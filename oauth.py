@@ -38,14 +38,19 @@ def _state_signature(nonce: str, instance: str) -> str:
     return hmac.new(_STATE_SECRET, payload, hashlib.sha256).hexdigest()
 
 
-def _sign_state(instance: str, session_binding: str | None = None) -> str:
+def _sign_state(
+    instance: str, session_binding: str | None = None, user_id: int | None = None
+) -> str:
     """Create and persist a one-time OAuth state token.
 
     `session_binding` must be a cryptographically random browser session value.
     It is stored hashed and must be presented again when consuming state.
+    `user_id` records which tenant initiated the flow (multi mode); it is
+    recovered when the state is consumed so the resulting account row is
+    attributed to the right user.
 
-    The optional default is retained only for compatibility with direct callers;
-    production callers must provide a browser-session binding.
+    The optional defaults are retained only for compatibility with direct
+    callers; production callers must provide a browser-session binding.
     """
     if session_binding is None:
         session_binding = secrets.token_urlsafe(32)
@@ -58,10 +63,10 @@ def _sign_state(instance: str, session_binding: str | None = None) -> str:
     with get_db() as db:
         db.execute(
             """
-            INSERT INTO oauth_states (nonce, instance, session_binding, expires_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO oauth_states (nonce, instance, session_binding, user_id, expires_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (nonce, instance, _hash_session_binding(session_binding), expires_at),
+            (nonce, instance, _hash_session_binding(session_binding), user_id, expires_at),
         )
 
     return f"{nonce}|{instance}|{signature}"
@@ -171,7 +176,9 @@ def get_or_create_app(instance: str) -> dict:
     return {"client_id": client_id, "client_secret": client_secret}
 
 
-def get_authorize_url(instance: str, session_binding: str) -> str:
+def get_authorize_url(
+    instance: str, session_binding: str, user_id: int | None = None
+) -> str:
     """Build a session-bound Mastodon authorization URL."""
     if not session_binding:
         raise ValueError("A browser session binding is required")
@@ -179,7 +186,7 @@ def get_authorize_url(instance: str, session_binding: str) -> str:
     instance = instance.rstrip("/")
     validate_outbound_url(instance)
     app = get_or_create_app(instance)
-    state_token = _sign_state(instance, session_binding)
+    state_token = _sign_state(instance, session_binding, user_id=user_id)
 
     query = urlencode(
         {
@@ -224,6 +231,15 @@ def exchange_code(instance: str, code: str) -> dict:
     return result
 
 
-def verify_state(state: str, session_binding: str) -> str:
-    """Verify and consume a server-side, one-time OAuth state token."""
-    return _verify_state(state, session_binding)
+def verify_state(state: str, session_binding: str) -> tuple[str, int | None]:
+    """Verify and consume a server-side, one-time OAuth state token.
+
+    Returns (instance, user_id); user_id is None in single mode.
+    """
+    instance = _verify_state(state, session_binding)
+    with get_db() as db:
+        nonce = state.rsplit("|", 2)[0]
+        row = db.execute(
+            "SELECT user_id FROM oauth_states WHERE nonce = ?", (nonce,)
+        ).fetchone()
+    return instance, (row["user_id"] if row else None)

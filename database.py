@@ -502,10 +502,12 @@ def init_db_sqlite() -> None:
                 instance TEXT NOT NULL,
                 session_binding TEXT NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
+                user_id INTEGER,
                 consumed_at TIMESTAMP,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        _add_column_if_missing(db, "oauth_states", "user_id", "INTEGER")
 
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_posted_items_echo
@@ -723,6 +725,7 @@ def init_db_postgres() -> None:
                 instance TEXT NOT NULL,
                 session_binding TEXT NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
+                user_id BIGINT,
                 consumed_at TIMESTAMP,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )

@@ -1313,7 +1313,9 @@ async def oauth_connect(request: Request, instance: str = ""):
         oauth_session = _secrets.token_urlsafe(32)
 
     try:
-        auth_url = get_authorize_url(instance, oauth_session)
+        auth_url = get_authorize_url(
+            instance, oauth_session, user_id=current_user_id(request)
+        )
     except Exception:
         logger.exception("OAuth connect failed for %s", instance)
         return _render_accounts_error(
@@ -1358,7 +1360,7 @@ async def oauth_callback(
         )
 
     try:
-        instance = verify_state(state, oauth_session)
+        instance, state_user_id = verify_state(state, oauth_session)
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -1390,9 +1392,9 @@ async def oauth_callback(
 
     with get_db() as db:
         db.execute(
-            """INSERT OR REPLACE INTO accounts (name, username, instance, access_token)
-               VALUES (?, ?, ?, ?)""",
-            (display_name, username, instance, access_token),
+            """INSERT INTO accounts (name, username, instance, access_token, user_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (display_name, username, instance, access_token, state_user_id or 1),
         )
 
     response = RedirectResponse(url="/accounts?status=connected", status_code=303)

@@ -82,7 +82,7 @@ class TestAdminGating:
 
 
 class TestAdminActions:
-    def test_suspend_toggles(self, multi_env):
+    def test_suspend_and_unsuspend(self, multi_env):
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(f"/admin/users/{USER_ID}/suspend", follow_redirects=False)
             assert resp.status_code == 302
@@ -91,25 +91,36 @@ class TestAdminActions:
                 "SELECT suspended FROM users WHERE id = ?", (USER_ID,)
             ).fetchone()
         assert row["suspended"] == 1
-        # Login for suspended users is rejected
-        with TestClient(app) as c:
-            login = c.post(
-                "/login",
-                data={"email": "user@example.com", "password": "anything"},
-                follow_redirects=False,
-            )
-        assert login.status_code == 200  # re-renders with error, no session
-
-    def test_unsuspend_restores(self, multi_env):
-        with database.get_db() as db:
-            db.execute("UPDATE users SET suspended = 1 WHERE id = ?", (USER_ID,))
+        # Suspend is idempotent (atomic target state)
         with _client(ADMIN_ID, "admin@example.com") as c:
             c.post(f"/admin/users/{USER_ID}/suspend", follow_redirects=False)
         with database.get_db() as db:
             row = db.execute(
                 "SELECT suspended FROM users WHERE id = ?", (USER_ID,)
             ).fetchone()
+        assert row["suspended"] == 1
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            c.post(f"/admin/users/{USER_ID}/unsuspend", follow_redirects=False)
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT suspended FROM users WHERE id = ?", (USER_ID,)
+            ).fetchone()
         assert row["suspended"] == 0
+
+    def test_suspended_session_is_rejected_per_request(self, multi_env):
+        # A suspended user with a valid HMAC session must lose access
+        # immediately, not at cookie expiry.
+        with database.get_db() as db:
+            db.execute("UPDATE users SET suspended = 1 WHERE id = ?", (USER_ID,))
+        with _client(USER_ID, "user@example.com") as c:
+            resp = c.get("/", follow_redirects=False)
+        assert resp.status_code in (302, 303, 401)
+        # Unsuspend restores the same session
+        with database.get_db() as db:
+            db.execute("UPDATE users SET suspended = 0 WHERE id = ?", (USER_ID,))
+        with _client(USER_ID, "user@example.com") as c:
+            resp = c.get("/", follow_redirects=False)
+        assert resp.status_code == 200
 
     def test_admin_cannot_suspend_self(self, multi_env):
         with _client(ADMIN_ID, "admin@example.com") as c:
@@ -118,7 +129,7 @@ class TestAdminActions:
 
     def test_promote_and_demote(self, multi_env):
         with _client(ADMIN_ID, "admin@example.com") as c:
-            c.post(f"/admin/users/{USER_ID}/admin", follow_redirects=False)
+            c.post(f"/admin/users/{USER_ID}/promote", follow_redirects=False)
         with database.get_db() as db:
             row = db.execute(
                 "SELECT is_admin FROM users WHERE id = ?", (USER_ID,)
@@ -126,7 +137,7 @@ class TestAdminActions:
         assert row["is_admin"] == 1
         # Now demote again
         with _client(ADMIN_ID, "admin@example.com") as c:
-            c.post(f"/admin/users/{USER_ID}/admin", follow_redirects=False)
+            c.post(f"/admin/users/{USER_ID}/demote", follow_redirects=False)
         with database.get_db() as db:
             row = db.execute(
                 "SELECT is_admin FROM users WHERE id = ?", (USER_ID,)
@@ -135,12 +146,12 @@ class TestAdminActions:
 
     def test_admin_cannot_demote_self(self, multi_env):
         with _client(ADMIN_ID, "admin@example.com") as c:
-            resp = c.post(f"/admin/users/{ADMIN_ID}/admin", follow_redirects=False)
+            resp = c.post(f"/admin/users/{ADMIN_ID}/demote", follow_redirects=False)
         assert resp.status_code == 400
 
     def test_non_admin_cannot_act(self, multi_env):
         with _client(USER_ID, "user@example.com") as c:
-            resp = c.post(f"/admin/users/{USER_ID}/admin", follow_redirects=False)
+            resp = c.post(f"/admin/users/{USER_ID}/promote", follow_redirects=False)
         assert resp.status_code == 403
         with database.get_db() as db:
             row = db.execute(
@@ -152,6 +163,53 @@ class TestAdminActions:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post("/admin/users/999/suspend", follow_redirects=False)
         assert resp.status_code == 404
+
+
+class TestLastAdminGuard:
+    """Unit tests for _admin_guard_last_admin: through the UI the self-guards
+    fire first, so the guard is defense-in-depth for future bulk actions."""
+
+    def test_demote_last_admin_bit_returns_error(self, multi_env):
+        from app import _admin_guard_last_admin
+
+        with database.get_db() as db:
+            db.execute("UPDATE users SET is_admin = 0 WHERE id = ?", (ADMIN_ID,))
+            db.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (USER_ID,))
+            err = _admin_guard_last_admin(db, USER_ID, "is_admin")
+        assert err is not None
+
+    def test_demote_with_second_admin_passes(self, multi_env):
+        from app import _admin_guard_last_admin
+
+        with database.get_db() as db:
+            db.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (USER_ID,))
+            err = _admin_guard_last_admin(db, USER_ID, "is_admin")
+        assert err is None
+
+    def test_suspend_last_active_admin_returns_error(self, multi_env):
+        from app import _admin_guard_last_admin
+
+        with database.get_db() as db:
+            db.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (USER_ID,))
+            db.execute("UPDATE users SET suspended = 1 WHERE id = ?", (USER_ID,))
+            # Only ACTIVE admin is ADMIN_ID.
+            err = _admin_guard_last_admin(db, ADMIN_ID, "suspended")
+        assert err is not None
+
+    def test_suspend_admin_with_another_active_admin_passes(self, multi_env):
+        from app import _admin_guard_last_admin
+
+        with database.get_db() as db:
+            db.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (USER_ID,))
+            err = _admin_guard_last_admin(db, ADMIN_ID, "suspended")
+        assert err is None
+
+    def test_suspend_non_admin_never_guarded(self, multi_env):
+        from app import _admin_guard_last_admin
+
+        with database.get_db() as db:
+            err = _admin_guard_last_admin(db, USER_ID, "suspended")
+        assert err is None
 
 
 class TestAdminBootstrap:

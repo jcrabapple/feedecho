@@ -58,16 +58,24 @@
                 </td>
                 <td data-label="Joined">{{ u.created_at }}</td>
                 <td data-label="Actions">
+                    {% if u.suspended %}
+                    <form method="post" action="/admin/users/{{ u.id }}/unsuspend" class="inline-form">
+                        <button type="submit" class="btn-sm">Unsuspend</button>
+                    </form>
+                    {% else %}
                     <form method="post" action="/admin/users/{{ u.id }}/suspend" class="inline-form">
-                        <button type="submit" class="btn-sm {% if not u.suspended %}btn-danger{% endif %}">
-                            {{ 'Unsuspend' if u.suspended else 'Suspend' }}
-                        </button>
+                        <button type="submit" class="btn-sm btn-danger">Suspend</button>
                     </form>
-                    <form method="post" action="/admin/users/{{ u.id }}/admin" class="inline-form">
-                        <button type="submit" class="btn-sm {% if not u.is_admin %}btn-danger{% endif %}">
-                            {{ 'Demote' if u.is_admin else 'Make admin' }}
-                        </button>
+                    {% endif %}
+                    {% if u.is_admin %}
+                    <form method="post" action="/admin/users/{{ u.id }}/demote" class="inline-form">
+                        <button type="submit" class="btn-sm btn-danger">Demote</button>
                     </form>
+                    {% else %}
+                    <form method="post" action="/admin/users/{{ u.id }}/promote" class="inline-form">
+                        <button type="submit" class="btn-sm">Make admin</button>
+                    </form>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}

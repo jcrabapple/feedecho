@@ -205,8 +205,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         token = request.cookies.get("feedecho_session")
         claims = security.read_session(token) if token else None
         if claims:
-            request.state.user_id = claims["user_id"]
-            return await call_next(request)
+            # Suspension is enforced per request, not just at login: a
+            # valid HMAC session for a suspended account is rejected.
+            with get_db() as db:
+                row = db.execute(
+                    "SELECT suspended FROM users WHERE id = ?",
+                    (claims["user_id"],),
+                ).fetchone()
+            if row and not row["suspended"]:
+                request.state.user_id = claims["user_id"]
+                return await call_next(request)
 
         accept = request.headers.get("accept", "")
         if "text/html" in accept and request.method == "GET":
@@ -344,18 +352,30 @@ def _bootstrap_admin() -> None:
 
     The hosted deployment has no other bootstrap path: the first admin is
     promoted from the environment, then manages the rest from the admin
-    dashboard. No-op when unset or in single mode.
+    dashboard. No-op when unset or in single mode. Email comparison is
+    case-insensitive (registration normalizes to lowercase). Note: while
+    the env var is set, the named account is re-promoted on every startup
+    — an intentional recovery hatch, so a dashboard demotion of that
+    account is only permanent after removing the env var.
     """
     if not settings.MULTI or not settings.ADMIN_EMAIL:
         return
     with get_db() as db:
-        cur = db.execute(
-            "UPDATE users SET is_admin = 1 WHERE email = ? AND is_admin = 0",
+        row = db.execute(
+            "SELECT id, is_admin FROM users WHERE LOWER(email) = LOWER(?)",
             (settings.ADMIN_EMAIL,),
+        ).fetchone()
+        if row is None:
+            logger.warning(
+                "FEEDCHO_ADMIN_EMAIL matches no registered user yet"
+            )
+            return
+        if row["is_admin"]:
+            return
+        db.execute(
+            "UPDATE users SET is_admin = 1 WHERE id = ?", (row["id"],)
         )
-        changed = cur.rowcount if hasattr(cur, "rowcount") else 0
-    if changed:
-        logger.info("Promoted FEEDCHO_ADMIN_EMAIL user to admin")
+    logger.info("Promoted FEEDCHO_ADMIN_EMAIL user (id %s) to admin", row["id"])
 
 
 app.router.lifespan_context = lifespan
@@ -524,6 +544,35 @@ def _admin_stats(db) -> dict:
     return {k: (rows[k] or 0) for k in ("n", "admins", "suspended", "verified", "active_trials")}
 
 
+def _admin_guard_last_admin(db, user_id: int, column: str) -> str | None:
+    """Error message if an action would leave zero admins, else None.
+
+    column is 'suspended' (guard: last ACTIVE admin) or 'is_admin'
+    (guard: last admin bit). Single-connection check + write keeps this
+    race-free per request transaction.
+    """
+    if column == "is_admin":
+        # Demoting: preserve at least one admin bit, whatever its state.
+        count = db.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1"
+        ).fetchone()["n"]
+        if (count or 0) <= 1:
+            return "Cannot demote the last admin account"
+    else:
+        # Suspending an admin: keep at least one ACTIVE admin.
+        row = db.execute(
+            "SELECT is_admin, suspended FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row and row["is_admin"] and not row["suspended"]:
+            active = db.execute(
+                "SELECT COUNT(*) AS n FROM users"
+                " WHERE is_admin = 1 AND suspended = 0"
+            ).fetchone()["n"]
+            if (active or 0) <= 1:
+                return "Cannot suspend the last active admin account"
+    return None
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     uid = _admin_uid_or_none(request)
@@ -543,50 +592,101 @@ async def admin_page(request: Request):
 
 
 @app.post("/admin/users/{user_id}/suspend")
-async def admin_toggle_suspend(user_id: int, request: Request):
+async def admin_suspend(user_id: int, request: Request):
+    """Set suspended=1 (atomic target state, idempotent)."""
     uid = _admin_uid_or_none(request)
     if uid is None:
         return render("error.html", request, status_code=403,
                       code=403, message="Admin access required")
     if user_id == uid:
-        raise HTTPException(status_code=400, detail="You cannot suspend your own account")
+        return render("error.html", request, status_code=400,
+                      code=400, message="You cannot suspend your own account")
     with get_db() as db:
         row = db.execute(
-            "SELECT suspended FROM users WHERE id = ?", (user_id,)
+            "SELECT id FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="User not found")
+            return render("error.html", request, status_code=404,
+                          code=404, message="User not found")
+        guard = _admin_guard_last_admin(db, user_id, "suspended")
+        if guard:
+            return render("error.html", request, status_code=400,
+                          code=400, message=guard)
         db.execute(
-            "UPDATE users SET suspended = ? WHERE id = ?",
-            (0 if row["suspended"] else 1, user_id),
+            "UPDATE users SET suspended = 1 WHERE id = ? AND suspended = 0",
+            (user_id,),
         )
-        action = "unsuspended" if row["suspended"] else "suspended"
-    logger.info("Admin %s %s user %s", uid, action, user_id)
+    logger.info("Admin %s suspended user %s", uid, user_id)
     return RedirectResponse(url="/admin", status_code=302)
 
 
-@app.post("/admin/users/{user_id}/admin")
-async def admin_toggle_admin(user_id: int, request: Request):
+@app.post("/admin/users/{user_id}/unsuspend")
+async def admin_unsuspend(user_id: int, request: Request):
     uid = _admin_uid_or_none(request)
     if uid is None:
         return render("error.html", request, status_code=403,
                       code=403, message="Admin access required")
     with get_db() as db:
         row = db.execute(
-            "SELECT is_admin FROM users WHERE id = ?", (user_id,)
+            "SELECT id FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="User not found")
-        if row["is_admin"] and user_id == uid:
-            raise HTTPException(
-                status_code=400, detail="You cannot demote your own account"
-            )
+            return render("error.html", request, status_code=404,
+                          code=404, message="User not found")
         db.execute(
-            "UPDATE users SET is_admin = ? WHERE id = ?",
-            (0 if row["is_admin"] else 1, user_id),
+            "UPDATE users SET suspended = 0 WHERE id = ? AND suspended = 1",
+            (user_id,),
         )
-        action = "demoted" if row["is_admin"] else "promoted"
-    logger.info("Admin %s %s user %s", uid, action, user_id)
+    logger.info("Admin %s unsuspended user %s", uid, user_id)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.post("/admin/users/{user_id}/promote")
+async def admin_promote(user_id: int, request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            return render("error.html", request, status_code=404,
+                          code=404, message="User not found")
+        db.execute(
+            "UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0",
+            (user_id,),
+        )
+    logger.info("Admin %s promoted user %s", uid, user_id)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.post("/admin/users/{user_id}/demote")
+async def admin_demote(user_id: int, request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    if user_id == uid:
+        return render("error.html", request, status_code=400,
+                      code=400, message="You cannot demote your own account")
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            return render("error.html", request, status_code=404,
+                          code=404, message="User not found")
+        guard = _admin_guard_last_admin(db, user_id, "is_admin")
+        if guard:
+            return render("error.html", request, status_code=400,
+                          code=400, message=guard)
+        db.execute(
+            "UPDATE users SET is_admin = 0 WHERE id = ? AND is_admin = 1",
+            (user_id,),
+        )
+    logger.info("Admin %s demoted user %s", uid, user_id)
     return RedirectResponse(url="/admin", status_code=302)
 
 

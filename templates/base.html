@@ -10,7 +10,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17161f">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=10">
+    <link rel="stylesheet" href="/static/css/style.css?v=11">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -38,6 +38,14 @@
             <a href="/history" class="{% if request.url.path == '/history' %}active{% endif %}">History</a>
             <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
             <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme" title="Toggle light/dark theme">◐</button>
+            {% if MULTI and current_user_email %}
+            <div class="nav-account">
+                <span class="nav-email" title="{{ current_user_email }}">{{ current_user_email }}</span>
+                <form method="post" action="/logout">
+                    <button type="submit" class="nav-logout">Log out</button>
+                </form>
+            </div>
+            {% endif %}
         </div>
     </nav>
     <main>

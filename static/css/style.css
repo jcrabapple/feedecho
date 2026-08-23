@@ -128,6 +128,45 @@ body {
 .nav-links a:hover { color: var(--text); background: var(--surface-light); }
 .nav-links a.active { color: var(--primary); }
 
+/* Account chrome (multi mode) */
+.nav-account {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: 0.4rem;
+    padding-left: 0.6rem;
+    border-left: 1px solid var(--border);
+}
+.nav-email {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.nav-logout {
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+.nav-logout:hover { background: var(--border); }
+
+/* Trial banner (multi mode dashboard) */
+.trial-banner {
+    background: var(--surface-light);
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    padding: 0.7rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+    color: var(--text);
+}
+
 /* Theme toggle */
 .theme-toggle {
     background: var(--surface-light);

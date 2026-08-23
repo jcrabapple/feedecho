@@ -3,6 +3,16 @@
 {% block content %}
 <h1>Dashboard</h1>
 
+{% if MULTI and plan == 'trial' %}
+<div class="trial-banner">
+    {% if trial_ends_date %}
+    <strong>Trial:</strong> your {{ trial_days_left }}-day-left free trial ends {{ trial_ends_date }}. Paid plans launch soon.
+    {% else %}
+    <strong>Trial:</strong> your free trial is active. Paid plans launch soon.
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="stats-grid">
     <div class="stat-card">
         <span class="stat-value">{{ stats.accounts }}</span>

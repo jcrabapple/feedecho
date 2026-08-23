@@ -136,6 +136,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         claims = security.read_session(token) if token else None
         if claims:
             request.state.user_id = claims["user_id"]
+            request.state.user_email = claims["email"]
             return await call_next(request)
 
         accept = request.headers.get("accept", "")
@@ -186,9 +187,47 @@ async def logout():
 app.add_middleware(AuthMiddleware)
 
 
+def _trial_context(request: Request) -> dict:
+    """Multi-mode template context: current user's email, plan, trial state.
+
+    Returns {} in single mode or when no authenticated user is present
+    (exempt routes like /login and /register).
+    """
+    if not settings.MULTI:
+        return {}
+    uid = getattr(request.state, "user_id", None)
+    if uid is None:
+        return {}
+    with get_db() as db:
+        row = db.execute(
+            "SELECT email, plan, trial_ends_at FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+    if not row:
+        return {}
+    ctx = {"current_user_email": row["email"], "plan": row["plan"] or "trial"}
+    ends = row["trial_ends_at"]
+    if ends:
+        try:
+            end = datetime.fromisoformat(str(ends).replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            ctx["trial_days_left"] = max(0, (end - now).days)
+            ctx["trial_ends_date"] = end.strftime("%b %d, %Y")
+        except ValueError:
+            pass
+    return ctx
+
+
 def render(name: str, request: Request, status_code: int = 200, **kwargs) -> HTMLResponse:
     template = jinja.get_template(name)
-    return HTMLResponse(template.render(request=request, **kwargs), status_code=status_code)
+    context = {"MULTI": settings.MULTI}
+    if settings.MULTI:
+        context.update(_trial_context(request))
+    context.update(kwargs)
+    return HTMLResponse(
+        template.render(request=request, **context), status_code=status_code
+    )
 
 
 def validate_url(url: str) -> str:

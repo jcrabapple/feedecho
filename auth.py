@@ -9,6 +9,7 @@ routes to this flow only when settings.MULTI is set.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 import threading
 import time
@@ -336,3 +337,96 @@ def logout():
     response = RedirectResponse(url="/login", status_code=302)
     response.delete_cookie(COOKIE_NAME)
     return response
+
+
+# ── Password reset ────────────────────────────────────────────────────────────
+
+def forgot_page(request: Request):
+    _require_multi()
+    return _render_auth(request, "forgot_password.html")
+
+
+def forgot_submit(request: Request, email: str = Form("")):
+    _require_multi()
+    email = email.strip().lower()
+    # Uniform response: never reveal whether an account exists.
+    with get_db() as db:
+        user = db.execute(
+            "SELECT id, email FROM users WHERE email = ?", (email,)
+        ).fetchone()
+    if user is not None:
+        try:
+            import verification
+            from email_sender import send_system_email
+
+            if verification.resend_allowed(user["id"], "reset"):
+                token = verification.issue_token(user["id"], "reset")
+                link = f"{settings.BASE_URL.rstrip('/')}/reset-password?token={token}"
+                send_system_email(
+                    user["email"],
+                    "Reset your FeedEcho password",
+                    f"Reset your FeedEcho password by opening this link:\n\n{link}\n\n"
+                    "This link expires in 24 hours. If you did not request a reset, you can ignore this email.",
+                )
+        except Exception:  # noqa: BLE001 — enumeration-safe; log internally
+            logging.getLogger("feedecho").warning(
+                "Password reset email failed for %s", email, exc_info=True
+            )
+    return _render_auth(request, "forgot_password.html", sent=True)
+
+
+def reset_page(request: Request, token: str = ""):
+    _require_multi()
+    if not token:
+        return _render_auth(request, "reset_password.html", error="Missing reset token.")
+    import verification
+
+    if verification.peek_token(token, "reset") is None:
+        return _render_auth(
+            request, "reset_password.html",
+            error="This reset link is invalid or has expired.",
+        )
+    return _render_auth(request, "reset_password.html", token=token)
+
+
+def reset_submit(
+    request: Request,
+    token: str = Form(""),
+    password: str = Form(""),
+    confirm: str = Form(""),
+):
+    _require_multi()
+    import verification
+
+    uid = verification.consume_token(token, "reset") if token else None
+    if uid is None:
+        return _render_auth(
+            request, "reset_password.html",
+            error="This reset link is invalid or has expired.",
+        )
+    errors: list[str] = []
+    if len(password) < _MIN_PASSWORD_LENGTH:
+        errors.append(f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.")
+    if len(password) > _MAX_PASSWORD_LENGTH:
+        errors.append(f"Password must be at most {_MAX_PASSWORD_LENGTH} characters.")
+    if password != confirm:
+        errors.append("Passwords do not match.")
+    if errors:
+        # Re-issue a fresh token so the form stays submittable after the
+        # validation error consumed the original one.
+        fresh = verification.issue_token(uid, "reset")
+        return _render_auth(
+            request, "reset_password.html",
+            error=" ".join(errors), token=fresh,
+        )
+
+    with get_db() as db:
+        db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(password), uid),
+        )
+    logging.getLogger("feedecho").info("User %s reset their password", uid)
+    # Sessions are stateless HMAC tokens and cannot be individually
+    # revoked; the user is redirected to login, and the password change
+    # takes effect for all FUTURE logins.
+    return RedirectResponse(url="/login?reset=1", status_code=302)

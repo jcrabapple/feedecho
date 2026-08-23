@@ -102,3 +102,21 @@ def consume_token(token: str, purpose: str) -> int | None:
             # Concurrent consumer won, or the token expired.
             return None
     return row["user_id"]
+
+
+def peek_token(token: str, purpose: str) -> int | None:
+    """Validate a token WITHOUT consuming it (for rendering reset forms).
+
+    Returns the owning user_id when the token is known, unconsumed, and
+    unexpired; None otherwise. Consumption still happens on submit, so
+    opening the link repeatedly cannot invalidate it.
+    """
+    digest = token_hash(token)
+    with get_db() as db:
+        row = db.execute(
+            "SELECT user_id FROM email_tokens"
+            " WHERE token_hash = ? AND purpose = ?"
+            " AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+            (digest, purpose),
+        ).fetchone()
+    return row["user_id"] if row else None

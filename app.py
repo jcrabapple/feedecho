@@ -154,6 +154,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/logout",
         # Email links are opened unauthenticated.
         "/verify-email",
+        "/forgot-password",
+        "/reset-password",
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
@@ -261,6 +263,33 @@ async def register_submit(
 @app.post("/logout")
 async def logout():
     return auth.logout()
+
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+async def forgot_page(request: Request):
+    return auth.forgot_page(request)
+
+
+@app.post("/forgot-password")
+async def forgot_submit(request: Request, email: str = Form("")):
+    return auth.forgot_submit(request, email=email)
+
+
+@app.get("/reset-password", response_class=HTMLResponse)
+async def reset_page(request: Request, token: str = ""):
+    return auth.reset_page(request, token=token)
+
+
+@app.post("/reset-password")
+async def reset_submit(
+    request: Request,
+    token: str = Form(""),
+    password: str = Form(""),
+    confirm: str = Form(""),
+):
+    return auth.reset_submit(
+        request, token=token, password=password, confirm=confirm
+    )
 
 
 app.add_middleware(AuthMiddleware)

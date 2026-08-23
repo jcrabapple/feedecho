@@ -37,8 +37,11 @@ def _record_factory(*args, **kwargs):
 def setup_logging() -> None:
     """Configure logging once per process (idempotent).
 
-    Called from the app lifespan; no-ops after the first call so repeated
-    TestClient startups in one pytest process don't stack handlers.
+    Called at module import in app.py (not from the lifespan). No-ops after
+    the first call so repeated TestClient startups in one pytest process
+    don't stack handlers. Replaces root handlers: the app owns its process,
+    so any prior uvicorn/journald handler config is intentionally discarded
+    in favor of the structured format.
     """
     global _configured
     if _configured:
@@ -53,7 +56,9 @@ def setup_logging() -> None:
     root.handlers = [handler]
     root.setLevel(level)
     # Every LogRecord gets request_id at creation, on every logger/handler
-    # path (including pytest's capture handlers).
+    # path (including pytest's capture handlers). Records created via
+    # logging.makeLogRecord (socket/queue receivers) bypass the factory and
+    # would fail formatting; unreachable in this codebase, documented.
     if not hasattr(logging, "_orig_factory"):
         logging._orig_factory = logging.getLogRecordFactory()
         logging.setLogRecordFactory(_record_factory)
@@ -63,9 +68,14 @@ def setup_logging() -> None:
     _configured = True
 
 
-def set_request_id(request_id: str) -> None:
-    request_id_var.set(request_id)
+def set_request_id(request_id: str) -> contextvars.Token:
+    """Set the request id; returns a token for a scope-safe reset."""
+    return request_id_var.set(request_id)
 
 
-def reset_request_id() -> None:
-    request_id_var.set("-")
+def reset_request_id(token: contextvars.Token | None = None) -> None:
+    """Reset to the previous value (token) or to the default."""
+    if token is not None:
+        request_id_var.reset(token)
+    else:
+        request_id_var.set("-")

@@ -42,13 +42,10 @@ class TestRequestId:
 class TestAccessLog:
     def test_access_line_logged_with_request_id(self, client, caplog):
         with caplog.at_level(logging.INFO, logger="feedecho.access"):
-            resp = client.get("/", headers={"X-Request-ID": "req-line"})
-        assert resp.status_code == 200
-        lines = [r.getMessage() for r in caplog.records]
-        assert any("GET / 200" in line and "req-line" in getattr(
-            r, "request_id", ""
-        ) for r, line in zip(caplog.records, lines))
-        assert any("GET / 200" in line for line in lines)
+            client.get("/", headers={"X-Request-ID": "req-line"})
+        access = [r for r in caplog.records if r.name == "feedecho.access"]
+        assert any("GET / 200" in r.getMessage() for r in access)
+        assert all(r.request_id == "req-line" for r in access)
 
     def test_healthz_logged_at_debug_only(self, client, caplog):
         access = lambda records: [  # noqa: E731
@@ -69,7 +66,35 @@ class TestAccessLog:
         assert all(r.request_id == "req-context" for r in access)
 
 
+    def test_request_id_reaches_endpoint_records(self, client, caplog):
+        """The id must survive BaseHTTPMiddleware's task boundary into the
+        handler — this pins the ContextVar propagation the feature rests on."""
+        with caplog.at_level(logging.DEBUG, logger="feedecho"):
+            resp = client.get("/healthz", headers={"X-Request-ID": "req-endpoint"})
+        assert resp.headers["X-Request-ID"] == "req-endpoint"
+        endpoint = [
+            r for r in caplog.records
+            if r.name == "feedecho" and r.getMessage() == "health check"
+        ]
+        assert endpoint, "endpoint record not captured"
+        assert all(r.request_id == "req-endpoint" for r in endpoint)
+
+
 class TestLogLevelEnv:
+    @pytest.fixture(autouse=True)
+    def restore_logging_state(self):
+        """setup_logging mutates global state (_configured, root level,
+        root handlers); restore it so later test modules see the original
+        environment."""
+        import logging_setup
+
+        root = logging.getLogger()
+        saved = (logging_setup._configured, root.level, list(root.handlers))
+        yield
+        logging_setup._configured, level, handlers = saved
+        root.setLevel(level)
+        root.handlers = handlers
+
     def test_level_respected(self, monkeypatch):
         monkeypatch.setenv("FEEDCHO_LOG_LEVEL", "DEBUG")
         logging_setup._configured = False

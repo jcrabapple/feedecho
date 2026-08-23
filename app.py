@@ -90,12 +90,26 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         raw = request.headers.get("x-request-id", "")
         request_id = raw if self._VALID_ID.fullmatch(raw) else uuid.uuid4().hex
-        logging_setup.set_request_id(request_id)
+        token = logging_setup.set_request_id(request_id)
         start = time.perf_counter()
         try:
             response = await call_next(request)
         except Exception:
-            logging_setup.reset_request_id()
+            # Log a 500 access line while the id is still attached, then
+            # reset scope-safely and re-raise (ServerErrorMiddleware logs
+            # the traceback, and its record will carry the id).
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            peer = request.client.host if request.client else "-"
+            uid = getattr(request.state, "user_id", None)
+            access_logger.error(
+                "%s %s 500 %sms peer=%s%s (unhandled exception)",
+                request.method,
+                request.url.path,
+                duration_ms,
+                peer,
+                f" user={uid}" if uid is not None else "",
+            )
+            logging_setup.reset_request_id(token)
             raise
         # Access log emitted while the request id is still attached to the
         # context, so its own record carries the id too.
@@ -118,7 +132,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             peer,
             f" user={uid}" if uid is not None else "",
         )
-        logging_setup.reset_request_id()
+        logging_setup.reset_request_id(token)
         return response
 
 
@@ -595,6 +609,7 @@ async def settings_page(request: Request):
 
 @app.get("/healthz")
 async def healthz():
+    logger.debug("health check")
     return {"status": "ok"}
 
 

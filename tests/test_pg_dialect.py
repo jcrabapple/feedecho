@@ -175,3 +175,32 @@ class TestPostgresMigration:
                 """
             ).fetchall()
         assert "user_id" in {c["column_name"] for c in columns}
+
+
+@requires_pg
+class TestAppOnPostgres:
+    """Full app request against PG — catches dialect leaks that schema-only
+    tests can't (e.g. positional row indexing that works on sqlite Row but
+    raises KeyError on psycopg dict rows)."""
+
+    def test_dashboard_renders_on_pg(self, pg_env, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import auth as auth_mod
+        import security
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan, trial_ends_at)"
+                " VALUES (9, 'pg@example.com', '', 'trial', NULL)"
+            )
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(9, "pg@example.com"))
+            resp = c.get("/")
+        assert resp.status_code == 200
+        assert "Dashboard" in resp.text

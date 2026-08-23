@@ -40,7 +40,7 @@ from email_sender import get_smtp_settings, test_smtp_connection
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("feedecho")
 
-app = FastAPI(title="FeedEcho", version="1.12.0")
+app = FastAPI(title="FeedEcho", version="1.12.1")
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -389,15 +389,15 @@ async def dashboard(request: Request):
             "echoes": len(echoes),
             "active_echoes": sum(1 for e in echoes if e["enabled"]),
             "total_posts": db.execute(
-                "SELECT COUNT(*) FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
+                "SELECT COUNT(*) AS n FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
                 " WHERE pi.status = 'success' AND e.user_id = ?",
                 (uid,),
-            ).fetchone()[0],
+            ).fetchone()["n"],
             "failed_posts": db.execute(
-                "SELECT COUNT(*) FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
+                "SELECT COUNT(*) AS n FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
                 " WHERE pi.status = 'failed' AND e.user_id = ?",
                 (uid,),
-            ).fetchone()[0],
+            ).fetchone()["n"],
         }
     return render("dashboard.html", request, feeds=feeds, echoes=echoes,
                   recent_posts=recent_posts, stats=stats)

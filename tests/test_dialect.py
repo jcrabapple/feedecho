@@ -100,6 +100,32 @@ class TestPgConnectionMissingDriver:
                 pass
 
 
+class TestMultiModeStartup:
+    def test_multi_mode_without_url_runs_on_sqlite(self, monkeypatch, tmp_path):
+        """Multi mode without a DATABASE_URL must fall back to SQLite so the
+        multi-tenant code is testable locally without a Postgres server."""
+        monkeypatch.setattr(settings, "MULTI", True)
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "multi.db")
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                ("F", "https://example.com/feed", 7),
+            )
+            row = db.execute("SELECT user_id FROM feeds").fetchone()
+        assert row["user_id"] == 7
+
+    def test_multi_mode_with_url_raises_without_psycopg(self, monkeypatch):
+        monkeypatch.setattr(settings, "MULTI", True)
+        monkeypatch.setattr(
+            settings, "DATABASE_URL", "postgresql://localhost/feedecho"
+        )
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        with pytest.raises(RuntimeError, match="feedecho\\[postgres\\]"):
+            database.init_db()
+
+
 class TestSchemaParity:
     def _tables_and_columns(self, fn):
         src = inspect.getsource(fn)

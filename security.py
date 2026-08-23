@@ -4,6 +4,10 @@ Deliberately dependency-free: scrypt (hashlib) for passwords, HMAC-signed
 stateless cookies for sessions. No argon2/itsdangerous so self-hosters
 never need extra wheels, and the same code runs identically in single
 and multi mode.
+
+Session tokens use a purpose-derived HMAC key (separate from the OAuth
+state key) and carry an ``aud`` claim, so tokens cannot be confused with
+any other signed artifact under the same secret.
 """
 
 import base64
@@ -15,14 +19,19 @@ import time
 
 import settings
 
-# scrypt cost parameters: N=2**14, r=8, p=1 (~16 MiB, tens of ms per hash).
-# Deliberately below OWASP's high-security recommendation to keep login
-# latency low on a 1-vCPU box; raise N later if needed.
-_SCRYPT_N = 2**14
+# scrypt cost parameters: N=2**17, r=8, p=1 (OWASP-recommended minimum,
+# ~128 MiB per hash). verify_password only accepts hashes made with
+# EXACTLY these parameters — attacker-supplied work factors are rejected
+# before any computation, which closes the login-DoS vector.
+_SCRYPT_N = 2**17
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+_SCRYPT_MAXMEM = 256 * 1024 * 1024
 
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+_SESSION_PURPOSE = b"feedecho-session:v1"
+_SESSION_AUD = "feedecho-session"
 
 
 def _b64(data: bytes) -> str:
@@ -42,6 +51,7 @@ def hash_password(password: str) -> str:
         n=_SCRYPT_N,
         r=_SCRYPT_R,
         p=_SCRYPT_P,
+        maxmem=_SCRYPT_MAXMEM,
     )
     return "scrypt${}${}${}${}${}".format(
         _SCRYPT_N, _SCRYPT_R, _SCRYPT_P, _b64(salt), _b64(digest)
@@ -49,10 +59,15 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Constant-time-ish verification; False on any malformed input."""
+    """Constant-time verification; False on any malformed or unknown-format
+    input. Stored work factors must match the current constants exactly —
+    anything else (forged, rotated, or corrupt) fails closed without
+    allocating attacker-chosen memory."""
     try:
         scheme, n, r, p, salt_b64, digest_b64 = stored.split("$")
         if scheme != "scrypt":
+            return False
+        if (int(n), int(r), int(p)) != (_SCRYPT_N, _SCRYPT_R, _SCRYPT_P):
             return False
         salt = _unb64(salt_b64)
         expected = _unb64(digest_b64)
@@ -62,6 +77,7 @@ def verify_password(password: str, stored: str) -> bool:
             n=int(n),
             r=int(r),
             p=int(p),
+            maxmem=_SCRYPT_MAXMEM,
         )
         return hmac.compare_digest(actual, expected)
     except (ValueError, TypeError):
@@ -69,18 +85,27 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def session_secret() -> bytes:
-    """The HMAC key for session cookies.
+    """The master HMAC key for session cookies.
 
-    Multi mode requires FEEDCHO_SESSION_SECRET explicitly. Single mode
-    falls back to FEEDCHO_AUTH_TOKEN (sessions aren't used there; the
-    value keeps oauth state signing consistent).
+    Multi mode requires FEEDCHO_SESSION_SECRET explicitly — the gate
+    fires even when FEEDCHO_AUTH_TOKEN is set, so a carried-over
+    single-mode env can never mint multi-tenant sessions. Single mode
+    falls back to FEEDCHO_AUTH_TOKEN (sessions are unused there).
     """
-    key = settings.SESSION_SECRET or (settings.AUTH_TOKEN or "")
-    if not key and settings.MULTI:
+    if settings.MULTI and not settings.SESSION_SECRET:
         raise RuntimeError(
             "FEEDCHO_SESSION_SECRET must be set when FEEDCHO_MODE=multi"
         )
+    key = settings.SESSION_SECRET or (settings.AUTH_TOKEN or "")
     return key.encode()
+
+
+def _session_key() -> bytes:
+    """Purpose-derived HMAC key so session tokens share no key material
+    with any other signed artifact (OAuth state, etc.)."""
+    return hmac.new(
+        session_secret(), _SESSION_PURPOSE, hashlib.sha256
+    ).digest()
 
 
 def sign_session(user_id: int, email: str) -> str:
@@ -88,34 +113,44 @@ def sign_session(user_id: int, email: str) -> str:
     payload = _b64(
         json.dumps(
             {
+                "aud": _SESSION_AUD,
                 "uid": user_id,
                 "email": email,
                 "exp": int(time.time()) + SESSION_TTL_SECONDS,
             }
         ).encode()
     ).rstrip("=")
-    sig = hmac.new(
-        session_secret(), payload.encode(), hashlib.sha256
-    ).hexdigest()
+    sig = hmac.new(_session_key(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def read_session(token: str) -> dict | None:
-    """Verify a signed session token; return claims or None."""
-    if not token or "." not in token:
-        return None
-    payload, sig = token.rsplit(".", 1)
-    expected = hmac.new(
-        session_secret(), payload.encode(), hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(sig, expected):
-        return None
+def read_session(token: str | bytes) -> dict | None:
+    """Verify a signed session token; return claims or None.
+
+    Returns None for EVERY malformed input — never raises: garbage
+    payloads, non-ASCII or truncated signatures, bytes tokens, wrong
+    audience, expired tokens, and coerced claim types all fail closed.
+    """
     try:
+        if not isinstance(token, str) or "." not in token:
+            return None
+        payload, sig = token.rsplit(".", 1)
+        sig_bytes = sig.encode("ascii")
+        expected = hmac.new(
+            _session_key(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig_bytes, expected.encode("ascii")):
+            return None
         data = json.loads(_unb64(payload))
         if not isinstance(data, dict):
             return None
+        if data.get("aud") != _SESSION_AUD:
+            return None
         if int(data.get("exp", 0)) < time.time():
             return None
-        return {"user_id": int(data["uid"]), "email": str(data.get("email", ""))}
-    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        uid = data.get("uid")
+        if isinstance(uid, bool) or not isinstance(uid, int):
+            return None
+        return {"user_id": uid, "email": str(data.get("email", ""))}
+    except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
         return None

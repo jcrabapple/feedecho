@@ -55,3 +55,48 @@ class TestEnvPassthrough:
         monkeypatch.setenv("FEEDCHO_AUTH_TOKEN", "sekret")
         s = _reload_settings()
         assert s.AUTH_TOKEN == "sekret"
+
+
+class TestValidateConfig:
+    def _set_multi(self, monkeypatch, **kwargs):
+        monkeypatch.setattr(settings, "MULTI", True)
+        monkeypatch.setattr(settings, "DATABASE_URL", kwargs.get("url", ""))
+        monkeypatch.setattr(
+            settings, "ALLOW_SQLITE_FALLBACK", kwargs.get("fallback", False)
+        )
+        monkeypatch.setattr(
+            settings, "SESSION_SECRET", kwargs.get("secret", "")
+        )
+
+    def test_single_mode_never_raises(self, monkeypatch):
+        monkeypatch.setattr(settings, "MULTI", False)
+        settings.validate_config()  # must not raise
+
+    def test_multi_without_url_raises(self, monkeypatch):
+        self._set_multi(monkeypatch, secret="x" * 40)
+        import pytest
+
+        with pytest.raises(RuntimeError, match="FEEDCHO_DATABASE_URL"):
+            settings.validate_config()
+
+    def test_multi_without_url_allowed_via_fallback_flag(self, monkeypatch):
+        self._set_multi(monkeypatch, fallback=True, secret="x" * 40)
+        settings.validate_config()  # must not raise
+
+    def test_multi_without_session_secret_raises(self, monkeypatch):
+        self._set_multi(monkeypatch, url="postgresql://x/x")
+        import pytest
+
+        with pytest.raises(RuntimeError, match="FEEDCHO_SESSION_SECRET"):
+            settings.validate_config()
+
+    def test_multi_with_short_session_secret_raises(self, monkeypatch):
+        self._set_multi(monkeypatch, url="postgresql://x/x", secret="short")
+        import pytest
+
+        with pytest.raises(RuntimeError, match="at least 32"):
+            settings.validate_config()
+
+    def test_multi_fully_configured_passes(self, monkeypatch):
+        self._set_multi(monkeypatch, url="postgresql://x/x", secret="s" * 32)
+        settings.validate_config()  # must not raise

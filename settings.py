@@ -23,3 +23,28 @@ CALLBACK_URL = os.environ.get(
 STATE_SECRET = os.environ.get("FEEDCHO_STATE_SECRET", "")
 BASE_URL = os.environ.get("FEEDCHO_BASE_URL", "")
 SESSION_SECRET = os.environ.get("FEEDCHO_SESSION_SECRET", "")
+ALLOW_SQLITE_FALLBACK = (
+    os.environ.get("FEEDCHO_ALLOW_SQLITE_FALLBACK", "") == "1"
+)
+
+
+def validate_config() -> None:
+    """Fail fast on misconfigured multi mode. Called from app startup.
+
+    Single mode never raises — it keeps the original permissive behavior.
+    """
+    if not MULTI:
+        return
+    if not DATABASE_URL and not ALLOW_SQLITE_FALLBACK:
+        raise RuntimeError(
+            "FEEDCHO_DATABASE_URL must be set when FEEDCHO_MODE=multi "
+            "(or set FEEDCHO_ALLOW_SQLITE_FALLBACK=1 for local development)"
+        )
+    if not SESSION_SECRET:
+        raise RuntimeError(
+            "FEEDCHO_SESSION_SECRET must be set when FEEDCHO_MODE=multi"
+        )
+    if len(SESSION_SECRET) < 32:
+        raise RuntimeError(
+            "FEEDCHO_SESSION_SECRET must be at least 32 characters in multi mode"
+        )

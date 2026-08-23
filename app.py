@@ -56,6 +56,7 @@ OAUTH_SESSION_MAX_AGE = 10 * 60
 #   - X-Auth-Token: <token>           (for API/programmatic access)
 # If the env var is unset, auth is disabled (original behavior).
 # (Single-tenant mode only; multi mode replaces this with sessions.)
+import settings
 from settings import AUTH_TOKEN as _AUTH_TOKEN
 
 # Paths exempt from auth: health check + static files + OAuth callback.
@@ -153,6 +154,7 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.validate_config()
     init_db()
     _revalidate_stored_templates()
     start_scheduler()

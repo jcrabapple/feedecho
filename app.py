@@ -7,6 +7,8 @@ feeds, accounts, echoes, settings, and viewing post history.
 import os
 import re
 import logging
+import time
+import uuid
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timezone
@@ -37,8 +39,11 @@ from scheduler import start_scheduler, stop_scheduler, check_feed
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
+import logging_setup
+
+logging_setup.setup_logging()
 logger = logging.getLogger("feedecho")
+access_logger = logging.getLogger("feedecho.access")
 
 app = FastAPI(title="FeedEcho", version="1.12.1")
 
@@ -68,6 +73,53 @@ from settings import AUTH_TOKEN  # noqa: F401  (re-exported for tests/legacy)
 # users cannot trigger outbound requests to arbitrary instance URLs.
 _AUTH_EXEMPT_PATHS = {"/healthz", "/favicon.svg", "/static", "/oauth/callback"}
 _AUTH_EXEMPT_PREFIXES = ("/static",)
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Request-id threading + structured access log.
+
+    Outermost middleware: accepts a client X-Request-ID (validated against
+    a conservative charset + length cap; anything else is replaced with a
+    generated uuid) and attaches it to every log record emitted while the
+    request is handled, to the response header, and to one access-log line
+    per request.
+    """
+
+    _VALID_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+    async def dispatch(self, request: Request, call_next):
+        raw = request.headers.get("x-request-id", "")
+        request_id = raw if self._VALID_ID.fullmatch(raw) else uuid.uuid4().hex
+        logging_setup.set_request_id(request_id)
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            logging_setup.reset_request_id()
+            raise
+        # Access log emitted while the request id is still attached to the
+        # context, so its own record carries the id too.
+        response.headers["X-Request-ID"] = request_id
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        peer = request.client.host if request.client else "-"
+        uid = getattr(request.state, "user_id", None)
+        path = request.url.path
+        log = (
+            access_logger.debug
+            if path == "/healthz"
+            else access_logger.info
+        )
+        log(
+            "%s %s %s %sms peer=%s%s",
+            request.method,
+            path,
+            response.status_code,
+            duration_ms,
+            peer,
+            f" user={uid}" if uid is not None else "",
+        )
+        logging_setup.reset_request_id()
+        return response
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -188,6 +240,8 @@ async def logout():
 
 
 app.add_middleware(AuthMiddleware)
+# Outermost: request-id threading + access logging wraps auth.
+app.add_middleware(RequestIdMiddleware)
 
 
 def _trial_context(request: Request) -> dict:

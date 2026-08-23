@@ -18,7 +18,7 @@ jobs:
       - name: Run single-mode suite
         env:
           FEEDCHO_MODE: ""
-        run: pytest -m "not pg"
+        run: pytest -m "not pg and not multi"
 
   multi:
     name: Multi mode (sqlite)

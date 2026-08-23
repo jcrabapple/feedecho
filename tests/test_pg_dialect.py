@@ -19,9 +19,6 @@ pytestmark = pytest.mark.pg
 requires_pg = pytest.mark.skipif(
     not TEST_PG_URL, reason="FEEDCHO_TEST_PG_URL not set; PG tests are CI-gated"
 )
-requires_psycopg = pytest.mark.skipif(
-    not TEST_PG_URL, reason="psycopg only installed in the PG CI job"
-)
 
 
 @pytest.fixture
@@ -30,6 +27,20 @@ def pg_env(monkeypatch):
     monkeypatch.setattr(settings, "DATABASE_URL", TEST_PG_URL)
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", False)
     return settings
+
+
+@pytest.fixture(autouse=True)
+def fresh_schema(pg_env):
+    """Reset the public schema before each test.
+
+    The CI job runs against a disposable service container, but this
+    makes local re-runs against a persistent Postgres safe too: fixed
+    entity ids in tests cannot collide with rows from a previous run.
+    """
+    with database.get_db() as db:
+        db.execute("DROP SCHEMA public CASCADE")
+        db.execute("CREATE SCHEMA public")
+        db.execute("GRANT ALL ON SCHEMA public TO public")
 
 
 @requires_pg
@@ -67,6 +78,9 @@ class TestPostgresInit:
     def test_settings_composite_pk(self, pg_env):
         database.init_db()
         with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (1, 'u1@example.com', '')"
+            )
             db.execute(
                 "INSERT INTO users (id, email, password_hash) VALUES (2, 'u2@example.com', '')"
             )

@@ -12,6 +12,8 @@ services:
     image: postgres:17-alpine
     container_name: feedecho-postgres
     restart: unless-stopped
+    networks:
+      - feedecho_net
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-feedecho}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -26,13 +28,17 @@ services:
       start_period: 10s
 
   feedecho:
-    image: ghcr.io/jcrabapple/feedecho:latest
+    # Pinned to the release tag: `latest` would silently pull unreviewed
+    # builds into production on every compose up.
+    image: ghcr.io/jcrabapple/feedecho:1.12.0
     pull_policy: always
     container_name: feedecho
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - feedecho_net
     env_file:
       - .env
     environment:
@@ -40,9 +46,9 @@ services:
       - FEEDCHO_DATABASE_URL=postgresql://${POSTGRES_USER:-feedecho}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-feedecho}
       # Caddy terminates TLS; the app itself sees http. Secure cookies are
       # forced and client IPs are taken from X-Forwarded-For as set by
-      # Caddy, which lives on the docker bridge network.
+      # Caddy, which lives on the dedicated compose network below.
       - FEEDCHO_FORCE_SECURE_COOKIE=${FEEDCHO_FORCE_SECURE_COOKIE:-1}
-      - FEEDCHO_TRUSTED_PROXIES=${FEEDCHO_TRUSTED_PROXIES:-172.16.0.0/12}
+      - FEEDCHO_TRUSTED_PROXIES=${FEEDCHO_TRUSTED_PROXIES:-172.28.0.0/16}
     healthcheck:
       test:
         - CMD
@@ -61,6 +67,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    # The Caddyfile's {$ACME_EMAIL} / {$FEEDECHO_DOMAIN} placeholders are
+    # evaluated from the caddy container's own environment.
+    env_file:
+      - .env
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -68,8 +78,16 @@ services:
     depends_on:
       feedecho:
         condition: service_healthy
+    networks:
+      - feedecho_net
 
 volumes:
   pgdata:
   caddy_data:
   caddy_config:
+
+networks:
+  feedecho_net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

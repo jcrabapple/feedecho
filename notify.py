@@ -37,9 +37,12 @@ def _now_str() -> str:
     return _now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def get_setting_int(key: str, default: int) -> int:
+def get_setting_int(key: str, default: int, user_id: int = 1) -> int:
     with get_db() as db:
-        row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        row = db.execute(
+            "SELECT value FROM settings WHERE key = ? AND user_id = ?",
+            (key, user_id),
+        ).fetchone()
     if not row or row["value"] in (None, ""):
         return default
     try:

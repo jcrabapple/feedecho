@@ -19,6 +19,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from database import get_db, init_db
 import auth
+from auth import current_user_id
 import security
 from feed_parser import fetch_feed, SSRFError, validate_outbound_url
 from mastodon import test_connection, post_status, verify_credentials
@@ -224,7 +225,7 @@ app.router.lifespan_context = lifespan
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_smtp_settings(mask_password: bool = False):
+def _get_smtp_settings(mask_password: bool = False, user_id: int = 1):
     """Load SMTP settings as a flat dict for templates.
 
     If mask_password is True, replaces the SMTP password with a placeholder
@@ -232,35 +233,43 @@ def _get_smtp_settings(mask_password: bool = False):
     """
     with get_db() as db:
         rows = db.execute(
-            "SELECT key, value FROM settings WHERE key LIKE 'smtp_%'"
+            "SELECT key, value FROM settings WHERE key LIKE 'smtp_%' AND user_id = ?",
+            (user_id,),
         ).fetchall()
     if not rows:
         return {}
-    settings = {row["key"]: row["value"] for row in rows}
-    if mask_password and settings.get("smtp_password"):
-        settings["smtp_password"] = "********"
-    return settings
+    smtp = {row["key"]: row["value"] for row in rows}
+    if mask_password and smtp.get("smtp_password"):
+        smtp["smtp_password"] = "********"
+    return smtp
 
 
-def _get_all_accounts():
-    """Fetch Mastodon, email, and Bluesky accounts."""
+def _get_all_accounts(user_id: int = 1):
+    """Fetch Mastodon, email, and Bluesky accounts for one user."""
     with get_db() as db:
         mastodon = db.execute(
-            "SELECT id, name, username, instance, created_at FROM accounts ORDER BY name"
+            "SELECT id, name, username, instance, created_at FROM accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
         ).fetchall()
         email = db.execute(
-            "SELECT id, name, email, created_at FROM email_accounts ORDER BY name"
+            "SELECT id, name, email, created_at FROM email_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
         ).fetchall()
         bluesky = db.execute(
-            "SELECT id, name, handle, did, pds, created_at FROM bluesky_accounts ORDER BY handle"
+            "SELECT id, name, handle, did, pds, created_at FROM bluesky_accounts"
+            " WHERE user_id = ? ORDER BY handle",
+            (user_id,),
         ).fetchall()
     return mastodon, email, bluesky
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
     """Render the accounts page with an error banner."""
-    mastodon_accounts, email_accounts, bluesky_accounts = _get_all_accounts()
-    smtp_settings = _get_smtp_settings(mask_password=True)
+    uid = current_user_id(request)
+    mastodon_accounts, email_accounts, bluesky_accounts = _get_all_accounts(uid)
+    smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     return render(
         "accounts.html",
         request,
@@ -277,18 +286,20 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    uid = current_user_id(request)
     with get_db() as db:
         mastodon_accounts = db.execute(
-            "SELECT COUNT(*) as c FROM accounts"
+            "SELECT COUNT(*) as c FROM accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
         email_accounts = db.execute(
-            "SELECT COUNT(*) as c FROM email_accounts"
+            "SELECT COUNT(*) as c FROM email_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
         bluesky_accounts = db.execute(
-            "SELECT COUNT(*) as c FROM bluesky_accounts"
+            "SELECT COUNT(*) as c FROM bluesky_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
         feeds = db.execute(
-            "SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY name"
+            "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+            (uid,),
         ).fetchall()
         echoes = db.execute("""
             SELECT e.*, f.name as feed_name,
@@ -302,9 +313,9 @@ async def dashboard(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
-            WHERE e.deleted_at IS NULL
+            WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
-        """).fetchall()
+        """, (uid,)).fetchall()
         recent_posts = db.execute("""
             SELECT pi.*, f.name as feed_name,
                    CASE
@@ -323,16 +334,25 @@ async def dashboard(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
-        """).fetchall()
+        """, (uid,)).fetchall()
         stats = {
             "accounts": mastodon_accounts + email_accounts + bluesky_accounts,
             "feeds": len(feeds),
             "echoes": len(echoes),
             "active_echoes": sum(1 for e in echoes if e["enabled"]),
-            "total_posts": db.execute("SELECT COUNT(*) FROM posted_items WHERE status = 'success'").fetchone()[0],
-            "failed_posts": db.execute("SELECT COUNT(*) FROM posted_items WHERE status = 'failed'").fetchone()[0],
+            "total_posts": db.execute(
+                "SELECT COUNT(*) FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
+                " WHERE pi.status = 'success' AND e.user_id = ?",
+                (uid,),
+            ).fetchone()[0],
+            "failed_posts": db.execute(
+                "SELECT COUNT(*) FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
+                " WHERE pi.status = 'failed' AND e.user_id = ?",
+                (uid,),
+            ).fetchone()[0],
         }
     return render("dashboard.html", request, feeds=feeds, echoes=echoes,
                   recent_posts=recent_posts, stats=stats)
@@ -340,22 +360,26 @@ async def dashboard(request: Request):
 
 @app.get("/feeds", response_class=HTMLResponse)
 async def feeds_page(request: Request):
+    uid = current_user_id(request)
     with get_db() as db:
         feeds = db.execute(
-            "SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY name"
+            "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+            (uid,),
         ).fetchall()
         feed_echoes = {}
         for f in feeds:
             feed_echoes[f["id"]] = db.execute(
-                "SELECT COUNT(*) as c FROM echoes WHERE feed_id = ? AND deleted_at IS NULL", (f["id"],)
+                "SELECT COUNT(*) as c FROM echoes WHERE feed_id = ? AND deleted_at IS NULL AND user_id = ?",
+                (f["id"], uid),
             ).fetchone()["c"]
     return render("feeds.html", request, feeds=feeds, feed_echoes=feed_echoes)
 
 
 @app.get("/accounts", response_class=HTMLResponse)
 async def accounts_page(request: Request):
-    mastodon_accounts, email_accounts, bluesky_accounts = _get_all_accounts()
-    smtp_settings = _get_smtp_settings(mask_password=True)
+    uid = current_user_id(request)
+    mastodon_accounts, email_accounts, bluesky_accounts = _get_all_accounts(uid)
+    smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
     return render("accounts.html", request,
                   mastodon_accounts=mastodon_accounts,
@@ -367,6 +391,7 @@ async def accounts_page(request: Request):
 
 @app.get("/echoes", response_class=HTMLResponse)
 async def echoes_page(request: Request):
+    uid = current_user_id(request)
     with get_db() as db:
         echoes = db.execute("""
             SELECT e.*, f.name as feed_name,
@@ -380,20 +405,24 @@ async def echoes_page(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
-            WHERE e.deleted_at IS NULL
+            WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
-        """).fetchall()
+        """, (uid,)).fetchall()
         feeds = db.execute(
-            "SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY name"
+            "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+            (uid,),
         ).fetchall()
         mastodon_accounts = db.execute(
-            "SELECT id, name, username, instance FROM accounts ORDER BY name"
+            "SELECT id, name, username, instance FROM accounts WHERE user_id = ? ORDER BY name",
+            (uid,),
         ).fetchall()
         email_accounts = db.execute(
-            "SELECT id, name, email FROM email_accounts ORDER BY name"
+            "SELECT id, name, email FROM email_accounts WHERE user_id = ? ORDER BY name",
+            (uid,),
         ).fetchall()
         bluesky_accounts = db.execute(
-            "SELECT id, name, handle FROM bluesky_accounts ORDER BY handle"
+            "SELECT id, name, handle FROM bluesky_accounts WHERE user_id = ? ORDER BY handle",
+            (uid,),
         ).fetchall()
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
@@ -404,6 +433,7 @@ async def echoes_page(request: Request):
 
 @app.get("/history", response_class=HTMLResponse)
 async def history_page(request: Request):
+    uid = current_user_id(request)
     with get_db() as db:
         posts = db.execute("""
             SELECT pi.*, f.name as feed_name,
@@ -423,26 +453,32 @@ async def history_page(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 100
-        """).fetchall()
+        """, (uid,)).fetchall()
     return render("history.html", request, posts=posts)
 
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
-    smtp_settings = _get_smtp_settings(mask_password=True)
+    uid = current_user_id(request)
+    smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
     with get_db() as db:
         rows = db.execute(
             """SELECT key, value FROM settings
                WHERE key IN ('retry_max_attempts', 'retry_backoff_minutes',
-                             'notify_failure_threshold', 'notify_email')"""
+                             'notify_failure_threshold', 'notify_email')
+                 AND user_id = ?""",
+            (uid,),
         ).fetchall()
         alt_rows = db.execute(
             """SELECT key, value FROM settings
                WHERE key IN ('alt_text_ai_enabled', 'alt_text_ai_base_url',
-                             'alt_text_ai_model', 'alt_text_ai_api_key')"""
+                             'alt_text_ai_model', 'alt_text_ai_api_key')
+                 AND user_id = ?""",
+            (uid,),
         ).fetchall()
     retry_notify = {r["key"]: r["value"] for r in rows}
     alt_text_settings = {r["key"]: r["value"] for r in alt_rows}
@@ -467,24 +503,31 @@ async def healthz():
 
 @app.post("/api/accounts")
 async def add_account(
+    request: Request,
     name: str = Form(...),
     username: str = Form(""),
     instance: str = Form(...),
     access_token: str = Form(...),
 ):
+    uid = current_user_id(request)
     instance = validate_url(instance)
     with get_db() as db:
         db.execute(
-            "INSERT INTO accounts (name, username, instance, access_token) VALUES (?, ?, ?, ?)",
-            (name, username or name, instance, access_token),
+            "INSERT INTO accounts (name, username, instance, access_token, user_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (name, username or name, instance, access_token, uid),
         )
     return RedirectResponse(url="/accounts", status_code=303)
 
 
 @app.post("/api/accounts/{account_id}/test")
-async def test_account(account_id: int):
+async def test_account(request: Request, account_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
-        account = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        account = db.execute(
+            "SELECT * FROM accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     success, message = test_connection(account["instance"], account["access_token"])
@@ -492,9 +535,12 @@ async def test_account(account_id: int):
 
 
 @app.post("/api/accounts/{account_id}/delete")
-async def delete_account(account_id: int):
+async def delete_account(request: Request, account_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
-        db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        db.execute(
+            "DELETE FROM accounts WHERE id = ? AND user_id = ?", (account_id, uid)
+        )
     return RedirectResponse(url="/accounts", status_code=303)
 
 
@@ -502,21 +548,28 @@ async def delete_account(account_id: int):
 
 @app.post("/api/email-accounts")
 async def add_email_account(
+    request: Request,
     name: str = Form(...),
     email: str = Form(...),
 ):
+    uid = current_user_id(request)
     with get_db() as db:
         db.execute(
-            "INSERT OR REPLACE INTO email_accounts (name, email) VALUES (?, ?)",
-            (name, email),
+            "INSERT INTO email_accounts (name, email, user_id) VALUES (?, ?, ?)"
+            " ON CONFLICT(user_id, email) DO UPDATE SET name = excluded.name",
+            (name, email, uid),
         )
     return RedirectResponse(url="/accounts?status=email_added", status_code=303)
 
 
 @app.post("/api/email-accounts/{account_id}/delete")
-async def delete_email_account(account_id: int):
+async def delete_email_account(request: Request, account_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
-        db.execute("DELETE FROM email_accounts WHERE id = ?", (account_id,))
+        db.execute(
+            "DELETE FROM email_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
     return RedirectResponse(url="/accounts", status_code=303)
 
 
@@ -558,13 +611,14 @@ def add_bluesky_account(
         )
 
     with get_db() as db:
+        uid = current_user_id(request)
         db.execute(
             """
             INSERT INTO bluesky_accounts (
                 name, handle, app_password, did, pds,
                 access_jwt, refresh_jwt, session_expires_at, user_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, handle) DO UPDATE SET
                 name = excluded.name,
                 app_password = excluded.app_password,
@@ -583,16 +637,19 @@ def add_bluesky_account(
                 session["access_jwt"],
                 session["refresh_jwt"],
                 bluesky_session_expiry(session["access_jwt"]),
+                uid,
             ),
         )
     return RedirectResponse(url="/accounts?status=bluesky_connected", status_code=303)
 
 
 @app.post("/api/bluesky-accounts/{account_id}/test")
-def test_bluesky_account(account_id: int):
+def test_bluesky_account(request: Request, account_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
         account = db.execute(
-            "SELECT * FROM bluesky_accounts WHERE id = ?", (account_id,)
+            "SELECT * FROM bluesky_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
         ).fetchone()
     if not account:
         raise HTTPException(status_code=404, detail="Bluesky account not found")
@@ -604,6 +661,7 @@ def test_bluesky_account(account_id: int):
 
 @app.post("/api/bluesky-accounts/{account_id}/delete")
 def delete_bluesky_account(request: Request, account_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
         dependent = db.execute(
             """
@@ -611,8 +669,9 @@ def delete_bluesky_account(request: Request, account_id: int):
              WHERE destination_type = 'bluesky'
                AND destination_id = ?
                AND deleted_at IS NULL
+               AND user_id = ?
             """,
-            (account_id,),
+            (account_id, uid),
         ).fetchone()["c"]
     if dependent:
         return _render_accounts_error(
@@ -620,7 +679,10 @@ def delete_bluesky_account(request: Request, account_id: int):
             "This Bluesky account is used by echoes. Delete or reassign those echoes first.",
         )
     with get_db() as db:
-        db.execute("DELETE FROM bluesky_accounts WHERE id = ?", (account_id,))
+        db.execute(
+            "DELETE FROM bluesky_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
     return RedirectResponse(url="/accounts?status=bluesky_deleted", status_code=303)
 
 
@@ -628,6 +690,7 @@ def delete_bluesky_account(request: Request, account_id: int):
 
 @app.post("/api/settings/smtp")
 async def save_smtp_settings(
+    request: Request,
     smtp_host: str = Form(...),
     smtp_port: int = Form(587),
     smtp_username: str = Form(""),
@@ -636,7 +699,8 @@ async def save_smtp_settings(
     smtp_from_name: str = Form("FeedEcho"),
     smtp_use_tls: str = Form("1"),
 ):
-    settings = {
+    uid = current_user_id(request)
+    values = {
         "smtp_host": smtp_host,
         "smtp_port": str(smtp_port),
         "smtp_username": smtp_username,
@@ -645,16 +709,18 @@ async def save_smtp_settings(
         "smtp_use_tls": smtp_use_tls,
     }
     with get_db() as db:
-        for key, value in settings.items():
+        for key, value in values.items():
             db.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, value),
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
+                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+                (uid, key, value),
             )
         # Only update password if it's not the mask placeholder
         if smtp_password and smtp_password != "********":
             db.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                ("smtp_password", smtp_password),
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
+                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+                (uid, "smtp_password", smtp_password),
             )
     return RedirectResponse(url="/settings?status=saved", status_code=303)
 
@@ -669,11 +735,13 @@ async def test_smtp(
 
 @app.post("/api/settings/retry-notify")
 async def save_retry_notify_settings(
+    request: Request,
     retry_max_attempts: int = Form(5),
     retry_backoff_minutes: int = Form(5),
     notify_failure_threshold: int = Form(3),
     notify_email: str = Form(""),
 ):
+    uid = current_user_id(request)
     values = {
         "retry_max_attempts": str(max(0, min(retry_max_attempts, 100))),
         "retry_backoff_minutes": str(max(1, min(retry_backoff_minutes, 1440))),
@@ -683,19 +751,22 @@ async def save_retry_notify_settings(
     with get_db() as db:
         for key, value in values.items():
             db.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, value),
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
+                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+                (uid, key, value),
             )
     return RedirectResponse(url="/settings?status=saved", status_code=303)
 
 
 @app.post("/api/settings/alt-text")
 async def save_alt_text_settings(
+    request: Request,
     alt_text_ai_enabled: str = Form(""),
     alt_text_ai_base_url: str = Form(""),
     alt_text_ai_model: str = Form(""),
     alt_text_ai_api_key: str = Form(""),
 ):
+    uid = current_user_id(request)
     values = {
         "alt_text_ai_enabled": "1" if alt_text_ai_enabled else "0",
         "alt_text_ai_base_url": alt_text_ai_base_url.strip().rstrip("/"),
@@ -704,14 +775,16 @@ async def save_alt_text_settings(
     with get_db() as db:
         for key, value in values.items():
             db.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, value),
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
+                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+                (uid, key, value),
             )
         # Only update API key if it's not the mask placeholder
         if alt_text_ai_api_key and alt_text_ai_api_key != "********":
             db.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                ("alt_text_ai_api_key", alt_text_ai_api_key.strip()),
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
+                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+                (uid, "alt_text_ai_api_key", alt_text_ai_api_key.strip()),
             )
     return RedirectResponse(url="/settings?status=saved", status_code=303)
 
@@ -740,22 +813,24 @@ async def test_alt_text():
 
 @app.post("/api/feeds")
 async def add_feed(
+    request: Request,
     name: str = Form(...),
     url: str = Form(...),
     poll_interval: int = Form(15),
 ):
+    uid = current_user_id(request)
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     with get_db() as db:
         db.execute(
-            "INSERT INTO feeds (name, url, poll_interval) VALUES (?, ?, ?)",
-            (name, url, poll_interval),
+            "INSERT INTO feeds (name, url, poll_interval, user_id) VALUES (?, ?, ?, ?)",
+            (name, url, poll_interval, uid),
         )
     return RedirectResponse(url="/feeds", status_code=303)
 
 
 @app.post("/api/feeds/{feed_id}/delete")
-async def delete_feed(feed_id: int):
+async def delete_feed(request: Request, feed_id: int):
     """Soft-delete a feed. Echoes and post history are preserved.
 
     A hard DELETE would cascade (echoes -> posted_items/digest_items) and wipe
@@ -763,6 +838,7 @@ async def delete_feed(feed_id: int):
     disappears from listings and is skipped by the scheduler, but its echo
     config and history remain on the /echoes and /history pages.
     """
+    uid = current_user_id(request)
     with get_db() as db:
         db.execute(
             """
@@ -770,18 +846,21 @@ async def delete_feed(feed_id: int):
                SET deleted_at = datetime('now')
              WHERE id = ?
                AND deleted_at IS NULL
+               AND user_id = ?
             """,
-            (feed_id,),
+            (feed_id, uid),
         )
     return RedirectResponse(url="/feeds", status_code=303)
 
 
 @app.post("/api/feeds/{feed_id}/test")
-async def test_feed(feed_id: int):
+async def test_feed(request: Request, feed_id: int):
     """Fetch a feed and return preview of items."""
+    uid = current_user_id(request)
     with get_db() as db:
         feed = db.execute(
-            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
         ).fetchone()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
@@ -801,11 +880,13 @@ async def test_feed(feed_id: int):
 
 
 @app.post("/api/feeds/{feed_id}/init")
-async def init_feed(feed_id: int):
+async def init_feed(request: Request, feed_id: int):
     """Initialize a feed's last_item_id so it only posts new items going forward."""
+    uid = current_user_id(request)
     with get_db() as db:
         feed = db.execute(
-            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
@@ -813,7 +894,10 @@ async def init_feed(feed_id: int):
             feed_data = fetch_feed(feed["url"])
             if feed_data["items"]:
                 last_id = feed_data["items"][0]["id"]
-                db.execute("UPDATE feeds SET last_item_id = ? WHERE id = ?", (last_id, feed_id))
+                db.execute(
+                    "UPDATE feeds SET last_item_id = ? WHERE id = ? AND user_id = ?",
+                    (last_id, feed_id, uid),
+                )
                 return {"success": True, "message": f"Initialized. Last item: {feed_data['items'][0]['title'][:60]}"}
             return {"success": True, "message": "Feed has no items"}
         except SSRFError as e:
@@ -823,21 +907,34 @@ async def init_feed(feed_id: int):
 
 
 @app.post("/api/feeds/{feed_id}/pause")
-async def pause_feed(feed_id: int):
+async def pause_feed(request: Request, feed_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
         feed = db.execute(
-            "SELECT paused FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+            "SELECT paused FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
         new_val = 0 if feed["paused"] else 1
-        db.execute("UPDATE feeds SET paused = ? WHERE id = ?", (new_val, feed_id))
+        db.execute(
+            "UPDATE feeds SET paused = ? WHERE id = ? AND user_id = ?",
+            (new_val, feed_id, uid),
+        )
     return {"success": True, "paused": bool(new_val)}
 
 
 @app.post("/api/feeds/{feed_id}/fetch")
-async def fetch_now(feed_id: int):
+async def fetch_now(request: Request, feed_id: int):
     """Trigger an immediate feed check."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT id FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        ).fetchone()
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
     try:
         check_feed(feed_id)
         return {"success": True, "message": "Feed checked"}
@@ -848,9 +945,10 @@ async def fetch_now(feed_id: int):
 
 
 @app.post("/api/history/{posted_id}/retry")
-async def retry_post(posted_id: int):
+async def retry_post(request: Request, posted_id: int):
     """Force a failed or gave_up row back to retryable: clears backoff and
     resets the attempt counter so the next feed check reprocesses it."""
+    uid = current_user_id(request)
     with get_db() as db:
         result = db.execute(
             """UPDATE posted_items
@@ -858,8 +956,9 @@ async def retry_post(posted_id: int):
                       next_retry_at = NULL,
                       error_message = NULL
                 WHERE id = ?
-                  AND status IN ('failed', 'gave_up')""",
-            (posted_id,),
+                  AND status IN ('failed', 'gave_up')
+                  AND echo_id IN (SELECT id FROM echoes WHERE user_id = ?)""",
+            (posted_id, uid),
         )
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="No failed post with that id")
@@ -867,16 +966,18 @@ async def retry_post(posted_id: int):
 
 
 @app.post("/api/history/{posted_id}/give-up")
-async def give_up_post(posted_id: int):
+async def give_up_post(request: Request, posted_id: int):
     """Mark a failed row terminal so the feed cursor can advance past it."""
+    uid = current_user_id(request)
     with get_db() as db:
         result = db.execute(
             """UPDATE posted_items
                   SET status = 'gave_up',
                       next_retry_at = NULL
                 WHERE id = ?
-                  AND status = 'failed'""",
-            (posted_id,),
+                  AND status = 'failed'
+                  AND echo_id IN (SELECT id FROM echoes WHERE user_id = ?)""",
+            (posted_id, uid),
         )
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="No failed post with that id")
@@ -927,6 +1028,7 @@ def _validate_echo_template(template: str) -> None:
 
 @app.post("/api/echoes")
 async def add_echo(
+    request: Request,
     feed_id: int = Form(...),
     destination_type: str = Form("mastodon"),
     account_id: int = Form(None),
@@ -942,6 +1044,7 @@ async def add_echo(
     drip_limit: int = Form(0),
     enabled: str = Form(""),
 ):
+    uid = current_user_id(request)
     if destination_type not in VALID_DEST_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid destination type")
     if visibility not in VALID_VISIBILITY:
@@ -975,33 +1078,58 @@ async def add_echo(
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
     with get_db() as db:
+        # Ownership: the feed and the destination must belong to this user.
+        feed = db.execute(
+            "SELECT id FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+            (feed_id, uid),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        dest_table = {
+            "mastodon": "accounts",
+            "email": "email_accounts",
+            "bluesky": "bluesky_accounts",
+        }[destination_type]
+        dest = db.execute(
+            f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
+            (destination_id, uid),
+        ).fetchone()
+        if not dest:
+            raise HTTPException(status_code=404, detail="Destination not found")
+
         db.execute(
             """INSERT INTO echoes (feed_id, destination_type, destination_id, template, visibility,
                                    filter_keywords, filter_mode, content_warning, attach_image,
-                                   delivery_mode, drip_limit, enabled)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   delivery_mode, drip_limit, enabled, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             delivery_mode, drip_limit, is_enabled),
+             delivery_mode, drip_limit, is_enabled, uid),
         )
     return RedirectResponse(url="/echoes", status_code=303)
 
 
 @app.post("/api/echoes/{echo_id}/toggle")
-async def toggle_echo(echo_id: int):
+async def toggle_echo(request: Request, echo_id: int):
+    uid = current_user_id(request)
     with get_db() as db:
         echo = db.execute(
-            "SELECT enabled FROM echoes WHERE id = ? AND deleted_at IS NULL", (echo_id,)
+            "SELECT enabled FROM echoes WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (echo_id, uid),
         ).fetchone()
         if not echo:
             raise HTTPException(status_code=404, detail="Echo not found")
         new_val = 0 if echo["enabled"] else 1
-        db.execute("UPDATE echoes SET enabled = ? WHERE id = ?", (new_val, echo_id))
+        db.execute(
+            "UPDATE echoes SET enabled = ? WHERE id = ? AND user_id = ?",
+            (new_val, echo_id, uid),
+        )
     return {"success": True, "enabled": bool(new_val)}
 
 
 @app.post("/api/echoes/{echo_id}/edit")
 async def edit_echo(
+    request: Request,
     echo_id: int,
     feed_id: int = Form(...),
     destination_type: str = Form("mastodon"),
@@ -1048,33 +1176,54 @@ async def edit_echo(
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
+    uid = current_user_id(request)
     with get_db() as db:
         echo = db.execute(
-            "SELECT * FROM echoes WHERE id = ? AND deleted_at IS NULL", (echo_id,)
+            "SELECT * FROM echoes WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (echo_id, uid),
         ).fetchone()
         if not echo:
             raise HTTPException(status_code=404, detail="Echo not found")
+        # Ownership: the new feed and destination must belong to this user.
+        feed = db.execute(
+            "SELECT id FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+            (feed_id, uid),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        dest_table = {
+            "mastodon": "accounts",
+            "email": "email_accounts",
+            "bluesky": "bluesky_accounts",
+        }[destination_type]
+        dest = db.execute(
+            f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
+            (destination_id, uid),
+        ).fetchone()
+        if not dest:
+            raise HTTPException(status_code=404, detail="Destination not found")
         db.execute(
             """UPDATE echoes SET feed_id = ?, destination_type = ?, destination_id = ?,
                template = ?, visibility = ?, filter_keywords = ?, filter_mode = ?,
                content_warning = ?, attach_image = ?, delivery_mode = ?, drip_limit = ?,
                enabled = ?
-               WHERE id = ?""",
+               WHERE id = ? AND user_id = ?""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             delivery_mode, drip_limit, is_enabled, echo_id),
+             delivery_mode, drip_limit, is_enabled, echo_id, uid),
         )
     return RedirectResponse(url="/echoes", status_code=303)
 
 
 @app.post("/api/echoes/{echo_id}/delete")
-async def delete_echo(echo_id: int):
+async def delete_echo(request: Request, echo_id: int):
     """Soft-delete an echo so its posted-item history survives.
 
     A hard DELETE cascades to posted_items/digest_items and erases the
     cross-post audit trail. Marking deleted_at and disabling the echo removes
     it from listings and stops delivery while keeping its history intact.
     """
+    uid = current_user_id(request)
     with get_db() as db:
         db.execute(
             """
@@ -1083,8 +1232,9 @@ async def delete_echo(echo_id: int):
                    enabled = 0
              WHERE id = ?
                AND deleted_at IS NULL
+               AND user_id = ?
             """,
-            (echo_id,),
+            (echo_id, uid),
         )
     return RedirectResponse(url="/echoes", status_code=303)
 
@@ -1093,6 +1243,7 @@ async def delete_echo(echo_id: int):
 
 @app.post("/api/preview")
 def preview_template(
+    request: Request,
     template: str = Form(...),
     feed_id: int = Form(...),
 ):
@@ -1110,9 +1261,11 @@ def preview_template(
             status_code=400,
         )
 
+    uid = current_user_id(request)
     with get_db() as db:
         feed = db.execute(
-            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL", (feed_id,)
+            "SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
         ).fetchone()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")

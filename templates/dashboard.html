@@ -5,8 +5,10 @@
 
 {% if MULTI and plan == 'trial' %}
 <div class="trial-banner">
-    {% if trial_ends_date %}
-    <strong>Trial:</strong> your {{ trial_days_left }}-day-left free trial ends {{ trial_ends_date }}. Paid plans launch soon.
+    {% if trial_expired %}
+    <strong>Trial ended:</strong> your free trial has ended. Paid plans launch soon.
+    {% elif trial_ends_date %}
+    <strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends {{ trial_ends_date }}. Paid plans launch soon.
     {% else %}
     <strong>Trial:</strong> your free trial is active. Paid plans launch soon.
     {% endif %}

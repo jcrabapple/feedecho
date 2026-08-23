@@ -1557,7 +1557,13 @@ def check_all_feeds() -> None:
             # Malformed timestamp: treat as due rather than skipping forever
             due.append(feed)
             continue
-        interval = max(1, int(feed["poll_interval"] or 15))
+        # poll_interval is clamped to >=1 at creation; a malformed or NULL
+        # value can only come from direct DB writes, so degrade to the
+        # default instead of crashing the whole run or hot-looping the feed.
+        try:
+            interval = max(1, int(feed["poll_interval"] or 15))
+        except (ValueError, TypeError):
+            interval = 15
         if last <= now - timedelta(minutes=interval):
             due.append(feed)
 

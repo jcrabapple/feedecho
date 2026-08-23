@@ -894,7 +894,7 @@ class TestBlueskyAccountRoutes:
     def client(self, db_tmp, monkeypatch):
         import app as app_module
 
-        monkeypatch.setattr(app_module, "_AUTH_TOKEN", None)
+        monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
         monkeypatch.setattr(app_module, "bluesky_session_expiry", lambda jwt: "2099-01-01 00:00:00")
 
         from fastapi.testclient import TestClient
@@ -1070,7 +1070,7 @@ class TestEchoDestinationValidation:
     def client(self, db_tmp, monkeypatch):
         import app as app_module
 
-        monkeypatch.setattr(app_module, "_AUTH_TOKEN", None)
+        monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
         from fastapi.testclient import TestClient
 
         return TestClient(app_module.app)

@@ -60,7 +60,7 @@ OAUTH_SESSION_MAX_AGE = 10 * 60
 # If the env var is unset, auth is disabled (original behavior).
 # (Single-tenant mode only; multi mode replaces this with sessions.)
 import settings
-from settings import AUTH_TOKEN as _AUTH_TOKEN
+from settings import AUTH_TOKEN  # noqa: F401  (re-exported for tests/legacy)
 
 # Paths exempt from auth: health check + static files + OAuth callback.
 # Only /oauth/callback must be reachable without a cookie (Mastodon redirects
@@ -95,7 +95,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await self._single(request, call_next)
 
     async def _single(self, request: Request, call_next):
-        if not _AUTH_TOKEN:
+        if not settings.AUTH_TOKEN:
             return await call_next(request)
 
         path = request.url.path
@@ -110,7 +110,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or request.headers.get("x-auth-token")
         )
 
-        if token and _secrets.compare_digest(token, _AUTH_TOKEN):
+        if (
+            token
+            and settings.AUTH_TOKEN
+            and _secrets.compare_digest(token, settings.AUTH_TOKEN)
+        ):
             return await call_next(request)
 
         # If this is the login endpoint, let it through
@@ -136,7 +140,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         claims = security.read_session(token) if token else None
         if claims:
             request.state.user_id = claims["user_id"]
-            request.state.user_email = claims["email"]
             return await call_next(request)
 
         accept = request.headers.get("accept", "")
@@ -212,10 +215,13 @@ def _trial_context(request: Request) -> dict:
             now = datetime.now(timezone.utc)
             if end.tzinfo is None:
                 end = end.replace(tzinfo=timezone.utc)
-            ctx["trial_days_left"] = max(0, (end - now).days)
-            ctx["trial_ends_date"] = end.strftime("%b %d, %Y")
+            if end <= now:
+                ctx["trial_expired"] = True
+            else:
+                ctx["trial_days_left"] = max(1, (end - now).days)
+                ctx["trial_ends_date"] = end.strftime("%b %d, %Y")
         except ValueError:
-            pass
+            logger.warning("Unparseable trial_ends_at for user %s: %r", uid, ends)
     return ctx
 
 

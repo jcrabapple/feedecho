@@ -244,11 +244,9 @@ def login_submit(
         # Single mode: shared-secret token (original behavior).
         import secrets as _secrets
 
-        from app import _AUTH_TOKEN
-
-        if not _AUTH_TOKEN:
+        if not settings.AUTH_TOKEN:
             return RedirectResponse(url="/", status_code=302)
-        if token and _secrets.compare_digest(token, _AUTH_TOKEN):
+        if token and _secrets.compare_digest(token, settings.AUTH_TOKEN):
             response = RedirectResponse(url="/", status_code=302)
             response.set_cookie(
                 key="feedecho_auth",

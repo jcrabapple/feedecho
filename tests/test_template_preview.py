@@ -23,7 +23,7 @@ def temp_db(monkeypatch):
 def client(temp_db, monkeypatch):
     import app as app_module
 
-    monkeypatch.setattr(app_module, "_AUTH_TOKEN", None)
+    monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
     return TestClient(app_module.app)
 
 

@@ -51,28 +51,52 @@ def get_setting_int(key: str, default: int, user_id: int = 1) -> int:
         return default
 
 
-def _echo_owner(echo_id: int) -> int:
-    """The user who owns an echo (1 in single mode / for missing rows)."""
+def _echo_owner(echo_id: int) -> int | None:
+    """The user who owns an echo; None if the row no longer exists.
+
+    Callers must treat None as "unknown owner" — never as tenant 1. A
+    fallback to 1 here would let a missing/stale echo_id read or write
+    tenant 1's settings (alert state, notify address) in multi mode.
+    """
     with get_db() as db:
         row = db.execute(
             "SELECT user_id FROM echoes WHERE id = ?", (echo_id,)
         ).fetchone()
-    return row["user_id"] if row else 1
+    return row["user_id"] if row else None
 
 
 def next_retry_delay(attempt_count: int, echo_id: int | None = None) -> str:
-    """Backoff timestamp for the next automatic retry of a failed row."""
-    owner = _echo_owner(echo_id) if echo_id else 1
-    base = max(
-        1, get_setting_int("retry_backoff_minutes", DEFAULT_BACKOFF_MINUTES, user_id=owner)
-    )
+    """Backoff timestamp for the next automatic retry of a failed row.
+
+    Without echo context (echo_id=None, single-mode callers) settings are
+    tenant 1's; with a stale echo_id the default base is used.
+    """
+    if echo_id is None:
+        owner = 1
+    else:
+        owner = _echo_owner(echo_id)
+    if owner is None:
+        base = DEFAULT_BACKOFF_MINUTES
+    else:
+        base = max(
+            1,
+            get_setting_int(
+                "retry_backoff_minutes", DEFAULT_BACKOFF_MINUTES, user_id=owner
+            ),
+        )
     delay = base * (2 ** max(0, attempt_count - 1))
     delay = min(delay, 24 * 60)  # cap at 1 day
     return (_now() + timedelta(minutes=delay)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def max_attempts(echo_id: int | None = None) -> int:
-    owner = _echo_owner(echo_id) if echo_id else 1
+    if echo_id is None:
+        return get_setting_int(
+            "retry_max_attempts", DEFAULT_MAX_ATTEMPTS, user_id=1
+        )
+    owner = _echo_owner(echo_id)
+    if owner is None:
+        return DEFAULT_MAX_ATTEMPTS
     return get_setting_int("retry_max_attempts", DEFAULT_MAX_ATTEMPTS, user_id=owner)
 
 
@@ -158,6 +182,10 @@ def _echo_label(echo_id: int) -> str:
 def record_failure(echo_id: int) -> None:
     """Track a delivery failure; send an alert email at the threshold."""
     owner = _echo_owner(echo_id)
+    if owner is None:
+        # Stale echo_id: never touch tenant 1's settings or alert address.
+        logger.warning("record_failure: echo %s no longer exists; skipping alert", echo_id)
+        return
     threshold = get_setting_int(
         "notify_failure_threshold", DEFAULT_NOTIFY_THRESHOLD, user_id=owner
     )
@@ -200,6 +228,9 @@ def record_failure(echo_id: int) -> None:
 def record_success(echo_id: int) -> None:
     """On recovery after an alert, send one all-clear email and reset state."""
     owner = _echo_owner(echo_id)
+    if owner is None:
+        logger.warning("record_success: echo %s no longer exists; skipping", echo_id)
+        return
     alerted_at = _notify_state(echo_id, owner)
     if not alerted_at:
         return

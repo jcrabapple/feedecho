@@ -21,29 +21,37 @@ def env(monkeypatch, tmp_path):
 
 
 def _seed_echo(db, user_id: int, destination: str = "mastodon") -> int:
+    """Seed a feed/account/echo for a user; returns the ECHO id.
+
+    Entity ids are derived from but distinct from the user id so tests
+    cannot accidentally pass when scoping bugs conflate the two.
+    """
+    feed_id = 500 + user_id
+    account_id = 600 + user_id
+    echo_id = 700 + user_id
     with db.get_db() as conn:
         conn.execute(
             "INSERT INTO feeds (id, name, url, user_id) VALUES (?, 'F', 'https://example.com/f', ?)",
-            (user_id, user_id),
+            (feed_id, user_id),
         )
         if destination == "mastodon":
             conn.execute(
                 "INSERT INTO accounts (id, name, instance, access_token, user_id)"
                 " VALUES (?, 'A', 'https://mastodon.social', 'tok', ?)",
-                (user_id, user_id),
+                (account_id, user_id),
             )
         else:
             conn.execute(
                 "INSERT INTO email_accounts (id, name, email, user_id)"
                 " VALUES (?, 'E', 'dest@example.com', ?)",
-                (user_id, user_id),
+                (account_id, user_id),
             )
         conn.execute(
             "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
             " VALUES (?, ?, ?, ?, ?)",
-            (user_id, user_id, destination, user_id, user_id),
+            (echo_id, feed_id, destination, account_id, user_id),
         )
-    return user_id
+    return echo_id
 
 
 def _item(item_id="i1"):
@@ -73,7 +81,7 @@ class TestRetryCapIsolation:
         )
 
         echo = {"id": echo_id, "user_id": 2, "destination_type": "mastodon",
-                "destination_id": 2, "template": "{{ title }}", "visibility": "public",
+                "destination_id": 602, "template": "{{ title }}", "visibility": "public",
                 "filter_keywords": "", "filter_mode": "exclude", "content_warning": "",
                 "attach_image": 0, "delivery_mode": "instant", "drip_limit": 0}
         scheduler.process_echo(echo, _item())
@@ -96,7 +104,7 @@ class TestRetryCapIsolation:
             )
             db.execute(
                 "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
-                " VALUES (99, 2, 'mastodon', 2, 1)"
+                " VALUES (99, 502, 'mastodon', 602, 1)"
             )
         monkeypatch.setattr(
             scheduler, "post_status", lambda **kw: (_ for _ in ()).throw(RuntimeError("down"))
@@ -134,13 +142,46 @@ class TestNotificationIsolation:
 
         scheduler.process_echo(
             {"id": echo_id, "user_id": 2, "destination_type": "mastodon",
-             "destination_id": 2, "template": "{{ title }}", "visibility": "public",
+             "destination_id": 602, "template": "{{ title }}", "visibility": "public",
              "filter_keywords": "", "filter_mode": "exclude", "content_warning": "",
              "attach_image": 0, "delivery_mode": "instant", "drip_limit": 0},
             _item(),
         )
         assert len(sent) == 1
         assert sent[0]["to_email"] == "owner2@example.com"
+
+
+class TestStaleEchoSafety:
+    """A missing echo row must never fall back to tenant 1's settings."""
+
+    def test_max_attempts_uses_default_when_echo_missing(self, env):
+        database, scheduler, notify = env
+        echo_id = _seed_echo(database, 2)
+        with database.get_db() as db:
+            # Tenant 1 customizes its cap; tenant 2's row is hard-deleted.
+            db.execute(
+                "INSERT INTO settings (user_id, key, value) VALUES (1, 'retry_max_attempts', '99')"
+            )
+            db.execute("DELETE FROM echoes WHERE id = ?", (echo_id,))
+        assert notify.max_attempts(echo_id=echo_id) == notify.DEFAULT_MAX_ATTEMPTS
+
+    def test_record_failure_with_missing_echo_writes_nothing(self, env, monkeypatch):
+        database, scheduler, notify = env
+        echo_id = _seed_echo(database, 2)
+        sent = []
+        monkeypatch.setattr(notify, "send_email", lambda **kw: sent.append(kw))
+        with database.get_db() as db:
+            db.execute("DELETE FROM echoes WHERE id = ?", (echo_id,))
+            db.execute(
+                "INSERT INTO settings (user_id, key, value) VALUES (2, 'notify_failure_threshold', '1')"
+            )
+        notify.record_failure(echo_id)
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT * FROM settings WHERE key LIKE 'notify_alerted_echo_%'"
+            ).fetchall()
+        assert rows == []
+        assert sent == []
 
 
 class TestSmtpIsolation:
@@ -151,7 +192,7 @@ class TestSmtpIsolation:
         monkeypatch.setattr(scheduler, "send_email", lambda **kw: sent.append(kw))
         scheduler.process_echo(
             {"id": echo_id, "user_id": 2, "destination_type": "email",
-             "destination_id": 2, "template": "{{ title }}", "visibility": "public",
+             "destination_id": 602, "template": "{{ title }}", "visibility": "public",
              "filter_keywords": "", "filter_mode": "exclude", "content_warning": "",
              "attach_image": 0, "delivery_mode": "instant", "drip_limit": 0},
             _item(),

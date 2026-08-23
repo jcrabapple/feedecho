@@ -545,11 +545,14 @@ def init_db_sqlite() -> None:
                OR expires_at <= datetime('now', '-1 day')
         """)
 
-        _init_system_settings(db)
+        _init_shared_tables(db)
 
 
-def _init_system_settings(db) -> None:
-    """System-wide settings (admin email/SMTP), identical on both dialects.
+def _init_shared_tables(db) -> None:
+    """Deployment-wide tables, identical on both dialects.
+
+    system_settings holds admin email/SMTP config; email_tokens holds
+    single-use email-flow tokens (verification, password reset).
 
     Deliberately a separate table from per-user `settings`: system values
     (verification/reset SMTP) belong to the deployment, not to any tenant,
@@ -560,6 +563,35 @@ def _init_system_settings(db) -> None:
             key TEXT PRIMARY KEY,
             value TEXT
         )
+    """)
+
+    if dialect() == "postgres":
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS email_tokens (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                token_hash TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                consumed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    else:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS email_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                consumed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_email_tokens_user
+        ON email_tokens(user_id, purpose)
     """)
 
 
@@ -788,7 +820,6 @@ def init_db_postgres() -> None:
         # Admin flag for hosted mode (A2); never auto-granted.
         _add_column_if_missing(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0")
 
-        _init_system_settings(db)
-
+        _init_shared_tables(db)
 
 init_db()

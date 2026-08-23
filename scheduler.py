@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+import settings
 from database import get_db
 from email_sender import send_email
 from feed_parser import fetch_feed, fetch_image, get_new_items, truncate
@@ -192,6 +193,18 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
             "SELECT * FROM echoes WHERE feed_id = ? AND enabled = 1",
             (feed_id,),
         ).fetchall()
+        # Hosted mode gate: unverified owners' echoes are skipped until
+        # the account email is verified (soft-block, silent in single mode
+        # where every row belongs to user 1 whose email_verified is 0 —
+        # hence the settings.MULTI guard).
+        if settings.MULTI and echoes:
+            verified = {
+                r["id"]
+                for r in db.execute(
+                    "SELECT id FROM users WHERE email_verified = 1"
+                ).fetchall()
+            }
+            echoes = [e for e in echoes if e["user_id"] in verified]
 
     feed_url = feed["url"]
     feed_name = feed["name"]

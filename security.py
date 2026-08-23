@@ -84,6 +84,21 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+def new_token() -> str:
+    """A high-entropy single-use token for email flows (verification, reset)."""
+    return secrets.token_urlsafe(32)
+
+
+def token_hash(token: str) -> str:
+    """Hash a token for at-rest storage.
+
+    Tokens are high-entropy (256 bits), so a plain SHA-256 digest is
+    sufficient — scrypt would add nothing against offline attacks on a
+    token with this much entropy.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def session_secret() -> bytes:
     """The master HMAC key for session cookies.
 

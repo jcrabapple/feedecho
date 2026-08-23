@@ -218,6 +218,20 @@ class TestPostgresMigration:
         assert len(rows) == 1
         assert rows[0]["value"] == "b.example.com"
 
+    def test_email_tokens_roundtrip_on_pg(self, pg_env):
+        import verification
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash)"
+                " VALUES (77, 'tok@example.com', '')"
+            )
+        token = verification.issue_token(77, "verify")
+        assert verification.consume_token(token, "verify") == 77
+        # Single use on PG too
+        assert verification.consume_token(token, "verify") is None
+
 
 @requires_pg
 class TestAppOnPostgres:

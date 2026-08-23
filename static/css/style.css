@@ -167,6 +167,17 @@ body {
     color: var(--text);
 }
 
+/* Email-verification banner (multi mode dashboard) */
+.verify-banner {
+    background: var(--warning-wash);
+    border: 1px solid var(--warning);
+    border-radius: 8px;
+    padding: 0.7rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+    color: var(--text);
+}
+
 /* Theme toggle */
 .theme-toggle {
     background: var(--surface-light);

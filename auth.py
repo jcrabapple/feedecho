@@ -237,6 +237,27 @@ def register_submit(
             "SELECT id FROM users WHERE email = ?", (email,)
         ).fetchone()
 
+    # Verification email: best-effort. Signup succeeds even if system SMTP
+    # is unconfigured or the send fails; the dashboard banner offers resend.
+    try:
+        import logging
+
+        import verification
+        from email_sender import send_system_email
+
+        token = verification.issue_token(user["id"], "verify")
+        link = f"{settings.BASE_URL.rstrip('/')}/verify-email?token={token}"
+        send_system_email(
+            email,
+            "Verify your FeedEcho account",
+            f"Welcome to FeedEcho. Verify your email address by opening this link:\n\n{link}\n\n"
+            "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
+        )
+    except Exception as exc:  # noqa: BLE001 — verification must not block signup
+        logging.getLogger("feedecho").warning(
+            "Verification email for %s failed: %s", email, exc
+        )
+
     response = RedirectResponse(url="/", status_code=302)
     _set_session_cookie(response, user["id"], email, request)
     return response

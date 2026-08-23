@@ -152,6 +152,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/register",
         "/login",
         "/logout",
+        # Email links are opened unauthenticated.
+        "/verify-email",
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
@@ -279,7 +281,8 @@ def _trial_context(request: Request) -> dict:
         return {}
     with get_db() as db:
         row = db.execute(
-            "SELECT email, plan, trial_ends_at, is_admin FROM users WHERE id = ?",
+            "SELECT email, plan, trial_ends_at, is_admin, email_verified"
+            " FROM users WHERE id = ?",
             (uid,),
         ).fetchone()
     if not row:
@@ -288,6 +291,7 @@ def _trial_context(request: Request) -> dict:
         "current_user_email": row["email"],
         "plan": row["plan"] or "trial",
         "is_admin": bool(row["is_admin"]),
+        "email_verified": bool(row["email_verified"]),
     }
     ends = row["trial_ends_at"]
     if ends:
@@ -514,6 +518,66 @@ async def dashboard(request: Request):
         }
     return render("dashboard.html", request, feeds=feeds, echoes=echoes,
                   recent_posts=recent_posts, stats=stats)
+
+
+# ── Email verification ────────────────────────────────────────────────────────
+
+@app.get("/verify-email", response_class=HTMLResponse)
+async def verify_email(token: str = "", request: Request = None):
+    from auth import _require_multi
+    from verification import consume_token
+
+    _require_multi()
+    uid = consume_token(token, "verify") if token else None
+    if uid is None:
+        return render(
+            "error.html", request, status_code=400, code=400,
+            message="This verification link is invalid or has expired.",
+        )
+    with get_db() as db:
+        db.execute(
+            "UPDATE users SET email_verified = 1 WHERE id = ?", (uid,)
+        )
+    logger.info("User %s verified their email", uid)
+    return RedirectResponse(url="/?verified=1", status_code=302)
+
+
+@app.post("/resend-verification")
+async def resend_verification(request: Request):
+    from auth import _require_multi
+    from verification import issue_token, resend_allowed
+
+    _require_multi()
+    uid = current_user_id(request)
+    with get_db() as db:
+        row = db.execute(
+            "SELECT email, email_verified FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+    if not row or row["email_verified"]:
+        return RedirectResponse(url="/", status_code=302)
+    if not resend_allowed(uid, "verify"):
+        return render(
+            "error.html", request, status_code=400, code=400,
+            message="Too many verification emails. Wait a while before trying again.",
+        )
+    try:
+        from email_sender import send_system_email
+
+        token = issue_token(uid, "verify")
+        link = f"{settings.BASE_URL.rstrip('/')}/verify-email?token={token}"
+        send_system_email(
+            row["email"],
+            "Verify your FeedEcho account",
+            f"Verify your email address by opening this link:\n\n{link}\n\n"
+            "This link expires in 24 hours.",
+        )
+    except Exception as exc:  # noqa: BLE001 — resend failure surfaces in the banner
+        logger.warning("Resend verification email for user %s failed: %s", uid, exc)
+        return render(
+            "error.html", request, status_code=400, code=400,
+            message="System email is not configured yet. Try again later.",
+        )
+    return RedirectResponse(url="/?verification_sent=1", status_code=302)
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────

@@ -15,6 +15,21 @@
 </div>
 {% endif %}
 
+{% if MULTI and request.query_params.get('verified') %}
+<div class="flash flash-ok">Email verified. Thanks!</div>
+{% endif %}
+{% if MULTI and request.query_params.get('verification_sent') %}
+<div class="flash flash-ok">Verification email sent. Check your inbox.</div>
+{% endif %}
+{% if MULTI and not email_verified %}
+<div class="verify-banner">
+    <strong>Verify your email:</strong> we sent a link to {{ current_user_email }}. Verification is needed before your account can post.
+    <form method="post" action="/resend-verification" class="inline-form">
+        <button type="submit" class="btn-sm">Resend verification email</button>
+    </form>
+</div>
+{% endif %}
+
 <div class="stats-grid">
     <div class="stat-card">
         <span class="stat-value">{{ stats.accounts }}</span>

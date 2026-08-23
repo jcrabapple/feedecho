@@ -4,10 +4,28 @@
 <div class="auth-container">
     <div class="auth-card">
         <h1>FeedEcho</h1>
+        {% if multi %}
+        <p class="auth-subtitle">Log in to your account.</p>
+        {% else %}
         <p class="auth-subtitle">Enter your access token to continue.</p>
+        {% endif %}
         {% if error %}
         <div class="alert alert-error">{{ error }}</div>
         {% endif %}
+        {% if multi %}
+        <form method="post" action="/login" class="auth-form">
+            <div class="form-row">
+                <input type="email" name="email" placeholder="Email" required
+                       autocomplete="email" autofocus class="auth-input">
+            </div>
+            <div class="form-row">
+                <input type="password" name="password" placeholder="Password" required
+                       autocomplete="current-password" class="auth-input">
+            </div>
+            <button type="submit" class="btn">Log in</button>
+        </form>
+        <p class="auth-footer">No account? <a href="/register">Sign up</a></p>
+        {% else %}
         <form method="post" action="/login" class="auth-form">
             <div class="form-row">
                 <input type="password" name="token" placeholder="Access token" required
@@ -15,6 +33,7 @@
             </div>
             <button type="submit" class="btn">Log in</button>
         </form>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

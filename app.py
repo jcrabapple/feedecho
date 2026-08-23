@@ -18,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from database import get_db, init_db
+import auth
+import security
 from feed_parser import fetch_feed, SSRFError, validate_outbound_url
 from mastodon import test_connection, post_status, verify_credentials
 from bluesky import (
@@ -68,9 +70,30 @@ _AUTH_EXEMPT_PREFIXES = ("/static",)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Shared-secret auth. If FEEDCHO_AUTH_TOKEN is unset, this is a no-op."""
+    """Shared-secret auth (single mode) or session auth (multi mode).
+
+    Single mode: FEEDCHO_AUTH_TOKEN unset → no-op; set → cookie/header
+    token required. Multi mode: feedecho_session cookie required on all
+    paths except the public set. Mode is read per request so tests can
+    flip settings.MULTI without reloading the app.
+    """
+
+    _MULTI_EXEMPT_PATHS = {
+        "/healthz",
+        "/favicon.svg",
+        "/oauth/callback",
+        "/register",
+        "/login",
+        "/logout",
+    }
+    _MULTI_EXEMPT_PREFIXES = ("/static",)
 
     async def dispatch(self, request: Request, call_next):
+        if settings.MULTI:
+            return await self._multi(request, call_next)
+        return await self._single(request, call_next)
+
+    async def _single(self, request: Request, call_next):
         if not _AUTH_TOKEN:
             return await call_next(request)
 
@@ -101,29 +124,62 @@ class AuthMiddleware(BaseHTTPMiddleware):
             {"detail": "Authentication required"}, status_code=401
         )
 
+    async def _multi(self, request: Request, call_next):
+        path = request.url.path
+        if path in self._MULTI_EXEMPT_PATHS or path.startswith(
+            tuple(self._MULTI_EXEMPT_PREFIXES)
+        ):
+            return await call_next(request)
+
+        token = request.cookies.get("feedecho_session")
+        claims = security.read_session(token) if token else None
+        if claims:
+            request.state.user_id = claims["user_id"]
+            return await call_next(request)
+
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept and request.method == "GET":
+            return RedirectResponse(url="/login", status_code=302)
+        return JSONResponse(
+            {"detail": "Authentication required"}, status_code=401
+        )
+
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    if not _AUTH_TOKEN:
-        return RedirectResponse(url="/", status_code=302)
-    return render("login.html", request)
+    return auth.login_page(request)
 
 
 @app.post("/login")
-async def login_submit(request: Request, token: str = Form(...)):
-    if not _AUTH_TOKEN:
-        return RedirectResponse(url="/", status_code=302)
-    if _secrets.compare_digest(token, _AUTH_TOKEN):
-        response = RedirectResponse(url="/", status_code=302)
-        response.set_cookie(
-            key="feedecho_auth",
-            value=token,
-            httponly=True,
-            samesite="lax",
-            secure=request.url.scheme == "https",
-        )
-        return response
-    return render("login.html", request, error="Invalid token")
+async def login_submit(
+    request: Request,
+    email: str = Form(""),
+    password: str = Form(""),
+    token: str = Form(""),
+):
+    return auth.login_submit(request, email=email, password=password, token=token)
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    return auth.register_page(request)
+
+
+@app.post("/register")
+async def register_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    confirm: str = Form(...),
+):
+    return auth.register_submit(
+        request, email=email, password=password, confirm=confirm
+    )
+
+
+@app.post("/logout")
+async def logout():
+    return auth.logout()
 
 
 app.add_middleware(AuthMiddleware)

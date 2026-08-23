@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Sign up — FeedEcho{% endblock %}
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h1>FeedEcho</h1>
+        <p class="auth-subtitle">Create your account. 14-day free trial, no card required.</p>
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/register" class="auth-form">
+            <div class="form-row">
+                <input type="email" name="email" placeholder="Email" required
+                       value="{{ email or '' }}" autocomplete="email" autofocus class="auth-input">
+            </div>
+            <div class="form-row">
+                <input type="password" name="password" placeholder="Password (8+ characters)" required
+                       autocomplete="new-password" class="auth-input">
+            </div>
+            <div class="form-row">
+                <input type="password" name="confirm" placeholder="Confirm password" required
+                       autocomplete="new-password" class="auth-input">
+            </div>
+            <button type="submit" class="btn">Sign up</button>
+        </form>
+        <p class="auth-footer">Already have an account? <a href="/login">Log in</a></p>
+    </div>
+</div>
+{% endblock %}

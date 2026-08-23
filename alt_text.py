@@ -48,20 +48,22 @@ USER_PROMPT = (
 )
 
 
-def _get_settings() -> dict[str, str]:
+def _get_settings(user_id: int = 1) -> dict[str, str]:
     """Load vision API settings from the database."""
     with get_db() as db:
         rows = db.execute(
             """SELECT key, value FROM settings
                WHERE key IN ('alt_text_ai_enabled', 'alt_text_ai_base_url',
-                             'alt_text_ai_model', 'alt_text_ai_api_key')"""
+                             'alt_text_ai_model', 'alt_text_ai_api_key')
+                 AND user_id = ?""",
+            (user_id,),
         ).fetchall()
     return {row["key"]: row["value"] for row in rows}
 
 
-def is_enabled() -> bool:
+def is_enabled(user_id: int = 1) -> bool:
     """Check if AI alt text generation is configured and enabled."""
-    s = _get_settings()
+    s = _get_settings(user_id=user_id)
     return (
         s.get("alt_text_ai_enabled") == "1"
         and bool(s.get("alt_text_ai_base_url"))

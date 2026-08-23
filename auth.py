@@ -8,6 +8,7 @@ routes to this flow only when settings.MULTI is set.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import threading
 import time
@@ -28,11 +29,22 @@ _LOGIN_WINDOW_SECONDS = 5 * 60
 _login_attempts: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
 
+# Registration gets its own, more generous bucket: scrypt is expensive and
+# the route is public, so cap valid-form submissions per IP.
+_MAX_REGISTER_ATTEMPTS = 10
+_REGISTER_WINDOW_SECONDS = 10 * 60
+_register_attempts: dict[str, list[float]] = {}
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _MIN_PASSWORD_LENGTH = 8
+_MAX_PASSWORD_LENGTH = 1024
 _TRIAL_DAYS = 14
 
 COOKIE_NAME = "feedecho_session"
+
+# Precomputed once so unknown-email login attempts pay the same scrypt
+# cost as known-email attempts (no timing-based user enumeration).
+_DUMMY_HASH = hash_password("feedecho-timing-equalizer")
 
 
 def current_user_id(request: Request) -> int:
@@ -61,19 +73,65 @@ def _trial_end() -> str:
     )
 
 
-def _throttled(ip: str) -> bool:
+def _client_ip(request: Request) -> str:
+    """The client IP for rate limiting.
+
+    Behind a trusted reverse proxy (settings.TRUSTED_PROXIES), the TCP
+    peer is the proxy, so the rightmost X-Forwarded-For entry is used.
+    Without trusted proxies configured, X-Forwarded-For is ignored
+    entirely (it is trivially spoofable).
+    """
+    peer = request.client.host if request.client else "unknown"
+    if not settings.TRUSTED_PROXIES:
+        return peer
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not any(peer_ip in ipaddress.ip_network(c) for c in settings.TRUSTED_PROXIES):
+        return peer
+    forwarded = request.headers.get("x-forwarded-for", "")
+    entries = [e.strip() for e in forwarded.split(",") if e.strip()]
+    return entries[-1] if entries else peer
+
+
+def _prune(bucket: dict[str, list[float]], key: str, window: float) -> list[float]:
     now = time.monotonic()
+    attempts = [t for t in bucket.get(key, []) if now - t < window]
+    if attempts:
+        bucket[key] = attempts
+    else:
+        bucket.pop(key, None)  # evict empty keys so the dict can't grow
+    return attempts
+
+
+def _throttled(ip: str) -> bool:
     with _login_lock:
-        attempts = [
-            t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_SECONDS
-        ]
-        _login_attempts[ip] = attempts
-        return len(attempts) >= _MAX_LOGIN_ATTEMPTS
+        return len(_prune(_login_attempts, ip, _LOGIN_WINDOW_SECONDS)) >= _MAX_LOGIN_ATTEMPTS
+
+
+def _register_throttled(ip: str) -> bool:
+    with _login_lock:
+        return (
+            len(_prune(_register_attempts, ip, _REGISTER_WINDOW_SECONDS))
+            >= _MAX_REGISTER_ATTEMPTS
+        )
 
 
 def _record_failure(ip: str) -> None:
     with _login_lock:
         _login_attempts.setdefault(ip, []).append(time.monotonic())
+
+
+def _record_register(ip: str) -> None:
+    with _login_lock:
+        _register_attempts.setdefault(ip, []).append(time.monotonic())
+
+
+def _clear_failures(ip: str) -> None:
+    """A successful login resets the failure bucket for that IP."""
+    with _login_lock:
+        _login_attempts.pop(ip, None)
 
 
 def _set_session_cookie(response: RedirectResponse, user_id: int, email: str, request: Request) -> None:
@@ -82,7 +140,7 @@ def _set_session_cookie(response: RedirectResponse, user_id: int, email: str, re
         value=sign_session(user_id, email),
         httponly=True,
         samesite="lax",
-        secure=request.url.scheme == "https",
+        secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
         max_age=SESSION_TTL_SECONDS,
     )
 
@@ -111,11 +169,22 @@ def register_submit(
         errors.append("Enter a valid email address.")
     if len(password) < _MIN_PASSWORD_LENGTH:
         errors.append(f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.")
+    if len(password) > _MAX_PASSWORD_LENGTH:
+        errors.append(f"Password must be at most {_MAX_PASSWORD_LENGTH} characters.")
     if password != confirm:
         errors.append("Passwords do not match.")
     if errors:
         return _render_auth(
             request, "register.html", error=" ".join(errors), email=email
+        )
+
+    ip = _client_ip(request)
+    if _register_throttled(ip):
+        return _render_auth(
+            request,
+            "register.html",
+            error="Too many signup attempts from this address. Try again later.",
+            email=email,
         )
 
     with get_db() as db:
@@ -129,13 +198,27 @@ def register_submit(
                 error="An account with that email already exists.",
                 email=email,
             )
-        db.execute(
-            """
-            INSERT INTO users (email, password_hash, plan, trial_ends_at, email_verified)
-            VALUES (?, ?, 'trial', ?, 0)
-            """,
-            (email, hash_password(password), _trial_end()),
-        )
+        _record_register(ip)
+        try:
+            db.execute(
+                """
+                INSERT INTO users (email, password_hash, plan, trial_ends_at, email_verified)
+                VALUES (?, ?, 'trial', ?, 0)
+                """,
+                (email, hash_password(password), _trial_end()),
+            )
+        except Exception as e:
+            # Duplicate-email race between SELECT and INSERT: the UNIQUE
+            # constraint fires as IntegrityError (sqlite) / UniqueViolation
+            # (psycopg). Render the same friendly message as the SELECT path.
+            if e.__class__.__name__ in ("IntegrityError", "UniqueViolation"):
+                return _render_auth(
+                    request,
+                    "register.html",
+                    error="An account with that email already exists.",
+                    email=email,
+                )
+            raise
         user = db.execute(
             "SELECT id FROM users WHERE email = ?", (email,)
         ).fetchone()
@@ -172,12 +255,12 @@ def login_submit(
                 value=token,
                 httponly=True,
                 samesite="lax",
-                secure=request.url.scheme == "https",
+                secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
             )
             return response
         return _render_auth(request, "login.html", error="Invalid token")
 
-    ip = request.client.host if request.client else "unknown"
+    ip = _client_ip(request)
     if _throttled(ip):
         return _render_auth(
             request,
@@ -192,11 +275,20 @@ def login_submit(
             "SELECT id, email, password_hash, suspended FROM users WHERE email = ?",
             (email,),
         ).fetchone()
-    if user is None or not verify_password(password, user["password_hash"]):
+    if user is None:
+        # Pay the same scrypt cost as a known-email attempt so response
+        # timing does not reveal whether an account exists.
+        verify_password(password, _DUMMY_HASH)
         _record_failure(ip)
         return _render_auth(
             request, "login.html", multi=True, error="Invalid email or password"
         )
+    if not verify_password(password, user["password_hash"]):
+        _record_failure(ip)
+        return _render_auth(
+            request, "login.html", multi=True, error="Invalid email or password"
+        )
+    _clear_failures(ip)
     if user["suspended"]:
         return _render_auth(
             request, "login.html", multi=True, error="This account is suspended."

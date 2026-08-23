@@ -235,6 +235,11 @@ def verify_state(state: str, session_binding: str) -> tuple[str, int | None]:
     """Verify and consume a server-side, one-time OAuth state token.
 
     Returns (instance, user_id); user_id is None in single mode.
+
+    The user_id re-read happens after consumption; this is safe because
+    consumed rows are only marked (consumed_at), never deleted, and no
+    concurrent path removes them. A concurrent duplicate-callback attempt
+    fails inside _verify_state before reaching this SELECT.
     """
     instance = _verify_state(state, session_binding)
     with get_db() as db:

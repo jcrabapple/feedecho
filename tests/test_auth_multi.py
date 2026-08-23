@@ -20,6 +20,7 @@ def multi_env(monkeypatch, tmp_path):
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "multi.db")
     database.init_db()
     auth._login_attempts.clear()
+    auth._register_attempts.clear()
     return settings
 
 
@@ -137,6 +138,97 @@ class TestLogin:
         )
         assert resp.status_code == 200
         assert "Too many" in resp.text
+
+    def test_successful_login_clears_failure_bucket(self, client):
+        _register(client, password="correct-horse-9")
+        client.post("/logout")
+        for _ in range(4):
+            client.post(
+                "/login",
+                data={"email": "new@example.com", "password": "wrong"},
+            )
+        # Correct login must not be blocked by the earlier failures
+        resp = client.post(
+            "/login",
+            data={"email": "new@example.com", "password": "correct-horse-9"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+
+
+class TestRegisterAbuseControls:
+    def test_register_throttled_after_ten_attempts(self, client):
+        for i in range(10):
+            client.post(
+                "/register",
+                data={
+                    "email": f"u{i}@example.com",
+                    "password": "hunter2hunter2",
+                    "confirm": "hunter2hunter2",
+                },
+            )
+        resp = client.post(
+            "/register",
+            data={
+                "email": "one-more@example.com",
+                "password": "hunter2hunter2",
+                "confirm": "hunter2hunter2",
+            },
+        )
+        assert resp.status_code == 200
+        assert "Too many signup attempts" in resp.text
+        assert _user_row("one-more@example.com") is None
+
+    def test_overlong_password_rejected(self, client):
+        resp = _register(client, password="x" * 1025)
+        assert resp.status_code == 200
+        assert "at most" in resp.text
+
+
+class TestCookieSecurity:
+    def test_secure_flag_forced_behind_proxy(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "FORCE_SECURE_COOKIE", True)
+        resp = _register(client)
+        assert "Secure" in resp.headers.get("set-cookie", "")
+
+    def test_secure_flag_absent_by_default_over_http(self, client):
+        resp = _register(client)
+        assert "Secure" not in resp.headers.get("set-cookie", "")
+
+
+class TestClientIp:
+    def test_xff_ignored_without_trusted_proxies(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ())
+        scope = {
+            "type": "http",
+            "client": ("1.2.3.4", 12345),
+            "headers": [(b"x-forwarded-for", b"9.9.9.9")],
+        }
+        assert auth._client_ip(SR(scope)) == "1.2.3.4"
+
+    def test_xff_rightmost_used_behind_trusted_proxy(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ("10.0.0.0/8",))
+        scope = {
+            "type": "http",
+            "client": ("10.0.0.5", 12345),
+            "headers": [(b"x-forwarded-for", b"spoofed.example, 9.9.9.9")],
+        }
+        assert auth._client_ip(SR(scope)) == "9.9.9.9"
+
+    def test_xff_ignored_from_untrusted_peer(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ("10.0.0.0/8",))
+        scope = {
+            "type": "http",
+            "client": ("203.0.113.9", 12345),
+            "headers": [(b"x-forwarded-for", b"9.9.9.9")],
+        }
+        assert auth._client_ip(SR(scope)) == "203.0.113.9"
 
 
 class TestSessionEnforcement:

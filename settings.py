@@ -26,6 +26,19 @@ SESSION_SECRET = os.environ.get("FEEDCHO_SESSION_SECRET", "")
 ALLOW_SQLITE_FALLBACK = (
     os.environ.get("FEEDCHO_ALLOW_SQLITE_FALLBACK", "") == "1"
 )
+# Force the Secure flag on session cookies when TLS terminates in front
+# of the app (Caddy/nginx proxy): the request scheme then reads http
+# even though the client connection is https.
+FORCE_SECURE_COOKIE = (
+    os.environ.get("FEEDCHO_FORCE_SECURE_COOKIE", "") == "1"
+)
+# Comma-separated CIDR list of trusted reverse proxies. When the direct
+# peer is inside this list, client IPs are derived from X-Forwarded-For
+# (rightmost entry) instead of the TCP peer, so rate limits see real
+# client addresses instead of one shared proxy IP.
+TRUSTED_PROXIES = tuple(
+    c.strip() for c in os.environ.get("FEEDCHO_TRUSTED_PROXIES", "").split(",") if c.strip()
+)
 
 
 def validate_config() -> None:

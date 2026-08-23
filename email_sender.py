@@ -11,11 +11,12 @@ from email.mime.multipart import MIMEMultipart
 from database import get_db
 
 
-def get_smtp_settings() -> dict | None:
+def get_smtp_settings(user_id: int = 1) -> dict | None:
     """Load SMTP settings from the settings table. Returns None if not configured."""
     with get_db() as db:
         rows = db.execute(
-            "SELECT key, value FROM settings WHERE key LIKE 'smtp_%'"
+            "SELECT key, value FROM settings WHERE key LIKE 'smtp_%' AND user_id = ?",
+            (user_id,),
         ).fetchall()
 
     if not rows:
@@ -78,14 +79,14 @@ def send_email(to_email: str, subject: str, body: str) -> dict:
     return {"success": True}
 
 
-def test_smtp_connection(to_email: str = "") -> tuple[bool, str]:
+def test_smtp_connection(to_email: str = "", user_id: int = 1) -> tuple[bool, str]:
     """Test SMTP settings by sending a test email. Returns (success, message)."""
     try:
-        settings = get_smtp_settings()
-        if not settings:
+        smtp = get_smtp_settings(user_id=user_id)
+        if not smtp:
             return False, "SMTP not configured. Set SMTP settings first."
 
-        test_to = to_email or settings["from_email"] or settings["username"]
+        test_to = to_email or smtp["from_email"] or smtp["username"]
         if not test_to:
             return False, "No email address to send test to."
 

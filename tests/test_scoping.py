@@ -23,6 +23,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "multi.db")
     database.init_db()
     auth._login_attempts.clear()
+    auth._register_attempts.clear()
     with database.get_db() as db:
         db.execute(
             "INSERT INTO users (id, email, password_hash) VALUES (?, ?, '')",
@@ -251,3 +252,47 @@ class TestOAuthBinding:
                 "SELECT user_id, username FROM accounts"
             ).fetchall()
         assert [(r["user_id"], r["username"]) for r in rows] == [(A_ID, "user")]
+
+    def test_null_state_user_rejected_in_multi_mode(
+        self, env, client_a, monkeypatch
+    ):
+        """A legacy oauth_states row with NULL user_id must not attribute
+        the resulting account to tenant 1."""
+        monkeypatch.setattr(
+            "app.verify_state",
+            lambda state, binding: ("https://dmv.community", None),
+        )
+        monkeypatch.setattr(
+            "app.exchange_code", lambda instance, code: {"access_token": "tok"}
+        )
+        resp = client_a.get(
+            "/oauth/callback", params={"code": "c", "state": "x|y|z"}
+        )
+        assert resp.status_code == 400
+        with database.get_db() as db:
+            assert db.execute("SELECT COUNT(*) AS c FROM accounts").fetchone()["c"] == 0
+
+
+class TestLegacyCrossTenantDefense:
+    def test_legacy_cross_tenant_destination_not_leaked_in_listings(
+        self, env, client_a
+    ):
+        """Defense in depth: even a legacy echo whose destination account
+        belongs to another tenant must not leak that account's identity."""
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id) VALUES (1, 'A feed', 'https://x', ?)",
+                (A_ID,),
+            )
+            db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token, user_id)"
+                " VALUES (1, 'B account', 'buser', 'https://b.example', 'tok', ?)",
+                (B_ID,),
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+                " VALUES (1, 1, 'mastodon', 1, ?)",
+                (A_ID,),
+            )
+        page = client_a.get("/").text
+        assert "buser" not in page

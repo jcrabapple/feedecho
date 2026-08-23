@@ -310,9 +310,9 @@ async def dashboard(request: Request):
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
-            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
-            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
-            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
+            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -331,9 +331,9 @@ async def dashboard(request: Request):
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
             JOIN feeds f ON e.feed_id = f.id
-            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
-            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
-            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
+            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
@@ -402,9 +402,9 @@ async def echoes_page(request: Request):
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
-            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
-            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
-            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
+            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -450,9 +450,9 @@ async def history_page(request: Request):
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
             JOIN feeds f ON e.feed_id = f.id
-            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id
-            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id
-            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id
+            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
+            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 100
@@ -727,9 +727,12 @@ async def save_smtp_settings(
 
 @app.post("/api/settings/smtp/test")
 async def test_smtp(
+    request: Request,
     test_email: str = Form(""),
 ):
-    success, message = test_smtp_connection(test_email if test_email else None)
+    success, message = test_smtp_connection(
+        test_email, user_id=current_user_id(request)
+    )
     return {"success": success, "message": message}
 
 
@@ -790,10 +793,10 @@ async def save_alt_text_settings(
 
 
 @app.post("/api/settings/alt-text/test")
-async def test_alt_text():
+async def test_alt_text(request: Request):
     """Test the vision API connection with a minimal request."""
     import alt_text
-    if not alt_text.is_enabled():
+    if not alt_text.is_enabled(user_id=current_user_id(request)):
         return {"success": False, "message": "AI alt text is not configured"}
     try:
         # Use a tiny 1x1 PNG to test the API connection
@@ -843,7 +846,7 @@ async def delete_feed(request: Request, feed_id: int):
         db.execute(
             """
             UPDATE feeds
-               SET deleted_at = datetime('now')
+               SET deleted_at = CURRENT_TIMESTAMP
              WHERE id = ?
                AND deleted_at IS NULL
                AND user_id = ?
@@ -1228,7 +1231,7 @@ async def delete_echo(request: Request, echo_id: int):
         db.execute(
             """
             UPDATE echoes
-               SET deleted_at = datetime('now'),
+               SET deleted_at = CURRENT_TIMESTAMP,
                    enabled = 0
              WHERE id = ?
                AND deleted_at IS NULL
@@ -1365,6 +1368,14 @@ async def oauth_callback(
         raise HTTPException(
             status_code=400,
             detail="Invalid, expired, already-used, or session-mismatched OAuth state.",
+        )
+
+    # In multi mode the state must be bound to a user. A NULL user_id
+    # (legacy row) would otherwise attribute the account to tenant 1.
+    if settings.MULTI and state_user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth session is not bound to a user. Start the connection again.",
         )
 
     try:

@@ -193,6 +193,13 @@ class TestPostgresMigration:
                 "SELECT is_admin FROM users WHERE id = 1"
             ).fetchone()
         assert row["is_admin"] == 0
+        # Exercise the qmark placeholder path of auth.is_admin on PG.
+        import auth as auth_mod
+
+        assert auth_mod.is_admin(1) is False
+        with database.get_db() as db:
+            db.execute("UPDATE users SET is_admin = 1 WHERE id = 1")
+        assert auth_mod.is_admin(1) is True
 
 
 @requires_pg

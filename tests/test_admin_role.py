@@ -16,7 +16,52 @@ def db_env(monkeypatch, tmp_path):
     return database
 
 
+class TestRegisterPath:
+    """The real signup flow must never create admins."""
+
+    @pytest.fixture
+    def multi_client(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from app import app
+
+        monkeypatch.setattr(settings, "MULTI", True)
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", None)
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "reg.db")
+        database.init_db()
+        auth._login_attempts.clear()
+        auth._register_attempts.clear()
+        with TestClient(app) as c:
+            yield c
+
+    def test_register_creates_non_admin(self, multi_client):
+        resp = multi_client.post(
+            "/register",
+            data={
+                "email": "fresh@example.com",
+                "password": "hunter2hunter2",
+                "confirm": "hunter2hunter2",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT id, is_admin FROM users WHERE email = 'fresh@example.com'"
+            ).fetchone()
+        assert row["is_admin"] == 0
+        assert auth.is_admin(row["id"]) is False
+
+
 class TestAdminRole:
+    def test_fresh_init_single_mode_user_is_not_admin(self, db_env):
+        # Fresh init_db_sqlite INSERT OR IGNOREs user 1 ('local'); that
+        # placeholder must never be an admin in a role system.
+        assert auth.is_admin(1) is False
+
     def test_new_users_are_not_admins(self, db_env):
         with database.get_db() as db:
             db.execute(

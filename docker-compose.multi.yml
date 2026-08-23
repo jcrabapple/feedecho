@@ -1,0 +1,75 @@
+# FeedEcho hosted (multi-tenant) stack
+#
+# One command on a box with Docker installed:
+#   cp .env.example.multi .env   # fill in real secrets, chmod 600
+#   docker compose -f docker-compose.multi.yml up -d
+#
+# Caddy terminates TLS (80/443) and reverse-proxies to the app. Postgres is
+# NOT published to the host — it is reachable only on the compose network.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: feedecho-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-feedecho}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=${POSTGRES_DB:-feedecho}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-feedecho} -d ${POSTGRES_DB:-feedecho}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  feedecho:
+    image: ghcr.io/jcrabapple/feedecho:latest
+    pull_policy: always
+    container_name: feedecho
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - FEEDCHO_MODE=multi
+      - FEEDCHO_DATABASE_URL=postgresql://${POSTGRES_USER:-feedecho}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-feedecho}
+      # Caddy terminates TLS; the app itself sees http. Secure cookies are
+      # forced and client IPs are taken from X-Forwarded-For as set by
+      # Caddy, which lives on the docker bridge network.
+      - FEEDCHO_FORCE_SECURE_COOKIE=${FEEDCHO_FORCE_SECURE_COOKIE:-1}
+      - FEEDCHO_TRUSTED_PROXIES=${FEEDCHO_TRUSTED_PROXIES:-172.16.0.0/12}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8453/healthz', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  caddy:
+    image: caddy:2
+    container_name: feedecho-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      feedecho:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

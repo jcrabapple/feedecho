@@ -1,0 +1,14 @@
+# FeedEcho hosted stack — reverse proxy config
+# TLS certificates are provisioned automatically (Let's Encrypt).
+
+{
+    email {$ACME_EMAIL}
+}
+
+{$FEEDECHO_DOMAIN:feedecho.net} {
+    reverse_proxy feedecho:8453
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        -Server
+    }
+}

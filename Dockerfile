@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir \
     "python-multipart>=0.0.18" \
     "feedparser>=6.0.11" \
     "httpx>=0.28.0" \
-    "apscheduler>=3.10.4"
+    "apscheduler>=3.10.4" \
+    "psycopg[binary]>=3.2"
 
 COPY . .
 

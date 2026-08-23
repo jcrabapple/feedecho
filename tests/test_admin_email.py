@@ -119,6 +119,31 @@ class TestAdminEmailSettings:
         assert resp.status_code == 200
         assert "not configured" in resp.text.lower()
 
+    def test_junk_port_rejected_at_save(self, multi_env):
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            resp = _save_smtp(c, smtp_port="abc")
+        assert resp.status_code == 400
+        assert email_sender.get_system_smtp_settings() is None
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            resp = _save_smtp(c, smtp_port="99999")
+        assert resp.status_code == 400
+
+    def test_control_characters_rejected(self, multi_env):
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            resp = _save_smtp(c, smtp_host="evil\r\nBcc: x")
+        assert resp.status_code == 400
+        assert email_sender.get_system_smtp_settings() is None
+
+    def test_invalid_from_email_rejected(self, multi_env):
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            resp = _save_smtp(c, smtp_from_email="not-an-email")
+        assert resp.status_code == 400
+
+    def test_password_whitespace_preserved(self, multi_env):
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            _save_smtp(c, smtp_password="  padded pw  ")
+        assert email_sender.get_system_smtp_settings()["password"] == "  padded pw  "
+
 
 class TestSystemVsPerUserSmtp:
     def test_per_user_smtp_unaffected_by_system_settings(self, multi_env):

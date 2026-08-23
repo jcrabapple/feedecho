@@ -613,17 +613,41 @@ async def admin_email_save(request: Request):
         return render("error.html", request, status_code=403,
                       code=403, message="Admin access required")
     form = await request.form()
+
+    # Validate before storing anything: a bad port or control characters
+    # in header fields must fail here, not at send time.
+    port_raw = (form.get("smtp_port") or "").strip()
+    try:
+        port = int(port_raw)
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except (ValueError, TypeError):
+        return render("error.html", request, status_code=400,
+                      code=400, message="SMTP port must be a number between 1 and 65535")
+
+    from_email = (form.get("smtp_from_email") or "").strip()
+    if from_email and not re.match(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$", from_email):
+        return render("error.html", request, status_code=400,
+                      code=400, message="From address is not a valid email address")
+
     updates: dict[str, str] = {}
     for key in _SMTP_FORM_KEYS:
         if key == "smtp_password":
-            pw = (form.get(key) or "").strip()
-            # Blank keeps the stored value; the masked sentinel rendered
-            # back from the page must also be treated as blank so it is
-            # never stored as the literal password.
+            pw = form.get(key) or ""
+            # No strip: SMTP passwords may legitimately contain leading or
+            # trailing whitespace. Blank (or the masked sentinel, which the
+            # page never actually renders into an input) keeps the stored
+            # value.
             if pw and pw != "\u2022\u2022\u2022\u2022\u2022\u2022 (stored)":
                 updates[key] = pw
             continue
-        updates[key] = (form.get(key) or "").strip()
+        value = (form.get(key) or "").strip()
+        if key in ("smtp_host", "smtp_username", "smtp_from_name") and re.search(
+            r"[\r\n]", value
+        ):
+            return render("error.html", request, status_code=400,
+                          code=400, message=f"Invalid characters in {key}")
+        updates[key] = value
     updates["smtp_use_tls"] = "1" if form.get("smtp_use_tls") else "0"
     with get_db() as db:
         for key, value in updates.items():

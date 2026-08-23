@@ -588,7 +588,73 @@ async def admin_page(request: Request):
              ORDER BY created_at DESC
         """).fetchall()
         stats = _admin_stats(db)
-    return render("admin.html", request, users=users, stats=stats)
+        smtp_rows = db.execute(
+            "SELECT key, value FROM system_settings WHERE key LIKE 'smtp_%'"
+        ).fetchall()
+    smtp = {row["key"]: row["value"] for row in smtp_rows}
+    if "smtp_password" in smtp and smtp["smtp_password"]:
+        smtp["smtp_password"] = "\u2022\u2022\u2022\u2022\u2022\u2022 (stored)"
+    else:
+        smtp["smtp_password"] = ""
+    smtp["configured"] = bool(smtp.get("smtp_host") and smtp.get("smtp_port"))
+    return render("admin.html", request, users=users, stats=stats, smtp=smtp)
+
+
+_SMTP_FORM_KEYS = (
+    "smtp_host", "smtp_port", "smtp_username", "smtp_password",
+    "smtp_from_email", "smtp_from_name", "smtp_use_tls",
+)
+
+
+@app.post("/admin/email")
+async def admin_email_save(request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    form = await request.form()
+    updates: dict[str, str] = {}
+    for key in _SMTP_FORM_KEYS:
+        if key == "smtp_password":
+            pw = (form.get(key) or "").strip()
+            # Blank keeps the stored value; the masked sentinel rendered
+            # back from the page must also be treated as blank so it is
+            # never stored as the literal password.
+            if pw and pw != "\u2022\u2022\u2022\u2022\u2022\u2022 (stored)":
+                updates[key] = pw
+            continue
+        updates[key] = (form.get(key) or "").strip()
+    updates["smtp_use_tls"] = "1" if form.get("smtp_use_tls") else "0"
+    with get_db() as db:
+        for key, value in updates.items():
+            db.execute(
+                "INSERT INTO system_settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+    logger.info("Admin %s updated system email settings", uid)
+    return RedirectResponse(url="/admin#email", status_code=302)
+
+
+@app.post("/admin/email/test")
+async def admin_email_test(request: Request):
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    with get_db() as db:
+        row = db.execute(
+            "SELECT email FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+    target = row["email"] if row else ""
+    from email_sender import test_system_smtp_connection
+
+    ok, message = test_system_smtp_connection(to_email=target)
+    logger.info("Admin %s system email test: %s (%s)", uid, "ok" if ok else "failed", message)
+    return render(
+        "admin_email_result.html", request,
+        ok=ok, message=message, target=target,
+    )
 
 
 @app.post("/admin/users/{user_id}/suspend")

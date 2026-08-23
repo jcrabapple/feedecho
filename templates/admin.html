@@ -2,7 +2,6 @@
 {% block title %}Admin — FeedEcho{% endblock %}
 {% block content %}
 <h1>Admin</h1>
-
 <div class="stats-grid">
     <div class="stat-card">
         <span class="stat-value">{{ stats.n }}</span>
@@ -84,6 +83,39 @@
     </div>
     {% else %}
     <p>No users yet.</p>
+    {% endif %}
+</section>
+
+<section id="email">
+    <h2>System email</h2>
+    <p class="hint">SMTP settings for system mail: account verification and password reset emails. Separate from each user's own digest SMTP settings.</p>
+    <form method="post" action="/admin/email" class="settings-form">
+        <div class="form-row">
+            <label>SMTP host <input type="text" name="smtp_host" value="{{ smtp.get('smtp_host', '') }}" placeholder="smtp.example.com"></label>
+            <label>Port <input type="number" name="smtp_port" value="{{ smtp.get('smtp_port', '587') }}"></label>
+        </div>
+        <div class="form-row">
+            <label>Username <input type="text" name="smtp_username" value="{{ smtp.get('smtp_username', '') }}" autocomplete="username"></label>
+            <label>Password <input type="password" name="smtp_password" value="" placeholder="{% if smtp.get('smtp_password') %}Stored — leave blank to keep{% endif %}" autocomplete="new-password"></label>
+        </div>
+        <div class="form-row">
+            <label>From address <input type="email" name="smtp_from_email" value="{{ smtp.get('smtp_from_email', '') }}" placeholder="feedecho@example.com"></label>
+            <label>From name <input type="text" name="smtp_from_name" value="{{ smtp.get('smtp_from_name', 'FeedEcho') }}"></label>
+        </div>
+        <div class="form-row">
+            <label class="checkbox-label"><input type="checkbox" name="smtp_use_tls" value="1" {% if smtp.get('smtp_use_tls', '1') == '1' %}checked{% endif %}> Use TLS (STARTTLS, or implicit TLS on port 465)</label>
+        </div>
+        <div class="form-row">
+            <button type="submit" class="btn-sm">Save email settings</button>
+        </div>
+    </form>
+    <form method="post" action="/admin/email/test" class="inline-form">
+        <button type="submit" class="btn-sm">Send test email to myself</button>
+    </form>
+    {% if smtp.configured %}
+    <p class="hint">System SMTP is configured ({{ smtp.get('smtp_host') }}:{{ smtp.get('smtp_port') }}).</p>
+    {% else %}
+    <p class="hint">System SMTP is not configured yet — verification and password reset emails will fail until it is.</p>
     {% endif %}
 </section>
 {% endblock %}

@@ -463,6 +463,11 @@ button:hover { background: var(--primary-hover); }
 }
 .error-page h1 { font-size: 3rem; margin-bottom: 0.5rem; }
 
+/* Flash messages */
+.flash { padding: 0.7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
+.flash-ok { background: var(--success-wash); color: var(--success); border: 1px solid var(--success); }
+.flash-error { background: var(--danger-wash); color: var(--danger); border: 1px solid var(--danger); }
+
 @media (max-width: 640px) {
     .btn-sm {
         min-height: 40px;

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Email test — FeedEcho{% endblock %}
+{% block content %}
+<h1>System email test</h1>
+{% if ok %}
+<p class="flash flash-ok">Test email sent to {{ target }}.</p>
+{% else %}
+<p class="flash flash-error">Test email failed: {{ message }}</p>
+{% endif %}
+<p><a href="/admin#email">Back to admin</a></p>
+{% endblock %}

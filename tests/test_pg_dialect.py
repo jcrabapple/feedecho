@@ -201,6 +201,23 @@ class TestPostgresMigration:
             db.execute("UPDATE users SET is_admin = 1 WHERE id = 1")
         assert auth_mod.is_admin(1) is True
 
+    def test_system_settings_table_and_upsert(self, pg_env):
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO system_settings (key, value) VALUES ('smtp_host', 'a.example.com')"
+            )
+            db.execute(
+                "INSERT INTO system_settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("smtp_host", "b.example.com"),
+            )
+            rows = db.execute(
+                "SELECT key, value FROM system_settings WHERE key = 'smtp_host'"
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["value"] == "b.example.com"
+
 
 @requires_pg
 class TestAppOnPostgres:

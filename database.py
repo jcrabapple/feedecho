@@ -441,6 +441,7 @@ def init_db_sqlite() -> None:
                 PRIMARY KEY (user_id, key)
             )
         """)
+
         if "user_id" not in _column_names(db, "settings"):
             # Migrate legacy single-key settings tables: backfill to user 1.
             # The guard keeps the app startable if a partial migration or
@@ -543,6 +544,23 @@ def init_db_sqlite() -> None:
             WHERE consumed_at IS NOT NULL
                OR expires_at <= datetime('now', '-1 day')
         """)
+
+        _init_system_settings(db)
+
+
+def _init_system_settings(db) -> None:
+    """System-wide settings (admin email/SMTP), identical on both dialects.
+
+    Deliberately a separate table from per-user `settings`: system values
+    (verification/reset SMTP) belong to the deployment, not to any tenant,
+    and must be unreadable/unwritable by tenant-scoped settings routes.
+    """
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
 
 
 def init_db_postgres() -> None:
@@ -769,6 +787,8 @@ def init_db_postgres() -> None:
 
         # Admin flag for hosted mode (A2); never auto-granted.
         _add_column_if_missing(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0")
+
+        _init_system_settings(db)
 
 
 init_db()

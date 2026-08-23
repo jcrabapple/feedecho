@@ -19,29 +19,46 @@ RESEND_LIMIT = 3  # per user, per purpose, per 24h
 _TS = "%Y-%m-%d %H:%M:%S"
 
 
-def _now_ts() -> str:
-    return datetime.now(timezone.utc).strftime(_TS)
-
-
 def issue_token(user_id: int, purpose: str) -> str:
     """Create a fresh token, invalidating prior unconsumed tokens of the
-    same purpose (a new verification/reset supersedes the old link)."""
+    same purpose (a new verification/reset supersedes the old link).
+
+    A partial unique index (one unconsumed token per user+purpose)
+    serializes concurrent issuers; on conflict the issuance retries once
+    so exactly one live token survives.
+    """
     token = new_token()
     expires = (
         datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)
     ).strftime(_TS)
-    with get_db() as db:
-        db.execute(
-            "UPDATE email_tokens SET consumed_at = CURRENT_TIMESTAMP"
-            " WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL",
-            (user_id, purpose),
-        )
-        db.execute(
-            "INSERT INTO email_tokens (user_id, token_hash, purpose, expires_at)"
-            " VALUES (?, ?, ?, ?)",
-            (user_id, token_hash(token), purpose, expires),
-        )
-    return token
+    for _attempt in (1, 2):
+        try:
+            with get_db() as db:
+                # Consume (not delete) the prior token so issuance history
+                # stays countable for the resend throttle.
+                db.execute(
+                    "UPDATE email_tokens SET consumed_at = CURRENT_TIMESTAMP"
+                    " WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL",
+                    (user_id, purpose),
+                )
+                db.execute(
+                    "INSERT INTO email_tokens"
+                    " (user_id, token_hash, purpose, expires_at)"
+                    " VALUES (?, ?, ?, ?)",
+                    (user_id, token_hash(token), purpose, expires),
+                )
+            return token
+        except Exception as exc:  # noqa: BLE001
+            if exc.__class__.__name__ not in ("IntegrityError", "UniqueViolation"):
+                raise
+            # Concurrent issuer won the race; clear the live row and retry.
+            with get_db() as db:
+                db.execute(
+                    "DELETE FROM email_tokens"
+                    " WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL",
+                    (user_id, purpose),
+                )
+    raise RuntimeError("email token issuance failed after retry")
 
 
 def resend_allowed(user_id: int, purpose: str) -> bool:
@@ -62,11 +79,11 @@ def consume_token(token: str, purpose: str) -> int | None:
     """Atomically consume a token; returns the owning user_id or None.
 
     None for: unknown hash, wrong purpose, consumed, expired, or a
-    concurrent consumer winning the race (single-use enforced by the
-    conditional UPDATE's rowcount).
+    concurrent consumer winning the race. Single-use and expiry are both
+    enforced inside the conditional UPDATE (SQL-side, dialect-neutral)
+    and confirmed via rowcount.
     """
     digest = token_hash(token)
-    now = _now_ts()
     with get_db() as db:
         row = db.execute(
             "SELECT id, user_id, consumed_at, expires_at FROM email_tokens"
@@ -75,14 +92,13 @@ def consume_token(token: str, purpose: str) -> int | None:
         ).fetchone()
         if not row or row["consumed_at"]:
             return None
-        if str(row["expires_at"]) <= now:
-            return None
         cur = db.execute(
             "UPDATE email_tokens SET consumed_at = CURRENT_TIMESTAMP"
-            " WHERE id = ? AND consumed_at IS NULL",
+            " WHERE id = ? AND consumed_at IS NULL"
+            " AND expires_at > CURRENT_TIMESTAMP",
             (row["id"],),
         )
         if cur.rowcount != 1:
-            # Concurrent consumer won the race; single-use enforced.
+            # Concurrent consumer won, or the token expired.
             return None
     return row["user_id"]

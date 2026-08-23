@@ -189,22 +189,21 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
             _update_last_fetched(feed_id, lease_token)
             return
 
-        echoes = db.execute(
-            "SELECT * FROM echoes WHERE feed_id = ? AND enabled = 1",
-            (feed_id,),
-        ).fetchall()
-        # Hosted mode gate: unverified owners' echoes are skipped until
-        # the account email is verified (soft-block, silent in single mode
-        # where every row belongs to user 1 whose email_verified is 0 —
-        # hence the settings.MULTI guard).
-        if settings.MULTI and echoes:
-            verified = {
-                r["id"]
-                for r in db.execute(
-                    "SELECT id FROM users WHERE email_verified = 1"
-                ).fetchall()
-            }
-            echoes = [e for e in echoes if e["user_id"] in verified]
+        # Hosted mode gate: unverified owners' echoes are skipped until the
+        # account email is verified. Done in SQL (index-friendly) rather
+        # than materializing the user table per feed check. Single mode
+        # keeps the original query (user 1 is never verified there).
+        if settings.MULTI:
+            echoes = db.execute(
+                "SELECT e.* FROM echoes e JOIN users u ON u.id = e.user_id"
+                " WHERE e.feed_id = ? AND e.enabled = 1 AND u.email_verified = 1",
+                (feed_id,),
+            ).fetchall()
+        else:
+            echoes = db.execute(
+                "SELECT * FROM echoes WHERE feed_id = ? AND enabled = 1",
+                (feed_id,),
+            ).fetchall()
 
     feed_url = feed["url"]
     feed_name = feed["name"]

@@ -593,6 +593,14 @@ def _init_shared_tables(db) -> None:
         CREATE INDEX IF NOT EXISTS idx_email_tokens_user
         ON email_tokens(user_id, purpose)
     """)
+    # At most ONE unconsumed token per (user, purpose): the partial unique
+    # index serializes concurrent issue_token calls at the DB level on both
+    # dialects (the issuer retries once on conflict).
+    db.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_email_tokens_active
+        ON email_tokens(user_id, purpose)
+        WHERE consumed_at IS NULL
+    """)
 
 
 def init_db_postgres() -> None:

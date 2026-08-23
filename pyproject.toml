@@ -28,6 +28,12 @@ postgres = [
 requires = [ "hatchling" ]
 build-backend = "hatchling.build"
 
+[tool.pytest.ini_options]
+markers = [
+    "multi: tests exercising multi-tenant mode (FEEDCHO_MODE=multi)",
+    "pg: tests requiring a live Postgres (FEEDCHO_TEST_PG_URL); skipped otherwise",
+]
+
 [tool.hatch.build.targets.wheel]
 # Flat-layout: the project dir IS the package. Include templates and static
 # so the installed wheel is self-contained (Docker, Nix, etc.).

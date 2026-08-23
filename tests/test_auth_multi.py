@@ -45,6 +45,7 @@ def _user_row(email):
         ).fetchone()
 
 
+@pytest.mark.multi
 class TestRegister:
     def test_register_creates_user_and_signs_in(self, client):
         resp = _register(client)
@@ -93,6 +94,7 @@ class TestRegister:
         assert _user_row("not-an-email") is None
 
 
+@pytest.mark.multi
 class TestLogin:
     def test_login_with_valid_credentials(self, client):
         _register(client, password="correct-horse-9")
@@ -156,6 +158,7 @@ class TestLogin:
         assert resp.status_code == 302
 
 
+@pytest.mark.multi
 class TestRegisterAbuseControls:
     def test_register_throttled_after_ten_attempts(self, client):
         for i in range(10):
@@ -185,6 +188,7 @@ class TestRegisterAbuseControls:
         assert "at most" in resp.text
 
 
+@pytest.mark.multi
 class TestCookieSecurity:
     def test_secure_flag_forced_behind_proxy(self, client, monkeypatch):
         monkeypatch.setattr(settings, "FORCE_SECURE_COOKIE", True)
@@ -196,6 +200,7 @@ class TestCookieSecurity:
         assert "Secure" not in resp.headers.get("set-cookie", "")
 
 
+@pytest.mark.multi
 class TestClientIp:
     def test_xff_ignored_without_trusted_proxies(self, monkeypatch):
         from starlette.requests import Request as SR
@@ -231,6 +236,7 @@ class TestClientIp:
         assert auth._client_ip(SR(scope)) == "203.0.113.9"
 
 
+@pytest.mark.multi
 class TestSessionEnforcement:
     BROWSER = {"Accept": "text/html"}
 

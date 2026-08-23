@@ -42,6 +42,7 @@ def client(multi_env):
         yield c
 
 
+@pytest.mark.multi
 class TestMultiChrome:
     def test_dashboard_shows_email_and_logout(self, client):
         page = client.get("/").text

@@ -2,6 +2,8 @@
 immutable to user B in multi mode."""
 
 import pytest
+
+pytestmark = pytest.mark.multi
 from fastapi.testclient import TestClient
 
 import auth

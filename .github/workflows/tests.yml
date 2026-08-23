@@ -1,0 +1,66 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  single:
+    name: Single mode (sqlite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run single-mode suite
+        env:
+          FEEDCHO_MODE: ""
+        run: pytest -m "not pg"
+
+  multi:
+    name: Multi mode (sqlite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run multi-mode suite
+        env:
+          FEEDCHO_MODE: multi
+          FEEDCHO_SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789abcdef
+        run: pytest -m multi
+
+  postgres:
+    name: Postgres dialect
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: feedecho
+          POSTGRES_PASSWORD: feedecho
+          POSTGRES_DB: feedecho
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U feedecho"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with psycopg
+        run: pip install -e ".[dev,postgres]"
+      - name: Run Postgres dialect tests
+        env:
+          FEEDCHO_TEST_PG_URL: postgresql://feedecho:feedecho@localhost:5432/feedecho
+        run: pytest -m pg

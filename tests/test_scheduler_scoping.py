@@ -3,6 +3,8 @@ settings must resolve per echo owner, never globally."""
 
 import pytest
 
+pytestmark = pytest.mark.multi
+
 import database
 import notify
 import scheduler

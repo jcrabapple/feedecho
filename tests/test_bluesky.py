@@ -422,7 +422,7 @@ class TestSendBluesky:
         )
         import alt_text
 
-        monkeypatch.setattr(alt_text, "is_enabled", lambda: False)
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
 
         echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
         item = _item(image_url="https://example.com/photo.jpg")

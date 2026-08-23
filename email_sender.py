@@ -37,12 +37,12 @@ def get_smtp_settings(user_id: int = 1) -> dict | None:
     }
 
 
-def send_email(to_email: str, subject: str, body: str) -> dict:
+def send_email(to_email: str, subject: str, body: str, user_id: int = 1) -> dict:
     """Send an email via SMTP. Returns dict with success status.
 
     Raises Exception on failure.
     """
-    settings = get_smtp_settings()
+    settings = get_smtp_settings(user_id=user_id)
     if not settings:
         raise ValueError("SMTP not configured. Set SMTP settings first.")
 

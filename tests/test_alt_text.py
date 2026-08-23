@@ -419,7 +419,7 @@ class TestSchedulerAltTextIntegration:
         monkeypatch.setattr(
             scheduler, "fetch_image", lambda url: (b"img-bytes", "image/jpeg")
         )
-        monkeypatch.setattr(alt_text, "generate_alt_text", lambda b, c: "A scenic mountain landscape.")
+        monkeypatch.setattr(alt_text, "generate_alt_text", lambda b, c, user_id=1: "A scenic mountain landscape.")
         upload_calls = []
         monkeypatch.setattr(
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
@@ -447,7 +447,7 @@ class TestSchedulerAltTextIntegration:
         )
         alt_calls = []
         monkeypatch.setattr(
-            alt_text, "generate_alt_text", lambda b, c: alt_calls.append((b, c)) or "should not be called"
+            alt_text, "generate_alt_text", lambda b, c, user_id=1: alt_calls.append((b, c)) or "should not be called"
         )
         monkeypatch.setattr(
             scheduler, "upload_media", lambda **kw: {"id": "m1"}
@@ -474,7 +474,7 @@ class TestSchedulerAltTextIntegration:
             scheduler, "fetch_image", lambda url: (b"img-bytes", "image/jpeg")
         )
         monkeypatch.setattr(
-            alt_text, "generate_alt_text", lambda b, c: (_ for _ in ()).throw(RuntimeError("API down"))
+            alt_text, "generate_alt_text", lambda b, c, user_id=1: (_ for _ in ()).throw(RuntimeError("API down"))
         )
         upload_calls = []
         monkeypatch.setattr(
@@ -500,7 +500,7 @@ class TestSchedulerAltTextIntegration:
         monkeypatch.setattr(
             scheduler, "fetch_image", lambda url: (b"img-bytes", "image/jpeg")
         )
-        monkeypatch.setattr(alt_text, "generate_alt_text", lambda b, c: "")
+        monkeypatch.setattr(alt_text, "generate_alt_text", lambda b, c, user_id=1: "")
         upload_calls = []
         monkeypatch.setattr(
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}

@@ -203,7 +203,7 @@ class TestNotifications:
         monkeypatch.setattr(notify, "send_email", lambda **kw: sent.append(kw))
         monkeypatch.setattr(scheduler, "send_email", lambda **kw: sent.append(kw))
         monkeypatch.setattr(
-            notify, "get_smtp_settings", lambda: {"host": "h", "port": 587}
+            notify, "get_smtp_settings", lambda user_id=1: {"host": "h", "port": 587}
         )
         with database.get_db() as db:
             db.execute(
@@ -246,7 +246,7 @@ class TestNotifications:
         echo = _seed(env)
         sent = []
         monkeypatch.setattr(notify, "send_email", lambda **kw: sent.append(kw))
-        monkeypatch.setattr(notify, "get_smtp_settings", lambda: {"host": "h", "port": 587})
+        monkeypatch.setattr(notify, "get_smtp_settings", lambda user_id=1: {"host": "h", "port": 587})
         with database.get_db() as db:
             db.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES ('notify_failure_threshold', '0')"

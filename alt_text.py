@@ -72,13 +72,13 @@ def is_enabled(user_id: int = 1) -> bool:
     )
 
 
-def generate_alt_text(image_bytes: bytes, content_type: str) -> str:
+def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -> str:
     """Generate alt text for an image via a vision API.
 
     Returns the description string, or "" if disabled, unconfigured,
     or the API call fails. Never raises — alt text is best-effort.
     """
-    settings = _get_settings()
+    settings = _get_settings(user_id=user_id)
     if settings.get("alt_text_ai_enabled") != "1":
         return ""
 

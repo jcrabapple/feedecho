@@ -524,15 +524,16 @@ def _drip_applies(echo) -> bool:
 
 def _drip_rate(echo_id: int) -> int:
     """Successful posts by this echo within the sliding 60-minute window."""
+    cutoff = _timestamp_after(-60 * 60)
     with get_db() as db:
         row = db.execute(
             """
             SELECT COUNT(*) AS n FROM posted_items
              WHERE echo_id = ?
                AND status = 'success'
-               AND posted_at >= datetime('now', '-60 minutes')
+               AND posted_at >= ?
             """,
-            (echo_id,),
+            (echo_id, cutoff),
         ).fetchone()
     return row["n"] if row else 0
 
@@ -731,7 +732,7 @@ def _fail_post(
     number of retries can fix (missing account, rejected credentials).
     Returns the final status written.
     """
-    cap = max_attempts()
+    cap = max_attempts(echo_id)
 
     with get_db() as db:
         row = db.execute(
@@ -749,7 +750,7 @@ def _fail_post(
     else:
         final = "failed"
         error_out = error
-        retry_at = next_retry_delay(attempts)
+        retry_at = next_retry_delay(attempts, echo_id=echo_id)
 
     with get_db() as db:
         db.execute(
@@ -816,9 +817,11 @@ def _send_mastodon(
             if image_result:
                 img_bytes, img_type = image_result
                 description = ""
-                if alt_text.is_enabled():
+                if alt_text.is_enabled(user_id=echo["user_id"]):
                     try:
-                        description = alt_text.generate_alt_text(img_bytes, img_type)
+                        description = alt_text.generate_alt_text(
+                            img_bytes, img_type, user_id=echo["user_id"]
+                        )
                         if description:
                             logger.info(
                                 "Echo %s: generated alt text for item %s (%d chars)",
@@ -918,6 +921,7 @@ def _send_email_echo(
                 200,
             ),
             body=content,
+            user_id=echo["user_id"],
         )
     except Exception:
         logger.exception("Echo %s: email delivery failed", echo["id"])
@@ -1056,10 +1060,12 @@ def _send_bluesky(
                 if image_result:
                     img_bytes, img_type = image_result
                     if img_type in BLUESKY_IMAGE_TYPES and len(img_bytes) <= MAX_BLOB_BYTES:
-                        if alt_text.is_enabled():
+                        if alt_text.is_enabled(user_id=echo["user_id"]):
                             try:
                                 alt_description = (
-                                    alt_text.generate_alt_text(img_bytes, img_type) or ""
+                                    alt_text.generate_alt_text(
+                                        img_bytes, img_type, user_id=echo["user_id"]
+                                    ) or ""
                                 )
                             except Exception:
                                 logger.warning(
@@ -1263,7 +1269,7 @@ def _requeue_drip_failure(
     them. Release attempts are counted on the drip_items row.
     """
     attempts += 1
-    cap = max_attempts()
+    cap = max_attempts(echo_id)
     if cap > 0 and attempts >= cap:
         with get_db() as db:
             db.execute(
@@ -1443,7 +1449,7 @@ def flush_digests() -> None:
     with get_db() as db:
         # Find all echoes that have pending digest items
         pending_echoes = db.execute("""
-            SELECT DISTINCT d.echo_id, e.destination_id, e.feed_id,
+            SELECT DISTINCT d.echo_id, e.destination_id, e.feed_id, e.user_id,
                    f.name as feed_name, ea.email as to_email
               FROM digest_items d
               JOIN echoes e ON d.echo_id = e.id
@@ -1492,6 +1498,7 @@ def flush_digests() -> None:
                 to_email=echo_row["to_email"],
                 subject=subject,
                 body=body,
+                user_id=echo_row["user_id"],
             )
         except Exception:
             logger.exception(
@@ -1530,17 +1537,31 @@ def flush_digests() -> None:
 
 
 def check_all_feeds() -> None:
+    now = datetime.now(timezone.utc)
     with get_db() as db:
-        feeds = db.execute("""
-            SELECT id, name
-              FROM feeds
-             WHERE deleted_at IS NULL
-               AND (last_fetched IS NULL
-                    OR REPLACE(last_fetched, 'T', ' ') <=
-                       datetime('now', '-' || poll_interval || ' minutes'))
-        """).fetchall()
+        feeds = db.execute(
+            "SELECT id, name, poll_interval, last_fetched FROM feeds WHERE deleted_at IS NULL"
+        ).fetchall()
 
+    due = []
     for feed in feeds:
+        if not feed["last_fetched"]:
+            due.append(feed)
+            continue
+        try:
+            ts = feed["last_fetched"].replace("T", " ")[:19]
+            last = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except (ValueError, TypeError):
+            # Malformed timestamp: treat as due rather than skipping forever
+            due.append(feed)
+            continue
+        interval = max(1, int(feed["poll_interval"] or 15))
+        if last <= now - timedelta(minutes=interval):
+            due.append(feed)
+
+    for feed in due:
         try:
             check_feed(feed["id"])
         except Exception:

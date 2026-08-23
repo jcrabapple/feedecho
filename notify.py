@@ -51,16 +51,29 @@ def get_setting_int(key: str, default: int, user_id: int = 1) -> int:
         return default
 
 
-def next_retry_delay(attempt_count: int) -> str:
+def _echo_owner(echo_id: int) -> int:
+    """The user who owns an echo (1 in single mode / for missing rows)."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT user_id FROM echoes WHERE id = ?", (echo_id,)
+        ).fetchone()
+    return row["user_id"] if row else 1
+
+
+def next_retry_delay(attempt_count: int, echo_id: int | None = None) -> str:
     """Backoff timestamp for the next automatic retry of a failed row."""
-    base = max(1, get_setting_int("retry_backoff_minutes", DEFAULT_BACKOFF_MINUTES))
+    owner = _echo_owner(echo_id) if echo_id else 1
+    base = max(
+        1, get_setting_int("retry_backoff_minutes", DEFAULT_BACKOFF_MINUTES, user_id=owner)
+    )
     delay = base * (2 ** max(0, attempt_count - 1))
     delay = min(delay, 24 * 60)  # cap at 1 day
     return (_now() + timedelta(minutes=delay)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def max_attempts() -> int:
-    return get_setting_int("retry_max_attempts", DEFAULT_MAX_ATTEMPTS)
+def max_attempts(echo_id: int | None = None) -> int:
+    owner = _echo_owner(echo_id) if echo_id else 1
+    return get_setting_int("retry_max_attempts", DEFAULT_MAX_ATTEMPTS, user_id=owner)
 
 
 def _consecutive_failures(echo_id: int) -> int:
@@ -87,37 +100,43 @@ def _consecutive_failures(echo_id: int) -> int:
     return count
 
 
-def _notify_state(echo_id: int) -> str | None:
+def _notify_state(echo_id: int, user_id: int) -> str | None:
     with get_db() as db:
         row = db.execute(
-            "SELECT value FROM settings WHERE key = ?", (f"notify_alerted_echo_{echo_id}",)
+            "SELECT value FROM settings WHERE key = ? AND user_id = ?",
+            (f"notify_alerted_echo_{echo_id}", user_id),
         ).fetchone()
     return row["value"] if row else None
 
 
-def _set_notify_state(echo_id: int, value: str | None) -> None:
+def _set_notify_state(echo_id: int, value: str | None, user_id: int) -> None:
     key = f"notify_alerted_echo_{echo_id}"
     with get_db() as db:
         if value is None:
-            db.execute("DELETE FROM settings WHERE key = ?", (key,))
-        else:
-            # user_id is pinned to 1 here: notify state is single-tenant
-            # bookkeeping; multi-tenant scoping lands in the auth work.
             db.execute(
-                "INSERT INTO settings (user_id, key, value) VALUES (1, ?, ?) "
+                "DELETE FROM settings WHERE key = ? AND user_id = ?",
+                (key, user_id),
+            )
+        else:
+            db.execute(
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?) "
                 "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-                (key, value),
+                (user_id, key, value),
             )
 
 
-def _notify_address() -> str | None:
+def _notify_address(user_id: int) -> str | None:
     with get_db() as db:
         row = db.execute(
-            "SELECT value FROM settings WHERE key = 'notify_email'"
+            "SELECT value FROM settings WHERE key = 'notify_email' AND user_id = ?",
+            (user_id,),
         ).fetchone()
         if row and row["value"]:
             return row["value"]
-        row = db.execute("SELECT email FROM email_accounts ORDER BY id LIMIT 1").fetchone()
+        row = db.execute(
+            "SELECT email FROM email_accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+            (user_id,),
+        ).fetchone()
     return row["email"] if row else None
 
 
@@ -138,19 +157,22 @@ def _echo_label(echo_id: int) -> str:
 
 def record_failure(echo_id: int) -> None:
     """Track a delivery failure; send an alert email at the threshold."""
-    threshold = get_setting_int("notify_failure_threshold", DEFAULT_NOTIFY_THRESHOLD)
+    owner = _echo_owner(echo_id)
+    threshold = get_setting_int(
+        "notify_failure_threshold", DEFAULT_NOTIFY_THRESHOLD, user_id=owner
+    )
     if threshold <= 0:
         return
 
     failures = _consecutive_failures(echo_id)
-    if failures < threshold or _notify_state(echo_id):
+    if failures < threshold or _notify_state(echo_id, owner):
         return
 
-    if not get_smtp_settings():
+    if not get_smtp_settings(user_id=owner):
         logger.warning("Failure notification suppressed for echo %s: SMTP not configured", echo_id)
         return
 
-    address = _notify_address()
+    address = _notify_address(owner)
     if not address:
         return
 
@@ -167,8 +189,9 @@ def record_failure(echo_id: int) -> None:
                 f"- destination unreachable\n\n"
                 f"You'll get one follow-up email when it recovers."
             ),
+            user_id=owner,
         )
-        _set_notify_state(echo_id, _now_str())
+        _set_notify_state(echo_id, _now_str(), owner)
         logger.info("Failure notification sent for echo %s (%s failures)", echo_id, failures)
     except Exception:
         logger.exception("Failed to send failure notification for echo %s", echo_id)
@@ -176,15 +199,16 @@ def record_failure(echo_id: int) -> None:
 
 def record_success(echo_id: int) -> None:
     """On recovery after an alert, send one all-clear email and reset state."""
-    alerted_at = _notify_state(echo_id)
+    owner = _echo_owner(echo_id)
+    alerted_at = _notify_state(echo_id, owner)
     if not alerted_at:
         return
 
-    _set_notify_state(echo_id, None)
+    _set_notify_state(echo_id, None, owner)
 
-    if not get_smtp_settings():
+    if not get_smtp_settings(user_id=owner):
         return
-    address = _notify_address()
+    address = _notify_address(owner)
     if not address:
         return
 
@@ -197,6 +221,7 @@ def record_success(echo_id: int) -> None:
                 f"{label} is delivering again (alert was raised at {alerted_at} UTC).\n"
                 f"No action needed."
             ),
+            user_id=owner,
         )
         logger.info("Recovery notification sent for echo %s", echo_id)
     except Exception:

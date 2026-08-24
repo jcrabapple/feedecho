@@ -381,7 +381,9 @@ def _trial_context(request: Request) -> dict:
                 ctx["trial_expired"] = True
             else:
                 ctx["trial_days_left"] = max(1, (end - now).days)
-                ctx["trial_ends_date"] = end.strftime("%b %d, %Y")
+                # ISO date for a <time class="local-time"> element; the
+                # browser renders it in the viewer's locale (issue #6).
+                ctx["trial_ends_date"] = end.strftime("%Y-%m-%d")
         except ValueError:
             logger.warning("Unparseable trial_ends_at for user %s: %r", uid, ends)
     return ctx

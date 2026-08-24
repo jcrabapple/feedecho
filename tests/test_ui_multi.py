@@ -1,6 +1,8 @@
 """UI gating: multi-mode chrome (email + logout, trial banner) appears only
 for authenticated hosted users; single mode stays unchanged."""
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -53,6 +55,19 @@ class TestMultiChrome:
         page = client.get("/").text
         assert "trial-banner" in page
         assert "free trial ends" in page
+        # Issue #6: the date must be an ISO date inside a local-time element
+        # so the browser renders it in the viewer's locale, and it must match
+        # the stored trial_ends_at (no timezone/day drift).
+        m = re.search(
+            r'free trial ends <time class="local-time" datetime="(\d{4}-\d{2}-\d{2})">',
+            page,
+        )
+        assert m, "trial end date should be an ISO date in a local-time element"
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT trial_ends_at FROM users WHERE id = ?", (A_ID,)
+            ).fetchone()
+        assert m.group(1) == str(row["trial_ends_at"])[:10]
 
     def test_no_trial_banner_for_paid_plan(self, multi_env, client):
         with database.get_db() as db:

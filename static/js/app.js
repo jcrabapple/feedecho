@@ -382,15 +382,28 @@ function escapeHTML(str) {
     return div.innerHTML.replace(/"/g, '&quot;');
 }
 
-// Convert server UTC timestamps to the viewer's local timezone (issue #4).
+// Convert server UTC timestamps to the viewer's local timezone (issue #4)
+// and locale (issue #6). Passing `navigator.languages` (the user's ordered
+// browser language preferences) explicitly makes the output follow the
+// locale the user configured, not just the browser UI language.
 // <time class="local-time" datetime="2026-08-24T06:46:00Z">fallback</time>
 function formatLocalTimes() {
+    const locales = (navigator.languages && navigator.languages.length) ? navigator.languages : undefined;
     document.querySelectorAll('time.local-time').forEach((el) => {
         const raw = el.getAttribute('datetime');
         if (!raw) return;
-        const d = new Date(raw);
+        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+        let d;
+        if (dateOnly) {
+            // Date-only strings parse as UTC midnight; building the Date
+            // from parts keeps it on the local calendar day (no off-by-one).
+            const parts = raw.split('-');
+            d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        } else {
+            d = new Date(raw);
+        }
         if (isNaN(d.getTime())) return; // keep the UTC fallback text
-        el.textContent = d.toLocaleString();
+        el.textContent = dateOnly ? d.toLocaleDateString(locales) : d.toLocaleString(locales);
     });
 }
 

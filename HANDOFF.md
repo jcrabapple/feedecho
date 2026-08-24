@@ -65,6 +65,14 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   suite, now regression-tested). #5: 'queued' (drip-held) and 'pending'
   rows show Queued/Pending badges instead of red Failed on history AND
   dashboard. NULL-posted_at guards everywhere. 523 sqlite + 15 pg green.
+- DONE (issue #6, Kimi-reviewed): dates respect the browser locale.
+  formatLocalTimes() passes navigator.languages to the Intl formatters
+  (previously no locales arg = UI language only, ignoring configured
+  content languages). Dashboard trial banner moved from server-rendered
+  "%b %d, %Y" to an ISO date in a local-time element; date-only values
+  parsed as local midnight (no UTC off-by-one). app.js cache-buster
+  bumped (v=17). Regression test asserts banner date == stored
+  trial_ends_at. 523 sqlite + 15 pg green.
 - NOT STARTED: Phase 4 (billing): Stripe card-gated trial, B2 backups,
   Cloudflare proxy decision. Private beta targeted months 3-4. Note: the
   hosted account's verification banner is active until system SMTP is

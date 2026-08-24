@@ -335,3 +335,52 @@ class TestAppOnPostgres:
         assert row["url"] == "https://example.com/other.xml"
         assert row["poll_interval"] == 45
         assert row["last_item_id"] is None
+
+    def test_history_page_renders_on_pg(self, pg_env, monkeypatch):
+        """Timestamps come back as datetime objects on PG; the iso_utc /
+        utc_text filters must render them without calling string methods."""
+        from fastapi.testclient import TestClient
+
+        import auth as auth_mod
+        import security
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash)"
+                " VALUES (9, 'pg@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (1, 'PG Feed', 'https://example.com/feed.xml', 9)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id,"
+                " template, user_id)"
+                " VALUES (1, 1, 'mastodon', 1, '{{ title }}', 9)"
+            )
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, item_title, status)"
+                " VALUES (1, 'pg-item-1', 'PG Item', 'queued')"
+            )
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(9, "pg@example.com"))
+            page = c.get("/history")
+            dash = c.get("/")
+        assert page.status_code == 200
+        assert "Queued" in page.text
+        assert "held for drip rate limit" in page.text
+        assert '<span class="badge badge-danger">Failed</span>' not in page.text
+        # The filter received a psycopg datetime and rendered a valid ISO
+        # attribute (this is the crash path the test exists to cover).
+        import re
+
+        assert re.search(
+            r'datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"', page.text
+        )
+        assert dash.status_code == 200
+        assert "Queued" in dash.text

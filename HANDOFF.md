@@ -55,6 +55,16 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   513 sqlite + 14 pg tests green. Kimi findings applied: cancelFeedEdit
   (cancelEdit hardcodes echo-row prefix), quote-escaping in escapeHTML,
   deleted_at re-check in UPDATEs, blank-name validation, pg test id capture.
+- DONE (issues #4 + #5, two Kimi passes): history page timestamps and
+  drip-status display. #4: all UI timestamps (history, dashboard, feeds,
+  accounts, admin) render as <time class="local-time" datetime="...Z">
+  converted to the viewer's timezone by formatLocalTimes() in app.js,
+  with a UTC-labelled fallback when JS is off. New Jinja filters
+  iso_utc/utc_text in app.py handle BOTH sqlite TEXT and psycopg datetime
+  (the inline .replace(' ','T') approach 500s on PG — caught by the pg
+  suite, now regression-tested). #5: 'queued' (drip-held) and 'pending'
+  rows show Queued/Pending badges instead of red Failed on history AND
+  dashboard. NULL-posted_at guards everywhere. 523 sqlite + 15 pg green.
 - NOT STARTED: Phase 4 (billing): Stripe card-gated trial, B2 backups,
   Cloudflare proxy decision. Private beta targeted months 3-4. Note: the
   hosted account's verification banner is active until system SMTP is

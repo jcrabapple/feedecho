@@ -36,7 +36,7 @@
             </td>
             <td data-label="URL"><a href="{{ feed.url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>
-            <td data-label="Last Fetched"><small>{{ feed.last_fetched or 'Never' }}</small></td>
+            <td data-label="Last Fetched"><small>{% if feed.last_fetched %}<time class="local-time" datetime="{{ feed.last_fetched | iso_utc }}">{{ feed.last_fetched | utc_text }} UTC</time>{% else %}Never{% endif %}</small></td>
             <td data-label="Item ID Set">
                 {% if feed.last_item_id %}
                 <span class="badge badge-success">Yes</span>

@@ -55,7 +55,7 @@
                     {% if u.is_admin %}<span class="badge badge-info">Admin</span>
                     {% else %}<span class="badge badge-muted">User</span>{% endif %}
                 </td>
-                <td data-label="Joined">{{ u.created_at }}</td>
+                <td data-label="Joined"><small>{% if u.created_at %}<time class="local-time" datetime="{{ u.created_at | iso_utc }}">{{ u.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                 <td data-label="Actions">
                     {% if u.suspended %}
                     <form method="post" action="/admin/users/{{ u.id }}/unsuspend" class="inline-form">

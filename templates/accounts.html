@@ -85,7 +85,7 @@
         <td data-label="Handle"><code>@{{ account.username }}@{{ account.instance | replace('https://', '') }}</code></td>
         <td data-label="Name">{{ account.name }}</td>
         <td data-label="Instance">{{ account.instance }}</td>
-        <td data-label="Added"><small>{{ account.created_at }}</small></td>
+        <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
         <td data-label="Actions" class="action-cell">
             <button class="btn-sm" onclick="testAccount({{ account.id }})">Test</button>
             <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
@@ -116,7 +116,7 @@
         <tr>
             <td data-label="Name">{{ account.name }}</td>
             <td data-label="Email">{{ account.email }}</td>
-            <td data-label="Added"><small>{{ account.created_at }}</small></td>
+            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Actions" class="action-cell">
                 <form method="post" action="/api/email-accounts/{{ account.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this email address?')">Delete</button>
@@ -146,7 +146,7 @@
         <tr>
             <td data-label="Handle"><code>@{{ account.handle }}</code></td>
             <td data-label="Name">{{ account.name }}</td>
-            <td data-label="Added"><small>{{ account.created_at }}</small></td>
+            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="testBlueskyAccount({{ account.id }})">Test</button>
                 <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">

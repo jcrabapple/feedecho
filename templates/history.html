@@ -20,7 +20,7 @@
     <tbody>
         {% for post in posts %}
         <tr>
-            <td data-label="Time"><small>{{ post.posted_at }}</small></td>
+            <td data-label="Time"><small>{% if post.posted_at %}<time class="local-time" datetime="{{ post.posted_at | iso_utc }}">{{ post.posted_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Feed">{{ post.feed_name }}</td>
             <td data-label="Account">{{ post.account_name }}<br><small>{{ post.instance }}</small></td>
             <td data-label="Item">
@@ -38,11 +38,15 @@
                 <span class="badge badge-success">Success</span>
                 {% elif post.status == 'filtered' %}
                 <span class="badge badge-warning">Filtered</span>
+                {% elif post.status == 'queued' %}
+                <span class="badge badge-info">Queued</span><br><small>held for drip rate limit</small>
+                {% elif post.status == 'pending' %}
+                <span class="badge badge-muted">Pending</span>
                 {% elif post.status == 'gave_up' %}
                 <span class="badge badge-danger">Gave up</span>
                 {% else %}
                 <span class="badge badge-danger">Failed</span>
-                {% if post.attempt_count %}<br><small>attempt {{ post.attempt_count }}{% if post.next_retry_at %} · retry {{ post.next_retry_at }}{% endif %}</small>{% endif %}
+                {% if post.attempt_count %}<br><small>attempt {{ post.attempt_count }}{% if post.next_retry_at %} · retry <time class="local-time" datetime="{{ post.next_retry_at | iso_utc }}">{{ post.next_retry_at | utc_text }} UTC</time>{% endif %}</small>{% endif %}
                 {% endif %}
             </td>
             <td data-label="Error"><small>{{ post.error_message or '' }}</small></td>

@@ -55,6 +55,47 @@ jinja = Environment(
     autoescape=select_autoescape(["html"]),
 )
 
+
+def _as_utc_naive(value) -> datetime | None:
+    """Normalize a stored timestamp (sqlite TEXT or psycopg datetime) to
+    a naive UTC datetime, or None if unparseable/empty.
+
+    Invariant: every writer stores UTC in these TIMESTAMP columns (app code
+    generates UTC strings via scheduler._now(); sqlite CURRENT_TIMESTAMP is
+    UTC; the stock Postgres container runs with timezone UTC). Naive values
+    are therefore treated as UTC here — do not add writers that store
+    local time.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _iso_utc(value) -> str:
+    """ISO-8601 UTC ('2026-08-24T06:46:00Z') for the browser-side
+    local-time conversion; '' when the value is missing/unparseable."""
+    dt = _as_utc_naive(value)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else ""
+
+
+def _utc_text(value) -> str:
+    """Plain 'YYYY-MM-DD HH:MM:SS' UTC fallback text (shown when JS is off)."""
+    dt = _as_utc_naive(value)
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
+
+
+jinja.filters["iso_utc"] = _iso_utc
+jinja.filters["utc_text"] = _utc_text
+
 OAUTH_SESSION_COOKIE = "feedecho_oauth_session"
 OAUTH_SESSION_MAX_AGE = 10 * 60
 

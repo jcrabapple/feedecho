@@ -382,6 +382,18 @@ function escapeHTML(str) {
     return div.innerHTML.replace(/"/g, '&quot;');
 }
 
+// Convert server UTC timestamps to the viewer's local timezone (issue #4).
+// <time class="local-time" datetime="2026-08-24T06:46:00Z">fallback</time>
+function formatLocalTimes() {
+    document.querySelectorAll('time.local-time').forEach((el) => {
+        const raw = el.getAttribute('datetime');
+        if (!raw) return;
+        const d = new Date(raw);
+        if (isNaN(d.getTime())) return; // keep the UTC fallback text
+        el.textContent = d.toLocaleString();
+    });
+}
+
 /* Theme toggle — persists to localStorage, falls back to system preference */
 (function () {
     const btn = document.getElementById('theme-toggle');
@@ -415,3 +427,6 @@ function escapeHTML(str) {
         render(theme);
     });
 })();
+
+// app.js is a classic script at the end of <body>, so the DOM is parsed.
+formatLocalTimes();

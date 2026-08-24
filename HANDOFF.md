@@ -44,9 +44,21 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   per-IP + per-user throttles, session_epoch invalidation); How To page
   (both modes); About page (hosted-only public disclosure). 501 sqlite +
   13 pg tests green.
+- DONE: v1.13.0 released and LIVE at https://feedecho.net (all 8 next-phase
+  items deployed; FEEDCHO_ADMIN_EMAIL bootstrapped Jason's account to admin).
+  Local self-hosted service also on v1.13.0.
+- DONE (issue #3, Kimi-reviewed): feed editing — POST /api/feeds/{id}/edit
+  updates name/URL/poll interval in place (inline row editor mirroring the
+  echo pattern). URL changes reset last_item_id (old cursor is meaningless
+  against a new feed); same-URL edits preserve it. 404 on deleted/other-
+  tenant feeds; name trimmed + required; poll interval clamped 1-1440.
+  513 sqlite + 14 pg tests green. Kimi findings applied: cancelFeedEdit
+  (cancelEdit hardcodes echo-row prefix), quote-escaping in escapeHTML,
+  deleted_at re-check in UPDATEs, blank-name validation, pg test id capture.
 - NOT STARTED: Phase 4 (billing): Stripe card-gated trial, B2 backups,
-  Cloudflare proxy decision. Private beta targeted months 3-4. The current
-  unreleased master (post-v1.12.1) has NOT been deployed to the VPS yet.
+  Cloudflare proxy decision. Private beta targeted months 3-4. Note: the
+  hosted account's verification banner is active until system SMTP is
+  configured in /admin and the link is clicked.
 
 ## 4. Key Decisions (and why)
 

@@ -1368,6 +1368,53 @@ async def add_feed(
     return RedirectResponse(url="/feeds", status_code=303)
 
 
+@app.post("/api/feeds/{feed_id}/edit")
+async def edit_feed(
+    request: Request,
+    feed_id: int,
+    name: str = Form(...),
+    url: str = Form(...),
+    poll_interval: int = Form(15),
+):
+    """Update a feed's name, URL, or poll interval in place (issue #3).
+
+    Changing the URL invalidates the cursor: last_item_id belonged to the
+    old feed, and comparing it against the new feed's item IDs could
+    silently skip (or mis-dedupe) items. Resetting it means the next poll
+    re-initializes to the newest item — the same no-backfill behaviour as
+    adding a fresh feed. Renames and interval changes keep the cursor.
+    """
+    uid = current_user_id(request)
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Feed name is required")
+    url = validate_url(url)
+    poll_interval = max(1, min(poll_interval, 1440))
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        if feed["url"] != url:
+            db.execute(
+                """
+                UPDATE feeds
+                   SET name = ?, url = ?, poll_interval = ?, last_item_id = NULL
+                 WHERE id = ? AND deleted_at IS NULL AND user_id = ?
+                """,
+                (name, url, poll_interval, feed_id, uid),
+            )
+        else:
+            db.execute(
+                "UPDATE feeds SET name = ?, url = ?, poll_interval = ? "
+                "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+                (name, url, poll_interval, feed_id, uid),
+            )
+    return RedirectResponse(url="/feeds", status_code=303)
+
+
 @app.post("/api/feeds/{feed_id}/delete")
 async def delete_feed(request: Request, feed_id: int):
     """Soft-delete a feed. Echoes and post history are preserved.

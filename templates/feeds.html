@@ -26,7 +26,10 @@
     </thead>
     <tbody>
         {% for feed in feeds %}
-        <tr>
+        <tr id="feed-row-{{ feed.id }}"
+            data-name="{{ feed.name | e }}"
+            data-url="{{ feed.url | e }}"
+            data-poll-interval="{{ feed.poll_interval }}">
             <td data-label="Name">
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
@@ -43,6 +46,7 @@
             </td>
             <td data-label="Echoes">{{ feed_echoes[feed.id] }}</td>
             <td data-label="Actions" class="action-cell">
+                <button class="btn-sm" onclick="editFeed({{ feed.id }})">Edit</button>
                 <button class="btn-sm" onclick="testFeed({{ feed.id }})">Test</button>
                 <button class="btn-sm" onclick="initFeed({{ feed.id }})">Init</button>
                 <button class="btn-sm" onclick="fetchNow({{ feed.id }})">Fetch</button>

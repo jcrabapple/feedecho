@@ -81,6 +81,41 @@ async function pauseFeed(feedId) {
     }
 }
 
+function editFeed(feedId) {
+    const row = document.getElementById(`feed-row-${feedId}`);
+    if (!row) return;
+
+    // Namespaced key: editState is shared with the echo editor, whose keys
+    // are bare echo ids. 'feed-N' can never collide with a bare number.
+    const key = 'feed-' + feedId;
+    editState.set(key, row.innerHTML);
+
+    const name = row.dataset.name;
+    const url = row.dataset.url;
+    const pollInterval = row.dataset.pollInterval || '15';
+
+    row.innerHTML = `<td colspan="7">
+        <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form">
+            <div class="form-row">
+                <label>Name
+                    <input type="text" name="name" value="${escapeHTML(name)}" required>
+                </label>
+                <label>Feed URL
+                    <input type="url" name="url" value="${escapeHTML(url)}" required>
+                </label>
+                <label>Poll interval (min)
+                    <input type="number" name="poll_interval" min="1" max="1440" value="${pollInterval}">
+                </label>
+            </div>
+            <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
+            <div class="form-row edit-actions">
+                <button type="submit" class="btn-sm">Save</button>
+                <button type="button" class="btn-sm btn-danger" onclick="cancelFeedEdit(${feedId})">Cancel</button>
+            </div>
+        </form>
+    </td>`;
+}
+
 async function retryPost(postedId) {
     try {
         const resp = await fetch(`/api/history/${postedId}/retry`, { method: 'POST' });
@@ -283,6 +318,15 @@ function cancelEdit(echoId) {
     }
 }
 
+function cancelFeedEdit(feedId) {
+    const key = 'feed-' + feedId;
+    const row = document.getElementById(`feed-row-${feedId}`);
+    if (row && editState.has(key)) {
+        row.innerHTML = editState.get(key);
+        editState.delete(key);
+    }
+}
+
 async function previewTemplate(btn) {
     const form = btn.closest('form');
     if (!form) return;
@@ -333,7 +377,9 @@ async function previewTemplate(btn) {
 function escapeHTML(str) {
     const div = document.createElement('div');
     div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
+    // innerHTML serialization escapes & < > but NOT double quotes; these
+    // helpers interpolate into double-quoted attributes, so escape them too.
+    return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 /* Theme toggle — persists to localStorage, falls back to system preference */

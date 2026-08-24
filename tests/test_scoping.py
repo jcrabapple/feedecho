@@ -96,6 +96,24 @@ class TestFeedIsolation:
         _seed_feed_for_a(env)
         assert client_b.post("/api/feeds/1/fetch").status_code == 404
 
+    def test_b_cannot_edit_as_feed(self, env, client_b):
+        _seed_feed_for_a(env)
+        resp = client_b.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Hijacked",
+                "url": "https://example.org/hijacked.xml",
+                "poll_interval": "15",
+            },
+        )
+        assert resp.status_code == 404
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT name, url FROM feeds WHERE id = 1"
+            ).fetchone()
+        assert row["name"] == "A feed"
+        assert row["url"] == "https://example.com/a"
+
 
 class TestEchoIsolation:
     def test_b_cannot_attach_echo_to_as_feed(self, env, client_b):

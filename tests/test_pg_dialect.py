@@ -287,3 +287,51 @@ class TestAppOnPostgres:
         assert resp.status_code == 200
         assert "boss@example.com" in resp.text
         assert "minion@example.com" in resp.text
+
+    def test_feed_edit_roundtrip_on_pg(self, pg_env, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import auth as auth_mod
+        import security
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash)"
+                " VALUES (9, 'pg@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, poll_interval, last_item_id, user_id)"
+                " VALUES ('PG Feed', 'https://example.com/feed.xml', 15, 'item-1', 9)"
+            )
+            feed_id = db.execute(
+                "SELECT id FROM feeds WHERE user_id = 9"
+            ).fetchone()["id"]
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(9, "pg@example.com"))
+            edit = c.post(
+                f"/api/feeds/{feed_id}/edit",
+                data={
+                    "name": "PG Renamed",
+                    "url": "https://example.com/other.xml",
+                    "poll_interval": "45",
+                },
+                follow_redirects=False,
+            )
+            page = c.get("/feeds")
+        assert edit.status_code == 303
+        assert page.status_code == 200
+        assert "PG Renamed" in page.text
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT name, url, poll_interval, last_item_id FROM feeds"
+                f" WHERE id = {feed_id}"
+            ).fetchone()
+        assert row["name"] == "PG Renamed"
+        assert row["url"] == "https://example.com/other.xml"
+        assert row["poll_interval"] == 45
+        assert row["last_item_id"] is None

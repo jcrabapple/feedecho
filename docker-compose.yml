@@ -16,6 +16,9 @@ services:
       # Public base URL — required for Mastodon OAuth callbacks
       # e.g. https://feedecho.example.com/oauth/callback
       - FEEDCHO_CALLBACK_URL=${FEEDCHO_CALLBACK_URL:-http://localhost:8453/oauth/callback}
+      # Link shown behind the "FeedEcho" application name on Mastodon posts.
+      # Defaults to the project repo; set this to your own install's URL.
+      - FEEDCHO_APP_WEBSITE=${FEEDCHO_APP_WEBSITE:-}
 
 volumes:
   feedecho-data:

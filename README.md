@@ -88,7 +88,9 @@ docker run -d --name feedecho \
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `FEEDCHO_AUTH_TOKEN` | yes (for any real deployment) | Shared-secret login for the web UI. If unset, auth is **disabled** — only safe on localhost. |
-| `FEEDCHO_CALLBACK_URL` | for Mastodon OAuth | Public callback URL, e.g. `https://feedecho.example.com/oauth/callback`. Must match the URL reachable by your browser. |
+| `FEEDCHO_CALLBACK_URL` | for Mastodon OAuth | Public callback URL, e.g. `https://feedecho.example.com/oauth/callback`. Must match the URL reachable by your browser. Derived from `FEEDCHO_BASE_URL` when unset. |
+| `FEEDCHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. |
+| `FEEDCHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDCHO_BASE_URL`, then to the project repo. |
 | `FEEDCHO_DB_PATH` | no | SQLite path (default `/app/data/feedecho.db` in Docker, `./feedecho.db` otherwise) |
 | `FEEDCHO_STATE_SECRET` | no | OAuth state signing secret (defaults to `FEEDCHO_AUTH_TOKEN`) |
 
@@ -261,7 +263,8 @@ The OAuth callback endpoints (`/oauth/connect`, `/oauth/callback`) are exempt fr
 ### OAuth flow
 
 - The OAuth state parameter is **HMAC-signed** (`hmac.compare_digest`, SHA-256). Format: `<nonce>|<instance>|<signature>`. The signature covers the nonce and instance, preventing CSRF and tampering with the instance field. A forged state token without the secret is rejected.
-- The callback URL is configurable via the `FEEDCHO_CALLBACK_URL` environment variable. If unset, it defaults to `https://feedecho.example.com/oauth/callback`. Self-hosters should set this to their public URL.
+- The callback URL is configurable via the `FEEDCHO_CALLBACK_URL` environment variable. If unset, it is derived from `FEEDCHO_BASE_URL` (`<base>/oauth/callback`), and only falls back to `https://feedecho.example.com/oauth/callback` when neither is set. Self-hosters should set one of the two.
+- Mastodon shows an application name on every post, linked to the `website` recorded when FeedEcho registered its OAuth app on your instance. That website is `FEEDCHO_APP_WEBSITE` if set, otherwise `FEEDCHO_BASE_URL`, otherwise the project repo. Both the website and the callback URL are stored alongside the cached client credentials in `oauth_apps`, and changing either re-registers the app on the next connect — Mastodon's API has no way to edit an existing registration, so a drifted callback URL would otherwise fail as a redirect mismatch. **Already-connected accounts keep the old link** — their access token is bound to the old app registration, so reconnect the account to update what appears on new posts.
 
 ### Secrets handling
 
@@ -289,7 +292,8 @@ The OAuth callback endpoints (`/oauth/connect`, `/oauth/callback`) are exempt fr
 | Environment variable | Purpose | Default |
 |---------------------|---------|---------|
 | `FEEDCHO_AUTH_TOKEN` | Shared-secret auth token (enables login page + API auth, also signs OAuth state) | Unset (auth disabled) |
-| `FEEDCHO_CALLBACK_URL` | Public URL for OAuth callback | `https://feedecho.example.com/oauth/callback` |
+| `FEEDCHO_CALLBACK_URL` | Public URL for OAuth callback | `<FEEDCHO_BASE_URL>/oauth/callback`, else `https://feedecho.example.com/oauth/callback` |
+| `FEEDCHO_APP_WEBSITE` | Website registered with the Mastodon OAuth app (the link on posts) | `FEEDCHO_BASE_URL`, else `https://github.com/jcrabapple/feedecho` |
 | `FEEDCHO_DB_PATH` | Path to SQLite database | `./feedecho.db` |
 
 ### What FeedEcho does NOT do

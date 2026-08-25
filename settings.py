@@ -16,12 +16,30 @@ DATABASE_URL = os.environ.get("FEEDCHO_DATABASE_URL", "")
 # consumers use truthiness checks; empty string would be equivalent but
 # None preserves the original contract).
 AUTH_TOKEN = os.environ.get("FEEDCHO_AUTH_TOKEN")
-CALLBACK_URL = os.environ.get(
-    "FEEDCHO_CALLBACK_URL",
-    "https://feedecho.example.com/oauth/callback",
-)
 STATE_SECRET = os.environ.get("FEEDCHO_STATE_SECRET", "")
-BASE_URL = os.environ.get("FEEDCHO_BASE_URL", "")
+BASE_URL = os.environ.get("FEEDCHO_BASE_URL", "").strip()
+
+# Where the source lives. Used as the last-resort website for the Mastodon
+# OAuth app registration so posts never advertise a placeholder domain.
+PROJECT_URL = "https://github.com/jcrabapple/feedecho"
+
+# An unset callback URL derives from BASE_URL when one is configured; the
+# example.com placeholder is only used when the deployment URL is unknown
+# (where OAuth would fail loudly on redirect mismatch anyway).
+CALLBACK_URL = os.environ.get("FEEDCHO_CALLBACK_URL", "").strip() or (
+    f"{BASE_URL.rstrip('/')}/oauth/callback"
+    if BASE_URL
+    else "https://feedecho.example.com/oauth/callback"
+)
+
+# The "website" sent with the OAuth app registration. Mastodon renders it as
+# the link behind the application name on every post, so it must resolve:
+# an explicit override wins, then this deployment's own URL, then the repo.
+APP_WEBSITE = (
+    os.environ.get("FEEDCHO_APP_WEBSITE", "").strip()
+    or BASE_URL.rstrip("/")
+    or PROJECT_URL
+)
 ADMIN_EMAIL = os.environ.get("FEEDCHO_ADMIN_EMAIL", "")
 SESSION_SECRET = os.environ.get("FEEDCHO_SESSION_SECRET", "")
 ALLOW_SQLITE_FALLBACK = (

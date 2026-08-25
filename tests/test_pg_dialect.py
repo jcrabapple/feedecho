@@ -176,6 +176,69 @@ class TestPostgresMigration:
             ).fetchall()
         assert "user_id" in {c["column_name"] for c in columns}
 
+    def test_oauth_apps_website_upsert(self, pg_env, monkeypatch):
+        """Issue #7: the website column must exist on PG and the registration
+        upsert (4 columns, ON CONFLICT) must round-trip through dict_row."""
+        import oauth
+        import settings as settings_mod
+
+        database.init_db()
+        with database.get_db() as db:
+            columns = db.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                 WHERE table_name = 'oauth_apps'
+                """
+            ).fetchall()
+        assert "website" in {c["column_name"] for c in columns}
+
+        calls = []
+
+        class _Resp:
+            def __init__(self, n):
+                self._n = n
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"client_id": f"pg-cid-{self._n}", "client_secret": "s"}
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, data=None, **kw):
+                calls.append(data)
+                return _Resp(len(calls))
+
+        monkeypatch.setattr(oauth.httpx, "Client", _Client)
+        monkeypatch.setattr(oauth, "validate_outbound_url", lambda url: None)
+        monkeypatch.setattr(settings_mod, "APP_WEBSITE", "https://pg.example.org")
+
+        first = oauth.get_or_create_app("https://pg.mastodon.example")
+        assert calls[0]["website"] == "https://pg.example.org"
+        # Cached path: reads row["website"] off a psycopg dict_row.
+        assert oauth.get_or_create_app("https://pg.mastodon.example") == first
+        assert len(calls) == 1
+
+        # Changed config re-registers through the ON CONFLICT branch.
+        monkeypatch.setattr(settings_mod, "APP_WEBSITE", "https://pg2.example.org")
+        second = oauth.get_or_create_app("https://pg.mastodon.example")
+        assert len(calls) == 2
+        assert second["client_id"] != first["client_id"]
+        with database.get_db() as db:
+            rows = db.execute("SELECT client_id, website FROM oauth_apps").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["website"] == "https://pg2.example.org"
+        assert rows[0]["client_id"] == second["client_id"]
+
     def test_users_has_is_admin_column(self, pg_env):
         database.init_db()
         with database.get_db() as db:

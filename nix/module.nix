@@ -69,6 +69,17 @@ in {
       description = "Public callback URL for Mastodon OAuth.";
     };
 
+    appWebsite = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      example = "https://feedecho.example.com";
+      description = ''
+        Website registered with the Mastodon OAuth app. Mastodon links the
+        "FeedEcho" application name on every post to this URL. Empty falls
+        back to the project repository.
+      '';
+    };
+
     dataDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/feedecho";
@@ -101,6 +112,8 @@ in {
       environment = {
         FEEDCHO_DB_PATH = "${cfg.dataDir}/feedecho.db";
         FEEDCHO_CALLBACK_URL = cfg.callbackUrl;
+      } // lib.optionalAttrs (cfg.appWebsite != "") {
+        FEEDCHO_APP_WEBSITE = cfg.appWebsite;
       };
 
       serviceConfig = {

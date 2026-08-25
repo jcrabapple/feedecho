@@ -497,9 +497,16 @@ def init_db_sqlite() -> None:
                 instance TEXT NOT NULL UNIQUE,
                 client_id TEXT NOT NULL,
                 client_secret TEXT NOT NULL,
+                website TEXT,
+                redirect_uris TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Apps registered before these were recorded carry NULL, which forces
+        # one re-registration: the post link stops pointing at the old
+        # example.com placeholder, and a drifted callback URL gets refreshed.
+        _add_column_if_missing(db, "oauth_apps", "website", "TEXT")
+        _add_column_if_missing(db, "oauth_apps", "redirect_uris", "TEXT")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS oauth_states (
@@ -779,9 +786,15 @@ def init_db_postgres() -> None:
                 instance TEXT NOT NULL UNIQUE,
                 client_id TEXT NOT NULL,
                 client_secret TEXT NOT NULL,
+                website TEXT,
+                redirect_uris TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # See the sqlite branch: NULL columns force one re-registration so
+        # existing installs stop advertising the example.com placeholder.
+        _add_column_if_missing(db, "oauth_apps", "website", "TEXT")
+        _add_column_if_missing(db, "oauth_apps", "redirect_uris", "TEXT")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS oauth_states (

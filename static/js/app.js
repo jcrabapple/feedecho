@@ -162,6 +162,8 @@ async function toggleEcho(echoId) {
         const data = await resp.json();
         if (data.success) {
             location.reload();
+        } else {
+            alert(data.detail || data.error || 'Failed to toggle echo');
         }
     } catch (e) {
         alert('Request failed: ' + e.message);
@@ -189,10 +191,13 @@ function editEcho(echoId) {
     const dripLimit = row.dataset.dripLimit || '0';
     const enabled = row.dataset.enabled === '1';
 
-    const feedOpts = document.getElementById('feed-options').innerHTML;
-    const mastoOpts = document.getElementById('mastodon-options').innerHTML;
-    const emailOpts = document.getElementById('email-options').innerHTML;
-    const blueskyOpts = document.getElementById('bluesky-options').innerHTML;
+    // .trim(): an empty {% for %} still leaves newlines and indentation, which
+    // are truthy, so every destination type was offered even with zero accounts
+    // of that type. The create form guards with {% if accounts %} instead.
+    const feedOpts = document.getElementById('feed-options').innerHTML.trim();
+    const mastoOpts = document.getElementById('mastodon-options').innerHTML.trim();
+    const emailOpts = document.getElementById('email-options').innerHTML.trim();
+    const blueskyOpts = document.getElementById('bluesky-options').innerHTML.trim();
 
     const mastoStyle = destType === 'mastodon' ? '' : 'display:none';
     const emailStyle = destType === 'email' ? '' : 'display:none';
@@ -243,8 +248,10 @@ function editEcho(echoId) {
             <div class="form-row">
                 <label>Template
                     <textarea name="template" rows="3">${escapeHTML(template)}</textarea>
-                    <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
                 </label>
+                <!-- Button outside the label: interactive content inside <label>
+                     is invalid HTML and activating it also targets the textarea. -->
+                <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
             </div>
             <div class="form-row">
                 <label>Keyword filter
@@ -347,6 +354,10 @@ async function previewTemplate(btn) {
     if (!box) {
         box = document.createElement('div');
         box.className = 'template-preview';
+        // Injected asynchronously: without a live region a screen reader never
+        // learns the preview rendered.
+        box.setAttribute('role', 'status');
+        box.setAttribute('aria-live', 'polite');
         btn.parentElement.appendChild(box);
     }
     box.innerHTML = '<p class="hint">Rendering against latest feed items...</p>';

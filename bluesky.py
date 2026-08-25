@@ -148,8 +148,16 @@ def resolve_pds(handle: str) -> tuple[str, str]:
         except (httpx.HTTPError, ValueError) as exc:
             raise BlueskyError(f"Could not fetch DID document for '{handle}'") from exc
 
+    # The DID document comes from a remote (for did:web, handle-controlled)
+    # host, so nothing about its shape is guaranteed. Without these checks a
+    # document that is a JSON array or has non-dict service entries raised
+    # AttributeError, which none of the callers' except clauses catch.
+    if not isinstance(doc, dict):
+        raise BlueskyError(f"Invalid DID document for '{handle}'")
     pds = ""
     for service in doc.get("service") or []:
+        if not isinstance(service, dict):
+            continue
         endpoint = service.get("serviceEndpoint")
         if service.get("id") == "#atproto_pds" and isinstance(endpoint, str) and endpoint:
             pds = endpoint

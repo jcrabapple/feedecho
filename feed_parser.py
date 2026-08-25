@@ -5,14 +5,15 @@ author, date, and raw data for template access.
 """
 
 import re
+import calendar
 import hashlib
 import html
 import ipaddress
+import json
 import socket
 import httpx
 import feedparser
 from datetime import datetime, timezone
-from time import mktime
 from urllib.parse import urlparse
 
 
@@ -113,45 +114,63 @@ def fetch_feed(url: str) -> dict:
 
     headers = {"User-Agent": USER_AGENT}
     with httpx.Client(headers=headers, follow_redirects=False, timeout=30) as client:
-        response = _fetch_with_redirect_validation(client, url, headers)
-        content_type = response.headers.get("content-type", "")
-
-    # Cap feed size to prevent OOM from hostile feeds
-    if len(response.content) > MAX_FEED_SIZE:
-        raise ValueError(f"Feed too large: {len(response.content)} bytes (max {MAX_FEED_SIZE})")
+        content, content_type = _fetch_with_redirect_validation(
+            client, url, headers, MAX_FEED_SIZE
+        )
 
     # JSON Feed
     if "json" in content_type or url.endswith(".json"):
-        return parse_json_feed(response.json())
+        return parse_json_feed(json.loads(content))
 
     # RSS/Atom via feedparser
-    parsed = feedparser.parse(response.content)
+    parsed = feedparser.parse(content)
     return parse_rss_feed(parsed, url)
 
 
 def _fetch_with_redirect_validation(
-    client: httpx.Client, url: str, headers: dict
-) -> httpx.Response:
-    """Fetch a URL, manually following redirects while validating each hop.
+    client: httpx.Client, url: str, headers: dict, max_bytes: int = MAX_FEED_SIZE
+) -> tuple[bytes, str]:
+    """Fetch a URL with a hard size cap, validating every redirect hop.
 
     Prevents SSRF via redirect: an attacker can host a public feed that
     redirects to an internal IP. This function validates every Location
     header before following it.
+
+    The body is streamed and abandoned as soon as it exceeds ``max_bytes``.
+    Checking the size after a buffered read (the previous behaviour) meant a
+    hostile feed or image could make the worker hold the whole body in memory
+    before the cap rejected it.
+
+    Returns (body, content-type). Raises ValueError when the cap is exceeded.
     """
     for _ in range(MAX_REDIRECTS + 1):
-        response = client.get(url, headers=headers)
+        with client.stream("GET", url, headers=headers) as response:
+            if response.is_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect response had no Location header")
+                # Resolve relative redirects against the current URL
+                next_url = str(httpx.URL(url).join(location))
+                validate_outbound_url(next_url)
+                url = next_url
+                continue
 
-        if not response.is_redirect:
             response.raise_for_status()
-            return response
-
-        location = response.headers.get("location")
-        if not location:
-            raise ValueError("Redirect response had no Location header")
-
-        # Resolve relative redirects against the current URL
-        url = str(httpx.URL(url).join(location))
-        validate_outbound_url(url)
+            declared = response.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > max_bytes:
+                raise ValueError(
+                    f"Response too large: {declared} bytes (max {max_bytes})"
+                )
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError(
+                        f"Response too large: exceeded {max_bytes} bytes"
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks), response.headers.get("content-type", "")
 
     raise ValueError(f"Too many redirects (max {MAX_REDIRECTS})")
 
@@ -357,15 +376,15 @@ def fetch_image(url: str) -> tuple[bytes, str] | None:
     headers = {"User-Agent": USER_AGENT}
     try:
         with httpx.Client(headers=headers, follow_redirects=False, timeout=30) as client:
-            response = _fetch_with_redirect_validation(client, url, headers)
-            content_type = response.headers.get("content-type", "").split(";")[0].strip()
+            content, raw_type = _fetch_with_redirect_validation(
+                client, url, headers, MAX_IMAGE_SIZE
+            )
+            content_type = raw_type.split(";")[0].strip()
 
-            if len(response.content) > MAX_IMAGE_SIZE:
-                return None
             if content_type not in ALLOWED_IMAGE_TYPES:
                 return None
 
-            return response.content, content_type
+            return content, content_type
     except Exception:
         return None
 
@@ -395,7 +414,10 @@ def _parse_date_struct(entry: dict) -> str | None:
         parsed = entry.get(field)
         if parsed:
             try:
-                dt = datetime.fromtimestamp(mktime(parsed), tz=timezone.utc)
+                # timegm, not mktime: feedparser's *_parsed struct_times are
+                # already UTC, and mktime interprets them as local wall time,
+                # so every item date was shifted by the host's UTC offset.
+                dt = datetime.fromtimestamp(calendar.timegm(parsed), tz=timezone.utc)
                 return dt.isoformat()
             except (ValueError, OverflowError):
                 pass

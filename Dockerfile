@@ -21,6 +21,14 @@ COPY . .
 VOLUME /app/data
 ENV FEEDCHO_DB_PATH=/app/data/feedecho.db
 
+# Run as a normal user: this process parses untrusted remote feed content, and
+# root in the container also means a root-owned data volume that a later
+# non-root image could not write.
+RUN useradd --create-home --uid 10001 --user-group feedecho \
+    && mkdir -p /app/data \
+    && chown -R feedecho:feedecho /app
+USER feedecho
+
 EXPOSE 8453
 
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8453"]

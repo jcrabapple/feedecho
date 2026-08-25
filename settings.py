@@ -1,5 +1,6 @@
 """Central configuration — the single source of truth for environment-driven settings."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -79,4 +80,15 @@ def validate_config() -> None:
     if len(SESSION_SECRET) < 32:
         raise RuntimeError(
             "FEEDCHO_SESSION_SECRET must be at least 32 characters in multi mode"
+        )
+    if not BASE_URL:
+        # Deliberately a warning, not a raise: unlike DATABASE_URL and
+        # SESSION_SECRET, an unset BASE_URL degrades one feature (the links in
+        # verification and reset email) rather than risking data or auth, and
+        # raising here would turn an upgrade into an outage for any existing
+        # multi-mode self-hoster running without it. auth.py refuses to send
+        # those emails rather than mailing a relative link nobody can open.
+        logging.getLogger("feedecho").warning(
+            "FEEDCHO_BASE_URL is not set: account verification and password "
+            "reset emails cannot be sent (their links would be relative)."
         )

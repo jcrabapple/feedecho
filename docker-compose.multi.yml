@@ -68,9 +68,13 @@ services:
       - "80:80"
       - "443:443"
     # The Caddyfile's {$ACME_EMAIL} / {$FEEDECHO_DOMAIN} placeholders are
-    # evaluated from the caddy container's own environment.
-    env_file:
-      - .env
+    # evaluated from the caddy container's own environment. Only those two are
+    # passed: loading the whole .env put FEEDCHO_SESSION_SECRET (which signs
+    # every tenant's session cookie) and POSTGRES_PASSWORD into the
+    # internet-facing TLS terminator for no reason.
+    environment:
+      - ACME_EMAIL=${ACME_EMAIL:?set ACME_EMAIL in .env}
+      - FEEDECHO_DOMAIN=${FEEDECHO_DOMAIN:?set FEEDECHO_DOMAIN in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

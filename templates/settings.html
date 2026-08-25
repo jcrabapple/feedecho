@@ -8,9 +8,9 @@
     <p class="hint">Configure the SMTP server used to send email echoes. Required if you want to route feed items to email addresses.</p>
 
     {% if smtp_configured %}
-    <div class="alert alert-success">SMTP is configured ({{ smtp_settings.smtp_host }}:{{ smtp_settings.smtp_port }}).</div>
+    <div class="alert alert-success" role="status">SMTP is configured ({{ smtp_settings.smtp_host }}:{{ smtp_settings.smtp_port }}).</div>
     {% else %}
-    <div class="alert alert-warning">SMTP not configured. Email echoes will fail until this is set up.</div>
+    <div class="alert alert-warning" role="alert">SMTP not configured. Email echoes will fail until this is set up.</div>
     {% endif %}
 
     <form method="post" action="/api/settings/smtp" class="echo-form">
@@ -50,7 +50,9 @@
     </form>
 
     <form method="post" action="/api/settings/smtp/test" class="inline-form" style="margin-top: 0.5rem;">
-        <input type="email" name="test_email" placeholder="email@example.com (optional, defaults to from address)">
+        <label class="sr-only" for="smtp-test-email">Test recipient email address</label>
+        <input type="email" name="test_email" id="smtp-test-email"
+               placeholder="email@example.com (optional, defaults to from address)">
         <button type="submit" class="btn-sm">Send Test Email</button>
     </form>
 </section>
@@ -88,9 +90,9 @@
     <p class="hint">When enabled, FeedEcho generates alt text for attached images using an OpenAI-compatible vision API. Requires a vision-capable model endpoint. If disabled or unconfigured, images are uploaded without alt text.</p>
 
     {% if alt_text_configured %}
-    <div class="alert alert-success">Vision API configured ({{ alt_text_settings.alt_text_ai_base_url }}, model: {{ alt_text_settings.alt_text_ai_model }}).</div>
+    <div class="alert alert-success" role="status">Vision API configured ({{ alt_text_settings.alt_text_ai_base_url }}, model: {{ alt_text_settings.alt_text_ai_model }}).</div>
     {% else %}
-    <div class="alert alert-warning">Vision API not configured. Image attachments will be uploaded without alt text.</div>
+    <div class="alert alert-warning" role="alert">Vision API not configured. Image attachments will be uploaded without alt text.</div>
     {% endif %}
 
     <form method="post" action="/api/settings/alt-text" class="echo-form">

@@ -6,7 +6,7 @@
         <h1>FeedEcho</h1>
         <p class="auth-subtitle">Create your account. 14-day free trial, no card required.</p>
         {% if error %}
-        <div class="alert alert-error">{{ error }}</div>
+        <div class="alert alert-error" role="alert">{{ error }}</div>
         {% endif %}
         <form method="post" action="/register" class="auth-form">
             <div class="form-row">

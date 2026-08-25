@@ -10,16 +10,18 @@
         <p class="auth-subtitle">Enter your access token to continue.</p>
         {% endif %}
         {% if error %}
-        <div class="alert alert-error">{{ error }}</div>
+        <div class="alert alert-error" role="alert">{{ error }}</div>
         {% endif %}
         {% if multi %}
         <form method="post" action="/login" class="auth-form">
             <div class="form-row">
-                <input type="email" name="email" placeholder="Email" required
+                <label for="login-email">Email</label>
+                <input type="email" name="email" id="login-email" placeholder="Email" required
                        autocomplete="email" autofocus class="auth-input">
             </div>
             <div class="form-row">
-                <input type="password" name="password" placeholder="Password" required
+                <label for="login-password">Password</label>
+                <input type="password" name="password" id="login-password" placeholder="Password" required
                        autocomplete="current-password" class="auth-input">
             </div>
             <button type="submit" class="btn">Log in</button>
@@ -28,7 +30,8 @@
         {% else %}
         <form method="post" action="/login" class="auth-form">
             <div class="form-row">
-                <input type="password" name="token" placeholder="Access token" required
+                <label for="login-token">Access token</label>
+                <input type="password" name="token" id="login-token" placeholder="Access token" required
                        autocomplete="off" autofocus class="auth-input">
             </div>
             <button type="submit" class="btn">Log in</button>

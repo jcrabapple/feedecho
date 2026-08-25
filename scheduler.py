@@ -702,6 +702,26 @@ def _render_and_dispatch(
     return gave_up
 
 
+def _still_owns_claim(posted_id: int, claim_token: str) -> bool:
+    """Whether this worker still holds the claim on a pending row.
+
+    Dispatch paths do slow network I/O between _claim_post and the actual
+    send. If the lease lapses and another worker reclaims the row, both would
+    post. Check immediately before the irreversible step.
+    """
+    with get_db() as db:
+        return (
+            db.execute(
+                """
+                SELECT 1 FROM posted_items
+                 WHERE id = ? AND status = 'pending' AND claim_token = ?
+                """,
+                (posted_id, claim_token),
+            ).fetchone()
+            is not None
+        )
+
+
 def _update_post(
     posted_id: int,
     claim_token: str,
@@ -873,6 +893,19 @@ def _send_mastodon(
                     item["id"],
                 )
 
+    # Re-validate claim ownership immediately before the post: the image
+    # fetch, media upload and alt-text generation above are slow network I/O,
+    # so the lease can lapse and another worker reclaim the row. Without this
+    # both workers post and the loser's _update_post silently no-ops. The
+    # Bluesky path has always done this.
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before Mastodon dispatch; skipping item %s",
+            echo["id"],
+            item["id"],
+        )
+        return False
+
     try:
         post_status(
             instance=account["instance"],
@@ -925,6 +958,16 @@ def _send_email_echo(
             f"Email account {email_account_id} not found",
         )
 
+    # Email is a one-way send too, so the same claim re-check applies: SMTP
+    # connect and delivery can outlast the lease.
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before email dispatch; skipping item %s",
+            echo["id"],
+            item["id"],
+        )
+        return False
+
     try:
         send_email(
             to_email=account["email"],
@@ -938,7 +981,6 @@ def _send_email_echo(
     except Exception:
         logger.exception("Echo %s: email delivery failed", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], "Email delivery failed")
-
     ok = _update_post(posted_id, claim_token, "success")
     if ok:
         record_success(echo["id"])
@@ -1137,15 +1179,7 @@ def _send_bluesky(
 
     # Re-validate claim ownership immediately before the post: if the lease
     # lapsed and another worker reclaimed this row, posting would duplicate.
-    with get_db() as db:
-        owned = db.execute(
-            """
-            SELECT 1 FROM posted_items
-             WHERE id = ? AND status = 'pending' AND claim_token = ?
-            """,
-            (posted_id, claim_token),
-        ).fetchone()
-    if not owned:
+    if not _still_owns_claim(posted_id, claim_token):
         logger.warning(
             "Echo %s: claim lost before Bluesky dispatch; skipping item %s",
             echo["id"],
@@ -1260,10 +1294,14 @@ def _queue_for_digest(
             (echo_id, item_id, item.get("title", ""), item.get("link", ""), content),
         )
 
-    # Mark the posted_item as 'queued' — the digest job will finalize it
+    # Mark the posted_item as 'queued' — the digest job will finalize it.
+    # No record_success here: queueing is a hold, not a delivery, and clearing
+    # the alert state would send a spurious "recovered" email and let a
+    # genuinely broken SMTP path keep failing silently until the threshold
+    # re-accumulates. flush_digests records the success once the mail is sent.
+    # (_queue_for_drip already worked this way; see the note there.)
     ok = _update_post(posted_id, claim_token, "queued")
     if ok:
-        record_success(echo_id)
         logger.info(
             "Echo %s: item %s queued for digest delivery",
             echo_id,
@@ -1459,6 +1497,52 @@ def flush_drips() -> None:
                 released[echo_id] = released.get(echo_id, 0) + 1
 
 
+def _discard_orphaned_digest_items() -> None:
+    """Finalize digest items whose echo or destination no longer qualifies.
+
+    flush_digests only picks up enabled, non-deleted echoes with a live email
+    account (INNER JOIN). Anything else was never sent and never cleaned up:
+    deleting an echo (which sets enabled = 0) or its email account stranded
+    its queued items forever, leaving posted_items rows stuck at 'queued' and
+    digest_items growing without bound. Mirrors _discard_drip_backlog, which
+    already did this for drip mode.
+    """
+    with get_db() as db:
+        orphans = db.execute(
+            """
+            SELECT DISTINCT d.echo_id
+              FROM digest_items d
+              LEFT JOIN echoes e ON e.id = d.echo_id
+              LEFT JOIN feeds f ON f.id = e.feed_id
+              LEFT JOIN email_accounts ea
+                     ON ea.id = e.destination_id AND e.destination_type = 'email'
+             WHERE e.id IS NULL
+                OR e.enabled = 0
+                OR e.deleted_at IS NOT NULL
+                OR f.id IS NULL
+                OR f.deleted_at IS NOT NULL
+                OR ea.id IS NULL
+            """
+        ).fetchall()
+
+    for row in orphans:
+        echo_id = row["echo_id"]
+        reason = "Digest discarded: echo or destination is no longer active"
+        with get_db() as db:
+            db.execute(
+                """UPDATE posted_items
+                      SET status = 'gave_up',
+                          error_message = ?,
+                          claimed_at = NULL,
+                          claim_token = NULL,
+                          posted_at = ?
+                    WHERE echo_id = ? AND status = 'queued'""",
+                (reason, _now(), echo_id),
+            )
+            db.execute("DELETE FROM digest_items WHERE echo_id = ?", (echo_id,))
+        logger.info("Echo %s: %s", echo_id, reason)
+
+
 def flush_digests() -> None:
     """Send pending digest items as batched emails and finalize them.
 
@@ -1467,6 +1551,10 @@ def flush_digests() -> None:
     deletes the items from digest_items and updates posted_items
     from 'queued' to 'success'.
     """
+    # Sweep first: stranded items are invisible to the query below, so nothing
+    # would ever clear them.
+    _discard_orphaned_digest_items()
+
     with get_db() as db:
         # Find all echoes that have pending digest items
         pending_echoes = db.execute("""

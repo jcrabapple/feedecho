@@ -472,3 +472,262 @@ class TestAltTextTenantScopingAndSsrf:
         monkeypatch.setattr(alt_text, "RETRY_DELAY", 0)
         monkeypatch.setattr(alt_text, "validate_outbound_url", lambda url: url)
         assert alt_text.generate_alt_text(b"\x89PNG", "image/png", user_id=1) == ""
+
+
+class TestSecondBatchReviewFixes:
+    """A2, A6, A7, A10, B8, B10, D3 from the same review."""
+
+    def test_smtp_settings_reject_header_injection(self, client, temp_db):
+        """A2: these values become mail headers, so CRLF must fail at save time."""
+        resp = client.post(
+            "/api/settings/smtp",
+            data={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": "587",
+                "smtp_username": "user@example.com",
+                "smtp_from_name": "FeedEcho\r\nBcc: victim@example.com",
+                "smtp_from_email": "feedecho@example.com",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert "smtp_from_name" in resp.text
+        with get_db() as db:
+            stored = db.execute(
+                "SELECT COUNT(*) AS c FROM settings WHERE key = 'smtp_from_name'"
+            ).fetchone()["c"]
+        assert stored == 0, "nothing may be persisted when validation fails"
+
+    def test_smtp_settings_reject_out_of_range_port(self, client, temp_db):
+        resp = client.post(
+            "/api/settings/smtp",
+            data={"smtp_host": "smtp.example.com", "smtp_port": "70000"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert "1 and 65535" in resp.text
+
+    def test_smtp_settings_reject_malformed_from_address(self, client, temp_db):
+        resp = client.post(
+            "/api/settings/smtp",
+            data={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": "587",
+                "smtp_from_email": "not-an-address",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert "valid email" in resp.text
+
+    def test_valid_smtp_settings_still_save(self, client, temp_db):
+        resp = client.post(
+            "/api/settings/smtp",
+            data={
+                "smtp_host": " smtp.example.com ",
+                "smtp_port": "587",
+                "smtp_username": "user@example.com",
+                "smtp_from_name": "FeedEcho",
+                "smtp_from_email": "feedecho@example.com",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        with get_db() as db:
+            host = db.execute(
+                "SELECT value FROM settings WHERE key = 'smtp_host'"
+            ).fetchone()["value"]
+        assert host == "smtp.example.com", "values are stripped before storage"
+
+    def _seed_destination_and_echo(self, kind: str) -> None:
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url) VALUES (1, 'F', 'https://e.example.com/f')"
+            )
+            if kind == "mastodon":
+                db.execute(
+                    "INSERT INTO accounts (id, name, username, instance, access_token)"
+                    " VALUES (1, 'A', 'a', 'https://m.example.com', 'tok')"
+                )
+            else:
+                db.execute(
+                    "INSERT INTO email_accounts (id, name, email)"
+                    " VALUES (1, 'E', 'to@example.com')"
+                )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, template)"
+                f" VALUES (1, 1, '{kind}', 1, '{{{{ title }}}}')"
+            )
+
+    @pytest.mark.parametrize(
+        "kind,endpoint,table",
+        [
+            ("mastodon", "/api/accounts/1/delete", "accounts"),
+            ("email", "/api/email-accounts/1/delete", "email_accounts"),
+        ],
+    )
+    def test_destination_in_use_cannot_be_deleted(
+        self, client, temp_db, kind, endpoint, table
+    ):
+        """A6: the Bluesky delete always guarded this; the other two did not."""
+        self._seed_destination_and_echo(kind)
+        resp = client.post(endpoint, follow_redirects=False)
+        assert resp.status_code == 200, "expected the accounts page with an error"
+        assert "used by echoes" in resp.text
+        with get_db() as db:
+            remaining = db.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+        assert remaining == 1, "the destination must survive"
+
+    @pytest.mark.parametrize(
+        "kind,endpoint,table",
+        [
+            ("mastodon", "/api/accounts/1/delete", "accounts"),
+            ("email", "/api/email-accounts/1/delete", "email_accounts"),
+        ],
+    )
+    def test_unused_destination_still_deletes(
+        self, client, temp_db, kind, endpoint, table
+    ):
+        self._seed_destination_and_echo(kind)
+        with get_db() as db:
+            db.execute("UPDATE echoes SET deleted_at = '2026-01-01 00:00:00' WHERE id = 1")
+        assert client.post(endpoint, follow_redirects=False).status_code == 303
+        with get_db() as db:
+            assert db.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"] == 0
+
+    def test_single_mode_token_login_is_throttled(self, temp_db, monkeypatch):
+        """A7: the shared token was brute-forceable with no lockout."""
+        import app as app_module
+        import auth
+
+        monkeypatch.setattr(app_module.settings, "MULTI", False)
+        monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", "the-real-token")
+        monkeypatch.setattr(auth, "_login_attempts", {})
+        c = TestClient(app_module.app)
+
+        for _ in range(5):
+            resp = c.post("/login", data={"token": "wrong"}, follow_redirects=False)
+            assert "Invalid token" in resp.text
+        blocked = c.post("/login", data={"token": "wrong"}, follow_redirects=False)
+        assert "Too many failed attempts" in blocked.text
+        # Even the correct token is refused while the bucket is full.
+        assert "Too many failed attempts" in c.post(
+            "/login", data={"token": "the-real-token"}, follow_redirects=False
+        ).text
+
+    def test_non_ascii_token_is_rejected_not_a_500(self, temp_db, monkeypatch):
+        """A10: compare_digest raises TypeError on non-ASCII str arguments.
+
+        Coverage note: httpx refuses to transmit a non-ASCII cookie or header
+        value at all, so the login form is the only reachable path from a test
+        client. The middleware performs the identical byte-encoded comparison
+        (asserted directly below) for the cookie a real browser would send.
+        """
+        import app as app_module
+        import auth
+        import secrets as _secrets
+
+        monkeypatch.setattr(app_module.settings, "MULTI", False)
+        monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", "the-real-token")
+        monkeypatch.setattr(auth, "_login_attempts", {})
+        c = TestClient(app_module.app)
+
+        resp = c.post("/login", data={"token": "tökén"}, follow_redirects=False)
+        assert resp.status_code == 200 and "Invalid token" in resp.text
+
+        # The comparison the middleware runs: bytes, so no TypeError.
+        assert (
+            _secrets.compare_digest(
+                "tökén".encode("utf-8", "surrogatepass"),
+                "the-real-token".encode("utf-8", "surrogatepass"),
+            )
+            is False
+        )
+        with pytest.raises(TypeError):
+            # The pre-fix expression, for contrast.
+            _secrets.compare_digest("tökén", "the-real-token")
+
+    def test_claim_recheck_blocks_a_lost_mastodon_claim(self, temp_db, monkeypatch):
+        """B8: only the Bluesky path re-checked the claim before dispatch."""
+        import scheduler
+
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url) VALUES (1, 'F', 'https://e.example.com/f')"
+            )
+            db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token)"
+                " VALUES (1, 'A', 'a', 'https://m.example.com', 'tok')"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, template)"
+                " VALUES (1, 1, 'mastodon', 1, '{{ title }}')"
+            )
+            # Claimed by a DIFFERENT worker: this row is no longer ours.
+            db.execute(
+                "INSERT INTO posted_items (id, echo_id, item_id, status, claim_token)"
+                " VALUES (1, 1, 'i-1', 'pending', 'someone-elses-token')"
+            )
+            echo = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+
+        calls = []
+        monkeypatch.setattr(scheduler, "post_status", lambda **k: calls.append(k))
+        assert scheduler._still_owns_claim(1, "our-token") is False
+        result = scheduler._send_mastodon(
+            echo, {"id": "i-1", "title": "T"}, "T", 1, 1, "our-token"
+        )
+        assert result is False
+        # The point of the guard: no post is attempted at all. (Without it the
+        # send happens and only the follow-up _update_post no-ops, which is a
+        # duplicate public post.)
+        assert calls == [], "posted despite having lost the claim"
+
+    def test_item_dates_are_not_shifted_by_the_host_timezone(self):
+        """B10: mktime read feedparser's UTC struct_time as local wall time."""
+        from feed_parser import _parse_date_struct
+
+        # 2026-08-25 12:00:00 UTC as feedparser hands it over.
+        struct = (2026, 8, 25, 12, 0, 0, 1, 237, 0)
+        assert _parse_date_struct({"published_parsed": struct}) == (
+            "2026-08-25T12:00:00+00:00"
+        )
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            ("https://example.com/a", "https://example.com/a"),
+            ("http://example.com/a", "http://example.com/a"),
+            ("javascript:alert(document.cookie)", ""),
+            ("JavaScript:alert(1)", ""),
+            ("data:text/html;base64,PHNjcmlwdD4=", ""),
+            ("  https://example.com/b  ", "https://example.com/b"),
+            (None, ""),
+            ("", ""),
+        ],
+    )
+    def test_safe_url_filter_drops_non_http_schemes(self, url, expected):
+        """D3: autoescaping does nothing about the scheme in an href."""
+        import app as app_module
+
+        assert app_module._safe_url(url) == expected
+
+    def test_history_page_drops_a_javascript_item_url(self, client, temp_db):
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url) VALUES (1, 'F', 'https://e.example.com/f')"
+            )
+            db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token)"
+                " VALUES (1, 'A', 'a', 'https://m.example.com', 'tok')"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, template)"
+                " VALUES (1, 1, 'mastodon', 1, '{{ title }}')"
+            )
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, item_title, item_url, status)"
+                " VALUES (1, 'i-1', 'Evil', 'javascript:alert(1)', 'success')"
+            )
+        page = client.get("/history")
+        assert page.status_code == 200
+        assert "javascript:alert" not in page.text

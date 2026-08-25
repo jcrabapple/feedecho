@@ -119,7 +119,12 @@ in {
       serviceConfig = {
         User = "feedecho";
         Group = "feedecho";
+        # StateDirectory only ever creates a path under /var/lib, but dataDir is
+        # configurable and ProtectSystem = "strict" makes everything else
+        # read-only, so a non-default dataDir produced a service that could not
+        # write its own database. Grant it explicitly.
         StateDirectory = "feedecho";
+        ReadWritePaths = [ cfg.dataDir ];
         LoadCredential = "auth_token:${cfg.authTokenFile}";
         Restart = "on-failure";
         RestartSec = 5;

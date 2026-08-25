@@ -16,10 +16,10 @@
 {% endif %}
 
 {% if MULTI and request.query_params.get('verified') %}
-<div class="flash flash-ok">Email verified. Thanks!</div>
+<div class="flash flash-ok" role="status">Email verified. Thanks!</div>
 {% endif %}
 {% if MULTI and request.query_params.get('verification_sent') %}
-<div class="flash flash-ok">Verification email sent. Check your inbox.</div>
+<div class="flash flash-ok" role="status">Verification email sent. Check your inbox.</div>
 {% endif %}
 {% if MULTI and not email_verified %}
 <div class="verify-banner">

@@ -65,6 +65,20 @@ class TestSSRFProtection:
 
 
 class TestSSRFRedirectProtection:
+    """Every redirect hop is validated before it is followed.
+
+    The fetch helper streams the body under a size cap, so the fakes below
+    stand in for `client.stream(...)` context managers rather than
+    `client.get(...)` responses.
+    """
+
+    @staticmethod
+    def _stream_ctx(response):
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=response)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return ctx
+
     def test_redirect_to_private_ip_is_blocked(self):
         from feed_parser import _fetch_with_redirect_validation
 
@@ -73,7 +87,7 @@ class TestSSRFRedirectProtection:
         redirect.headers = {"location": "http://169.254.169.254/latest-meta-data/"}
 
         client = MagicMock()
-        client.get.return_value = redirect
+        client.stream.return_value = self._stream_ctx(redirect)
 
         with pytest.raises(SSRFError, match="private"):
             _fetch_with_redirect_validation(client, "https://evil.example/feed.xml", {})
@@ -88,15 +102,65 @@ class TestSSRFRedirectProtection:
         final = MagicMock()
         final.is_redirect = False
         final.status_code = 200
+        final.headers = {"content-type": "application/rss+xml"}
+        final.iter_bytes.return_value = [b"<rss></rss>"]
 
         client = MagicMock()
-        client.get.side_effect = [redirect, final]
+        client.stream.side_effect = [
+            self._stream_ctx(redirect),
+            self._stream_ctx(final),
+        ]
 
-        assert _fetch_with_redirect_validation(
+        body, content_type = _fetch_with_redirect_validation(
             client,
             "https://8.8.8.8/feed.xml",
             {},
-        ) == final
+        )
+        assert body == b"<rss></rss>"
+        assert content_type == "application/rss+xml"
+
+    def test_body_over_the_cap_is_abandoned(self):
+        """The cap is enforced while streaming, not after buffering."""
+        from feed_parser import _fetch_with_redirect_validation
+
+        final = MagicMock()
+        final.is_redirect = False
+        final.headers = {"content-type": "application/rss+xml"}
+        # Three 1 KB chunks against a 2 KB cap: the third must never be reached.
+        chunks = [b"x" * 1024, b"x" * 1024, b"x" * 1024]
+        read = []
+
+        def _iter():
+            for c in chunks:
+                read.append(len(c))
+                yield c
+
+        final.iter_bytes.side_effect = _iter
+
+        client = MagicMock()
+        client.stream.return_value = self._stream_ctx(final)
+
+        with pytest.raises(ValueError, match="too large"):
+            _fetch_with_redirect_validation(
+                client, "https://8.8.8.8/feed.xml", {}, max_bytes=2048
+            )
+        assert sum(read) <= 3072, "should stop reading once the cap is passed"
+
+    def test_declared_content_length_over_the_cap_is_refused(self):
+        from feed_parser import _fetch_with_redirect_validation
+
+        final = MagicMock()
+        final.is_redirect = False
+        final.headers = {"content-type": "application/rss+xml", "content-length": "999999"}
+        final.iter_bytes.side_effect = AssertionError("body should not be read at all")
+
+        client = MagicMock()
+        client.stream.return_value = self._stream_ctx(final)
+
+        with pytest.raises(ValueError, match="too large"):
+            _fetch_with_redirect_validation(
+                client, "https://8.8.8.8/feed.xml", {}, max_bytes=2048
+            )
 
 
 class TestInstanceURLSSRF:

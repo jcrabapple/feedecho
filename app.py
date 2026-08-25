@@ -85,8 +85,25 @@ def _utc_text(value) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
+def _safe_url(value) -> str:
+    """A URL safe to place in href, or "" for anything not http(s).
+
+    Item and post URLs come from feed publishers and remote APIs. Autoescaping
+    stops HTML injection but does nothing about the scheme, so a feed serving
+    `javascript:...` as an item link would run script in the authenticated
+    origin on click. Rendering an empty href instead drops the link.
+    """
+    url = str(value or "").strip()
+    if url.lower().startswith(("http://", "https://")):
+        return url
+    if url:
+        logger.warning("Refusing to render non-http(s) URL in a link: %.80r", url)
+    return ""
+
+
 jinja.filters["iso_utc"] = _iso_utc
 jinja.filters["utc_text"] = _utc_text
+jinja.filters["safe_url"] = _safe_url
 
 OAUTH_SESSION_COOKIE = "feedecho_oauth_session"
 OAUTH_SESSION_MAX_AGE = 10 * 60
@@ -218,7 +235,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if (
             token
             and settings.AUTH_TOKEN
-            and _secrets.compare_digest(token, settings.AUTH_TOKEN)
+            # Compare bytes: compare_digest raises TypeError on str arguments
+            # containing non-ASCII, which would surface as a 500 from a cookie
+            # an attacker (or a confused browser) fully controls.
+            and _secrets.compare_digest(
+                token.encode("utf-8", "surrogatepass"),
+                settings.AUTH_TOKEN.encode("utf-8", "surrogatepass"),
+            )
         ):
             return await call_next(request)
 
@@ -477,6 +500,27 @@ def _get_smtp_settings(mask_password: bool = False, user_id: int = 1):
     return smtp
 
 
+def _dependent_echo_count(user_id: int, destination_type: str, account_id: int) -> int:
+    """Live echoes still pointing at this destination.
+
+    Deleting a destination out from under an echo leaves it aimed at a row
+    that no longer exists, and delivery then fails at run time with nothing
+    said at delete time. The Bluesky delete guarded against this from the
+    start; Mastodon and email did not.
+    """
+    with get_db() as db:
+        return db.execute(
+            """
+            SELECT COUNT(*) AS c FROM echoes
+             WHERE destination_type = ?
+               AND destination_id = ?
+               AND deleted_at IS NULL
+               AND user_id = ?
+            """,
+            (destination_type, account_id, user_id),
+        ).fetchone()["c"]
+
+
 def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
     """Render a standalone OAuth failure page.
 
@@ -651,7 +695,13 @@ def resend_verification(request: Request):
         from email_sender import send_system_email
 
         token = issue_token(uid, "verify")
-        link = f"{settings.BASE_URL.rstrip('/')}/verify-email?token={token}"
+        link = auth._absolute_link(f"/verify-email?token={token}")
+        if not link:
+            return render(
+                "error.html", request, status_code=500, code=500,
+                message="This deployment cannot send email links yet "
+                        "(FEEDCHO_BASE_URL is not configured).",
+            )
         send_system_email(
             row["email"],
             "Verify your FeedEcho account",
@@ -1124,6 +1174,12 @@ def test_account(request: Request, account_id: int):
 @app.post("/api/accounts/{account_id}/delete")
 async def delete_account(request: Request, account_id: int):
     uid = current_user_id(request)
+    dependent = _dependent_echo_count(uid, "mastodon", account_id)
+    if dependent:
+        return _render_accounts_error(
+            request,
+            "This Mastodon account is used by echoes. Delete or reassign those echoes first.",
+        )
     with get_db() as db:
         db.execute(
             "DELETE FROM accounts WHERE id = ? AND user_id = ?", (account_id, uid)
@@ -1152,6 +1208,12 @@ async def add_email_account(
 @app.post("/api/email-accounts/{account_id}/delete")
 async def delete_email_account(request: Request, account_id: int):
     uid = current_user_id(request)
+    dependent = _dependent_echo_count(uid, "email", account_id)
+    if dependent:
+        return _render_accounts_error(
+            request,
+            "This email address is used by echoes. Delete or reassign those echoes first.",
+        )
     with get_db() as db:
         db.execute(
             "DELETE FROM email_accounts WHERE id = ? AND user_id = ?",
@@ -1287,12 +1349,33 @@ async def save_smtp_settings(
     smtp_use_tls: str = Form("1"),
 ):
     uid = current_user_id(request)
+    # Same validation the admin system-mail route enforces: these become
+    # message headers, so control characters must fail here rather than at
+    # send time. Per-tenant SMTP only reaches that tenant's own relay, but a
+    # stored out-of-range port or CRLF in a header field is still a defect.
+    if not 1 <= smtp_port <= 65535:
+        return render("error.html", request, status_code=400, code=400,
+                      message="SMTP port must be a number between 1 and 65535")
+    if smtp_from_email and not re.match(
+        r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$", smtp_from_email.strip()
+    ):
+        return render("error.html", request, status_code=400, code=400,
+                      message="From address is not a valid email address")
+    for label, field in (
+        ("smtp_host", smtp_host),
+        ("smtp_username", smtp_username),
+        ("smtp_from_name", smtp_from_name),
+        ("smtp_from_email", smtp_from_email),
+    ):
+        if re.search(r"[\r\n]", field):
+            return render("error.html", request, status_code=400, code=400,
+                          message=f"Invalid characters in {label}")
     values = {
-        "smtp_host": smtp_host,
+        "smtp_host": smtp_host.strip(),
         "smtp_port": str(smtp_port),
-        "smtp_username": smtp_username,
-        "smtp_from_email": smtp_from_email,
-        "smtp_from_name": smtp_from_name,
+        "smtp_username": smtp_username.strip(),
+        "smtp_from_email": smtp_from_email.strip(),
+        "smtp_from_name": smtp_from_name.strip(),
         "smtp_use_tls": smtp_use_tls,
     }
     with get_db() as db:
@@ -1977,7 +2060,9 @@ def oauth_connect(request: Request, instance: str = ""):
         value=oauth_session,
         max_age=OAUTH_SESSION_MAX_AGE,
         httponly=True,
-        secure=request.url.scheme == "https",
+        # FORCE_SECURE_COOKIE exists because the scheme reads http behind
+        # Caddy; the session cookie honours it and so must this one.
+        secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
         samesite="lax",
         path="/oauth",
     )

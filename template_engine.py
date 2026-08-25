@@ -73,6 +73,11 @@ def _normalize(template: str) -> str:
 
     def _fix_expression(match: re.Match) -> str:
         inner = match.group(1)
+        # Quoted literals are left alone: rewriting inside them changed
+        # {{ item["date:short"] }} into a lookup of a different key, and
+        # {{ "date:iso" }} into a variable reference.
+        if '"' in inner or "'" in inner:
+            return match.group(0)
         for old, new in _LEGACY_DATE_TOKENS.items():
             inner = inner.replace(old, new)
         return "{{" + inner + "}}"

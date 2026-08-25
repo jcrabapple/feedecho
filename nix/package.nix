@@ -15,7 +15,13 @@ pythonPkg.pkgs.buildPythonApplication {
     owner = "jcrabapple";
     repo = "feedecho";
     rev = "v1.13.5";
-    hash = lib.fakeHash; # replace after first build: `nix-prefetch-url --unpack <url>`
+    # Placeholder on purpose: the correct value is per-tag and can only be
+    # produced by a machine with Nix. Non-flake users must set it (the build
+    # prints the expected hash on first failure):
+    #   nix-prefetch-url --unpack \
+    #     https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.13.5.tar.gz
+    # Flake users never hit this path: flake.nix passes `src = self`.
+    hash = lib.fakeHash;
   };
 
   format = "pyproject";
@@ -63,9 +69,9 @@ pythonPkg.pkgs.buildPythonApplication {
     description = "Self-hosted RSS feed cross-poster — route feed items to Mastodon, Bluesky, or email";
     homepage = "https://github.com/jcrabapple/feedecho";
     license = licenses.mit;
-    # The wheel ships no console script; the module execs uvicorn from the
-    # passthru.env runtime environment instead of the package's own bin.
-    mainProgram = "uvicorn";
+    # No mainProgram: the wheel ships no console script (the module execs
+    # uvicorn from the passthru.env runtime environment), so declaring one made
+    # `nix run` fail with "program 'uvicorn' not found".
     platforms = platforms.linux ++ platforms.darwin;
   };
 }

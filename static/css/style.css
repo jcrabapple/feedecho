@@ -692,3 +692,18 @@ code {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* Visually hidden but announced: labels for inputs whose visible cue is the
+   placeholder. Placeholders disappear on input and are unreliable for screen
+   readers, so every input needs a real label even when the layout is compact. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}

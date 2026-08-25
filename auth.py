@@ -184,6 +184,21 @@ def _render_auth(request: Request, template: str, status_code: int = 200, **kwar
     return render(template, request, status_code=status_code, **kwargs)
 
 
+def _absolute_link(path: str) -> str:
+    """An absolute URL for an emailed link, or "" when BASE_URL is unset.
+
+    Better to skip the send and log it than to mail a relative link the
+    recipient cannot open; validate_config warns about this at startup.
+    """
+    base = settings.BASE_URL.rstrip("/")
+    if not base:
+        logging.getLogger("feedecho").error(
+            "Cannot build %s link: FEEDCHO_BASE_URL is not set; email not sent", path
+        )
+        return ""
+    return f"{base}{path}"
+
+
 def register_page(request: Request):
     _require_multi()
     return _render_auth(request, "register.html")
@@ -265,13 +280,14 @@ def register_submit(
         from email_sender import send_system_email
 
         token = verification.issue_token(user["id"], "verify")
-        link = f"{settings.BASE_URL.rstrip('/')}/verify-email?token={token}"
-        send_system_email(
-            email,
-            "Verify your FeedEcho account",
-            f"Welcome to FeedEcho. Verify your email address by opening this link:\n\n{link}\n\n"
-            "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
-        )
+        link = _absolute_link(f"/verify-email?token={token}")
+        if link:
+            send_system_email(
+                email,
+                "Verify your FeedEcho account",
+                f"Welcome to FeedEcho. Verify your email address by opening this link:\n\n{link}\n\n"
+                "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
+            )
     except Exception as exc:  # noqa: BLE001 — verification must not block signup
         logging.getLogger("feedecho").warning(
             "Verification email for %s failed: %s", email, exc
@@ -300,7 +316,19 @@ def login_submit(
 
         if not settings.AUTH_TOKEN:
             return RedirectResponse(url="/", status_code=302)
-        if token and _secrets.compare_digest(token, settings.AUTH_TOKEN):
+        ip = _client_ip(request)
+        if _throttled(ip):
+            return _render_auth(
+                request,
+                "login.html",
+                error="Too many failed attempts. Try again in a few minutes.",
+            )
+        # Compare bytes: compare_digest raises TypeError on non-ASCII str.
+        if token and _secrets.compare_digest(
+            token.encode("utf-8", "surrogatepass"),
+            settings.AUTH_TOKEN.encode("utf-8", "surrogatepass"),
+        ):
+            _clear_failures(ip)
             response = RedirectResponse(url="/", status_code=302)
             response.set_cookie(
                 key=AUTH_COOKIE_NAME,
@@ -310,6 +338,7 @@ def login_submit(
                 secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
             )
             return response
+        _record_failure(ip)
         return _render_auth(request, "login.html", error="Invalid token")
 
     ip = _client_ip(request)
@@ -366,10 +395,16 @@ def logout():
 # ── Password reset ────────────────────────────────────────────────────────────
 
 def _forgot_throttled(ip: str) -> bool:
-    now = time.time()
-    bucket = [t for t in _forgot_attempts.get(ip, []) if now - t < _FORGOT_WINDOW]
-    _forgot_attempts[ip] = bucket
-    return len(bucket) >= _FORGOT_LIMIT
+    # Shares _prune's eviction and the lock: reassigning an empty bucket left
+    # a permanent entry per IP that ever hit the endpoint, and the dict was
+    # mutated from request threads without synchronisation.
+    with _login_lock:
+        return len(_prune(_forgot_attempts, ip, _FORGOT_WINDOW)) >= _FORGOT_LIMIT
+
+
+def _record_forgot(ip: str) -> None:
+    with _login_lock:
+        _forgot_attempts.setdefault(ip, []).append(time.monotonic())
 
 
 def forgot_page(request: Request):
@@ -390,7 +425,9 @@ def _send_reset_email(user_id: int, email: str) -> None:
         if not verification.resend_allowed(user_id, "reset"):
             return
         token = verification.issue_token(user_id, "reset")
-        link = f"{settings.BASE_URL.rstrip('/')}/reset-password?token={token}"
+        link = _absolute_link(f"/reset-password?token={token}")
+        if not link:
+            return
         send_system_email(
             email,
             "Reset your FeedEcho password",
@@ -416,7 +453,7 @@ def forgot_submit(request: Request, email: str = Form("")):
                 "SELECT id, email FROM users WHERE email = ?", (email,)
             ).fetchone()
         if user is not None:
-            _forgot_attempts.setdefault(ip, []).append(time.time())
+            _record_forgot(ip)
             import asyncio
 
             asyncio.create_task(

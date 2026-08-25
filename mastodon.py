@@ -48,7 +48,10 @@ def upload_media(
             response = client.post(url, headers=headers, files=files, data=data)
             response.raise_for_status()
             return response.json()
-    except (httpx.HTTPStatusError, httpx.RequestError):
+    # ValueError covers a 200 with a non-JSON body (an instance behind an
+    # HTML-returning proxy), which otherwise escaped the documented
+    # "None on failure" contract and crashed the caller.
+    except (httpx.HTTPStatusError, httpx.RequestError, ValueError):
         return None
 
 

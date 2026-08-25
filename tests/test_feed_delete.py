@@ -114,7 +114,17 @@ class TestFeedSoftDelete:
         check_all_feeds()
         assert called == []
 
-    def test_flush_digests_skips_deleted_feed(self, client, temp_db):
+    def test_flush_digests_discards_items_for_a_deleted_feed(self, client, temp_db):
+        """A deleted feed's queued digest items are finalized, not sent, and not
+        kept forever.
+
+        Previously flush_digests simply could not see them (its query INNER
+        JOINs on a live feed and enabled echo), so the rows sat in digest_items
+        indefinitely with their posted_items stuck at 'queued'. The drip path
+        always discarded a deleted/disabled echo's backlog with an audit trail;
+        digests now behave the same way. What must never happen is sending
+        items from a feed the user deleted.
+        """
         _seed()
         with get_db() as db:
             db.execute(
@@ -125,15 +135,25 @@ class TestFeedSoftDelete:
                 "UPDATE echoes SET destination_type = 'email', "
                 "destination_id = 1, delivery_mode = 'digest' WHERE id = 1",
             )
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, status)"
+                " VALUES (1, 'digest-item-1', 'queued')"
+            )
         client.post("/api/feeds/1/delete")
         from scheduler import flush_digests
 
         flush_digests()
         with get_db() as db:
-            digests = db.execute(
-                "SELECT COUNT(*) as c FROM digest_items"
-            ).fetchone()["c"]
-            assert digests == 1
+            assert (
+                db.execute("SELECT COUNT(*) as c FROM digest_items").fetchone()["c"] == 0
+            ), "queued digest rows for a deleted feed must not be retained"
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE item_id = 'digest-item-1'"
+            ).fetchone()
+        # Finalized with a reason, so history explains it instead of showing a
+        # row stuck at 'queued' forever.
+        assert row["status"] == "gave_up"
+        assert "no longer active" in row["error_message"]
 
 
 class TestEchoSoftDelete:

@@ -4,9 +4,13 @@
 <h1>Feeds</h1>
 
 <form method="post" action="/api/feeds" class="inline-form">
-    <input type="text" name="name" placeholder="Feed name" required>
-    <input type="url" name="url" placeholder="https://example.com/feed.xml" required>
-    <input type="number" name="poll_interval" value="15" min="1" max="1440" title="Poll interval (minutes)">
+    <label class="sr-only" for="feed-name">Feed name</label>
+    <input type="text" name="name" id="feed-name" placeholder="Feed name" required>
+    <label class="sr-only" for="feed-url">Feed URL</label>
+    <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required>
+    <label class="sr-only" for="feed-poll-interval">Poll interval (minutes)</label>
+    <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440"
+           title="Poll interval (minutes)">
     <button type="submit">Add Feed</button>
 </form>
 
@@ -34,7 +38,7 @@
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
             </td>
-            <td data-label="URL"><a href="{{ feed.url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
+            <td data-label="URL"><a href="{{ feed.url | safe_url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>
             <td data-label="Last Fetched"><small>{% if feed.last_fetched %}<time class="local-time" datetime="{{ feed.last_fetched | iso_utc }}">{{ feed.last_fetched | utc_text }} UTC</time>{% else %}Never{% endif %}</small></td>
             <td data-label="Item ID Set">

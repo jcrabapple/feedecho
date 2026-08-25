@@ -4,30 +4,31 @@
 <h1>Accounts</h1>
 
 {% if error %}
-<div class="alert alert-error">{{ error }}</div>
+<div class="alert alert-error" role="alert">{{ error }}</div>
 {% endif %}
 
 {% if request.query_params.get('status') == 'connected' %}
-<div class="alert alert-success">Mastodon account connected successfully.</div>
+<div class="alert alert-success" role="status">Mastodon account connected successfully.</div>
 {% endif %}
 
 {% if request.query_params.get('status') == 'email_added' %}
-<div class="alert alert-success">Email address added.</div>
+<div class="alert alert-success" role="status">Email address added.</div>
 {% endif %}
 
 {% if request.query_params.get('status') == 'bluesky_connected' %}
-<div class="alert alert-success">Bluesky account connected successfully.</div>
+<div class="alert alert-success" role="status">Bluesky account connected successfully.</div>
 {% endif %}
 
 {% if request.query_params.get('status') == 'bluesky_deleted' %}
-<div class="alert alert-success">Bluesky account deleted.</div>
+<div class="alert alert-success" role="status">Bluesky account deleted.</div>
 {% endif %}
 
 <section class="oauth-section">
     <h2>Connect Mastodon via OAuth</h2>
     <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
     <form method="get" action="/oauth/connect" class="inline-form">
-        <input type="text" name="instance" placeholder="https://dmv.community" required>
+        <label class="sr-only" for="oauth-instance">Mastodon instance URL</label>
+        <input type="text" name="instance" id="oauth-instance" placeholder="https://dmv.community" required>
         <button type="submit">Connect Account</button>
     </form>
 </section>
@@ -36,10 +37,14 @@
     <details>
         <summary>Or add Mastodon manually with a token</summary>
         <form method="post" action="/api/accounts" class="inline-form" style="margin-top: 0.75rem;">
-            <input type="text" name="name" placeholder="Display name" required>
-            <input type="text" name="username" placeholder="Username">
-            <input type="url" name="instance" placeholder="https://dmv.community" required>
-            <input type="password" name="access_token" placeholder="Access token" required>
+            <label class="sr-only" for="masto-name">Display name</label>
+            <input type="text" name="name" id="masto-name" placeholder="Display name" required>
+            <label class="sr-only" for="masto-username">Username</label>
+            <input type="text" name="username" id="masto-username" placeholder="Username">
+            <label class="sr-only" for="masto-instance">Instance URL</label>
+            <input type="url" name="instance" id="masto-instance" placeholder="https://dmv.community" required>
+            <label class="sr-only" for="masto-token">Access token</label>
+            <input type="password" name="access_token" id="masto-token" placeholder="Access token" required>
             <button type="submit">Add Account</button>
         </form>
     </details>
@@ -49,8 +54,10 @@
     <h2>Add Email Address</h2>
     <p class="hint">Route feed items to an email inbox instead of (or in addition to) Mastodon. <a href="/settings">Configure SMTP first.</a></p>
     <form method="post" action="/api/email-accounts" class="inline-form">
-        <input type="text" name="name" placeholder="Name" required>
-        <input type="email" name="email" placeholder="user@example.com" required>
+        <label class="sr-only" for="email-acct-name">Name</label>
+        <input type="text" name="name" id="email-acct-name" placeholder="Name" required>
+        <label class="sr-only" for="email-acct-address">Email address</label>
+        <input type="email" name="email" id="email-acct-address" placeholder="user@example.com" required>
         <button type="submit">Add Email Address</button>
     </form>
 </section>
@@ -59,9 +66,12 @@
     <h2>Connect Bluesky</h2>
     <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored only in FeedEcho's local database. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
     <form method="post" action="/api/bluesky-accounts" class="inline-form">
-        <input type="text" name="name" placeholder="Display name">
-        <input type="text" name="handle" placeholder="username.bsky.social" required>
-        <input type="password" name="app_password" placeholder="App password (xxxx-xxxx-xxxx-xxxx)" required>
+        <label class="sr-only" for="bsky-name">Display name</label>
+        <input type="text" name="name" id="bsky-name" placeholder="Display name">
+        <label class="sr-only" for="bsky-handle">Bluesky handle</label>
+        <input type="text" name="handle" id="bsky-handle" placeholder="username.bsky.social" required>
+        <label class="sr-only" for="bsky-app-password">App password</label>
+        <input type="password" name="app_password" id="bsky-app-password" placeholder="App password (xxxx-xxxx-xxxx-xxxx)" required>
         <button type="submit">Connect Account</button>
     </form>
 </section>

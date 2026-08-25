@@ -211,7 +211,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Check cookie or header
         token = (
-            request.cookies.get("feedecho_auth")
+            request.cookies.get(auth.AUTH_COOKIE_NAME)
             or request.headers.get("x-auth-token")
         )
 
@@ -1386,6 +1386,12 @@ def test_alt_text(request: Request):
     uid = current_user_id(request)
     if not alt_text.is_enabled(user_id=uid):
         return {"success": False, "message": "AI alt text is not configured"}
+    # A blocked address would otherwise surface as the same empty result as a
+    # working endpoint that had nothing to say, so the test button would report
+    # success for a configuration that never produces alt text.
+    blocked = alt_text.endpoint_rejection_reason(user_id=uid)
+    if blocked:
+        return {"success": False, "message": f"Address refused: {blocked}"}
     try:
         # Use a tiny 1x1 PNG to test the API connection
         import base64

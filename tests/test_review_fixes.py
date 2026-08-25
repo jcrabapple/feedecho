@@ -325,6 +325,9 @@ class TestAltTextTenantScopingAndSsrf:
             return "a description"
 
         monkeypatch.setattr(alt_text, "generate_alt_text", _fake)
+        # This test is about which tenant's settings are used, not about
+        # address validation; example.com subdomains do not resolve.
+        monkeypatch.setattr(alt_text, "endpoint_rejection_reason", lambda user_id=1: "")
 
         c.cookies.set("feedecho_session", security.sign_session(42, "u42@example.com"))
         resp = c.post("/api/settings/alt-text/test")
@@ -332,16 +335,81 @@ class TestAltTextTenantScopingAndSsrf:
         assert resp.json()["success"] is True
         assert seen["user_id"] == 42, "the test hit another tenant's vision config"
 
-    def test_private_base_url_is_refused_before_any_request(self, monkeypatch, temp_db):
+    def test_private_base_url_is_refused_in_hosted_mode(self, monkeypatch, temp_db):
         import alt_text
 
+        monkeypatch.setattr(alt_text.app_settings, "MULTI", True)
         self._configure_alt_text(1, "http://169.254.169.254/latest/meta-data")
 
         def _no_network(*args, **kwargs):
             raise AssertionError("outbound request made to a blocked address")
 
-        monkeypatch.setattr(alt_text.httpx, "Client", _no_network)
+        # Replace the module reference on alt_text rather than mutating the
+        # real httpx module's attributes.
+        monkeypatch.setattr(alt_text, "httpx", type("m", (), {"Client": _no_network}))
         assert alt_text.generate_alt_text(b"\x89PNG", "image/png", user_id=1) == ""
+        assert "private" in alt_text.endpoint_rejection_reason(user_id=1).lower()
+
+    def test_lan_base_url_is_allowed_in_single_mode(self, monkeypatch, temp_db):
+        """Self-hosters point this at Ollama/llama.cpp on localhost or a LAN IP.
+
+        The SSRF guard blocks those addresses by design, so applying it in
+        single mode would silently disable alt text for exactly the people the
+        feature was built for.
+        """
+        import alt_text
+
+        monkeypatch.setattr(alt_text.app_settings, "MULTI", False)
+        self._configure_alt_text(1, "http://192.168.1.50:11434/v1")
+
+        called = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "a cat"}}]}
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, **k):
+                called["url"] = url
+                return _Resp()
+
+        monkeypatch.setattr(alt_text, "httpx", type("m", (), {"Client": _Client}))
+        result = alt_text.generate_alt_text(b"\x89PNG", "image/png", user_id=1)
+        assert result == "a cat"
+        assert called["url"] == "http://192.168.1.50:11434/v1/chat/completions"
+        assert alt_text.endpoint_rejection_reason(user_id=1) == ""
+
+    def test_test_endpoint_reports_a_blocked_address_as_failure(
+        self, multi_client, monkeypatch
+    ):
+        """A refused address must not report 'API reachable'."""
+        import security
+        import alt_text
+
+        app_module, c = multi_client
+        monkeypatch.setattr(alt_text.app_settings, "MULTI", True)
+        self._configure_alt_text(42, "http://10.0.0.5:8080/v1")
+
+        def _boom(*a, **k):
+            raise AssertionError("request attempted against a blocked address")
+
+        monkeypatch.setattr(alt_text, "httpx", type("m", (), {"Client": _boom}))
+        c.cookies.set("feedecho_session", security.sign_session(42, "u42@example.com"))
+        body = c.post("/api/settings/alt-text/test").json()
+        assert body["success"] is False
+        assert "refused" in body["message"].lower()
 
     @pytest.mark.parametrize(
         "payload",

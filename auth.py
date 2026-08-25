@@ -50,6 +50,10 @@ _MAX_PASSWORD_LENGTH = 1024
 _TRIAL_DAYS = 14
 
 COOKIE_NAME = "feedecho_session"
+# Single-mode shared-secret cookie. Named here so the middleware, the login
+# handler and logout cannot drift apart — a rename that missed logout is what
+# made single-mode logout a silent no-op.
+AUTH_COOKIE_NAME = "feedecho_auth"
 
 # Precomputed once so unknown-email login attempts pay the same scrypt
 # cost as known-email attempts (no timing-based user enumeration).
@@ -299,7 +303,7 @@ def login_submit(
         if token and _secrets.compare_digest(token, settings.AUTH_TOKEN):
             response = RedirectResponse(url="/", status_code=302)
             response.set_cookie(
-                key="feedecho_auth",
+                key=AUTH_COOKIE_NAME,
                 value=token,
                 httponly=True,
                 samesite="lax",
@@ -352,9 +356,10 @@ def logout():
     response = RedirectResponse(url="/login", status_code=302)
     # Both cookies: multi mode authenticates on the signed session, single
     # mode on the shared-secret cookie. Clearing only one made logout a
-    # no-op in the other mode.
+    # no-op in the other mode. Both are set with Starlette's default path
+    # ("/") and no domain, so these deletions match them.
     response.delete_cookie(COOKIE_NAME)
-    response.delete_cookie("feedecho_auth")
+    response.delete_cookie(AUTH_COOKIE_NAME)
     return response
 
 

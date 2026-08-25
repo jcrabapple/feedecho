@@ -317,12 +317,12 @@ def login_submit(
         if not settings.AUTH_TOKEN:
             return RedirectResponse(url="/", status_code=302)
         ip = _client_ip(request)
-        if _throttled(ip):
-            return _render_auth(
-                request,
-                "login.html",
-                error="Too many failed attempts. Try again in a few minutes.",
-            )
+        # Verify first, throttle second. Gating the comparison on the bucket
+        # would let anyone who can reach /login keep the operator out of their
+        # own instance indefinitely by POSTing wrong tokens: single mode has no
+        # second credential and no account recovery. A correct token always
+        # works and clears the bucket; wrong ones are what get rate limited.
+        #
         # Compare bytes: compare_digest raises TypeError on non-ASCII str.
         if token and _secrets.compare_digest(
             token.encode("utf-8", "surrogatepass"),
@@ -339,6 +339,12 @@ def login_submit(
             )
             return response
         _record_failure(ip)
+        if _throttled(ip):
+            return _render_auth(
+                request,
+                "login.html",
+                error="Too many failed attempts. Try again in a few minutes.",
+            )
         return _render_auth(request, "login.html", error="Invalid token")
 
     ip = _client_ip(request)

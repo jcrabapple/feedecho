@@ -605,15 +605,45 @@ class TestSecondBatchReviewFixes:
         monkeypatch.setattr(auth, "_login_attempts", {})
         c = TestClient(app_module.app)
 
-        for _ in range(5):
+        import auth as auth_module
+
+        limit = auth_module._MAX_LOGIN_ATTEMPTS
+        for _ in range(limit - 1):
             resp = c.post("/login", data={"token": "wrong"}, follow_redirects=False)
             assert "Invalid token" in resp.text
+        # The failure that reaches the limit reports the lockout instead.
         blocked = c.post("/login", data={"token": "wrong"}, follow_redirects=False)
         assert "Too many failed attempts" in blocked.text
-        # Even the correct token is refused while the bucket is full.
-        assert "Too many failed attempts" in c.post(
+
+    def test_throttle_cannot_lock_the_operator_out_of_their_own_instance(
+        self, temp_db, monkeypatch
+    ):
+        """The correct token must work even while the bucket is full.
+
+        Single mode has one credential and no account recovery, so gating the
+        comparison on the throttle would let anyone who can reach /login keep
+        the operator out indefinitely by posting wrong tokens.
+        """
+        import app as app_module
+        import auth
+
+        monkeypatch.setattr(app_module.settings, "MULTI", False)
+        monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", "the-real-token")
+        monkeypatch.setattr(auth, "_login_attempts", {})
+        c = TestClient(app_module.app)
+
+        # An attacker fills the bucket from the same address.
+        for _ in range(10):
+            c.post("/login", data={"token": "wrong"}, follow_redirects=False)
+        assert auth._throttled("testclient") is True
+
+        resp = c.post(
             "/login", data={"token": "the-real-token"}, follow_redirects=False
-        ).text
+        )
+        assert resp.status_code == 302 and resp.headers["location"] == "/"
+        assert "feedecho_auth" in resp.headers.get("set-cookie", "")
+        # A successful login clears the bucket.
+        assert auth._throttled("testclient") is False
 
     def test_non_ascii_token_is_rejected_not_a_500(self, temp_db, monkeypatch):
         """A10: compare_digest raises TypeError on non-ASCII str arguments.
@@ -731,3 +761,39 @@ class TestSecondBatchReviewFixes:
         page = client.get("/history")
         assert page.status_code == 200
         assert "javascript:alert" not in page.text
+
+
+class TestContainerRunsUnprivileged:
+    """E4: the app process must not be root, and an upgrade must not brick.
+
+    Container behaviour itself is verified by building and running the image
+    (done manually against a legacy root-owned volume, a fresh volume, and an
+    explicit --user). These assertions guard the contract so a later edit
+    cannot quietly drop either half of it.
+    """
+
+    @staticmethod
+    def _repo_file(name: str) -> str:
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parent.parent / name).read_text()
+
+    def test_entrypoint_drops_privileges_and_repairs_ownership(self):
+        script = self._repo_file("docker-entrypoint.sh")
+        # Drops to the app uid rather than running the server as root.
+        assert "setpriv" in script and "--reuid=\"$APP_UID\"" in script
+        # Repairs an inherited root-owned data dir, but only when needed, so a
+        # correct bind mount is not rewritten on the host.
+        assert "test -w /app/data" in script
+        assert "chown -R" in script
+        # An explicit --user must pass straight through.
+        assert 'exec "$@"' in script
+
+    def test_dockerfile_wires_the_entrypoint_and_creates_the_app_user(self):
+        dockerfile = self._repo_file("Dockerfile")
+        assert 'ENTRYPOINT ["/app/docker-entrypoint.sh"]' in dockerfile
+        assert "--uid 10001" in dockerfile
+        assert "chmod +x /app/docker-entrypoint.sh" in dockerfile
+        # A bare USER directive would skip the ownership repair and brick every
+        # deployment created before v1.13.6.
+        assert "\nUSER " not in dockerfile

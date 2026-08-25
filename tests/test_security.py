@@ -120,13 +120,17 @@ class TestSSRFRedirectProtection:
         assert content_type == "application/rss+xml"
 
     def test_body_over_the_cap_is_abandoned(self):
-        """The cap is enforced while streaming, not after buffering."""
+        """The cap is enforced while streaming, not after buffering.
+
+        Chunk sizes are chosen so the cap trips on the second chunk: a
+        buffer-everything implementation would consume all three, so the
+        assertion on how many chunks were pulled actually distinguishes the two.
+        """
         from feed_parser import _fetch_with_redirect_validation
 
         final = MagicMock()
         final.is_redirect = False
         final.headers = {"content-type": "application/rss+xml"}
-        # Three 1 KB chunks against a 2 KB cap: the third must never be reached.
         chunks = [b"x" * 1024, b"x" * 1024, b"x" * 1024]
         read = []
 
@@ -142,9 +146,12 @@ class TestSSRFRedirectProtection:
 
         with pytest.raises(ValueError, match="too large"):
             _fetch_with_redirect_validation(
-                client, "https://8.8.8.8/feed.xml", {}, max_bytes=2048
+                client, "https://8.8.8.8/feed.xml", {}, max_bytes=1500
             )
-        assert sum(read) <= 3072, "should stop reading once the cap is passed"
+        assert read == [1024, 1024], (
+            "expected the read to stop as soon as the cap was passed; "
+            f"chunks pulled: {read}"
+        )
 
     def test_declared_content_length_over_the_cap_is_refused(self):
         from feed_parser import _fetch_with_redirect_validation

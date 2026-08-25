@@ -97,7 +97,10 @@ def _safe_url(value) -> str:
     if url.lower().startswith(("http://", "https://")):
         return url
     if url:
-        logger.warning("Refusing to render non-http(s) URL in a link: %.80r", url)
+        # debug, not warning: a feed full of odd schemes would otherwise log a
+        # line per URL on every page render. The dropped link is visible in the
+        # page itself.
+        logger.debug("Refusing to render non-http(s) URL in a link: %.80r", url)
     return ""
 
 
@@ -1357,7 +1360,10 @@ async def save_smtp_settings(
         return render("error.html", request, status_code=400, code=400,
                       message="SMTP port must be a number between 1 and 65535")
     if smtp_from_email and not re.match(
-        r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$", smtp_from_email.strip()
+        # No dot required in the domain: a self-hosted relay legitimately uses
+        # feedecho@localhost or a bare internal hostname. This rejects
+        # whitespace, control characters and anything without a single @.
+        r"^[^@\s\r\n]+@[^@\s\r\n]+$", smtp_from_email.strip()
     ):
         return render("error.html", request, status_code=400, code=400,
                       message="From address is not a valid email address")

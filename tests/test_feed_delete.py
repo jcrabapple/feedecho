@@ -190,3 +190,71 @@ class TestEchoSoftDelete:
             "/api/echoes/1/edit",
             data={"feed_id": 1, "destination_type": "mastodon", "account_id": 1},
         ).status_code == 404
+
+
+class TestPausedDigestEchoKeepsItsBacklog:
+    """A paused echo is not an orphan: pausing must not destroy queued items.
+
+    enabled = 0 is the UI pause toggle, so discarding its backlog would be
+    irrecoverable data loss from a normal click. The sweep only finalizes items
+    whose echo, feed or destination is actually gone or deleted.
+    """
+
+    def test_disabled_echo_keeps_queued_digest_items(self, client, temp_db):
+        _seed()
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO email_accounts (name, email) VALUES (?, ?)",
+                ("Digest User", "digest@example.com"),
+            )
+            db.execute(
+                "UPDATE echoes SET destination_type = 'email', destination_id = 1,"
+                " delivery_mode = 'digest', enabled = 0 WHERE id = 1"
+            )
+            db.execute(
+                "INSERT INTO digest_items (echo_id, item_id, item_title, item_url,"
+                " rendered_content) VALUES (1, 'paused-1', 'T', 'https://e.example.com/1', 'body')"
+            )
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, status)"
+                " VALUES (1, 'paused-1', 'queued')"
+            )
+        from scheduler import flush_digests
+
+        flush_digests()
+        with get_db() as db:
+            kept = db.execute(
+                "SELECT COUNT(*) AS c FROM digest_items WHERE item_id = 'paused-1'"
+            ).fetchone()["c"]
+            status = db.execute(
+                "SELECT status FROM posted_items WHERE item_id = 'paused-1'"
+            ).fetchone()["status"]
+        assert kept == 1, "a paused echo's digest backlog must survive until re-enabled"
+        assert status == "queued"
+
+    def test_missing_email_account_is_still_swept(self, client, temp_db):
+        """A destination that no longer exists is a genuine orphan."""
+        _seed()
+        with get_db() as db:
+            db.execute(
+                "UPDATE echoes SET destination_type = 'email', destination_id = 99,"
+                " delivery_mode = 'digest' WHERE id = 1"
+            )
+            db.execute(
+                "INSERT INTO digest_items (echo_id, item_id, item_title, item_url,"
+                " rendered_content) VALUES (1, 'orphan-1', 'T', 'https://e.example.com/1', 'body')"
+            )
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, status)"
+                " VALUES (1, 'orphan-1', 'queued')"
+            )
+        from scheduler import flush_digests
+
+        flush_digests()
+        with get_db() as db:
+            assert db.execute("SELECT COUNT(*) AS c FROM digest_items").fetchone()["c"] == 0
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE item_id = 'orphan-1'"
+            ).fetchone()
+        assert row["status"] == "gave_up"
+        assert "no longer active" in row["error_message"]

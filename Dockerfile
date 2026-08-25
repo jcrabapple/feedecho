@@ -21,14 +21,17 @@ COPY . .
 VOLUME /app/data
 ENV FEEDCHO_DB_PATH=/app/data/feedecho.db
 
-# Run as a normal user: this process parses untrusted remote feed content, and
-# root in the container also means a root-owned data volume that a later
-# non-root image could not write.
+# The application runs as uid 10001, never as root: it parses untrusted remote
+# feed content all day. There is deliberately no USER directive — the
+# entrypoint starts as root only long enough to hand an inherited root-owned
+# /app/data (every deployment created before v1.13.6) to that user, then drops
+# privileges with setpriv. Pass --user to skip both steps.
 RUN useradd --create-home --uid 10001 --user-group feedecho \
     && mkdir -p /app/data \
-    && chown -R feedecho:feedecho /app
-USER feedecho
+    && chown -R feedecho:feedecho /app \
+    && chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8453
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8453"]

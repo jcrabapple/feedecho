@@ -1506,6 +1506,15 @@ def _discard_orphaned_digest_items() -> None:
     its queued items forever, leaving posted_items rows stuck at 'queued' and
     digest_items growing without bound. Mirrors _discard_drip_backlog, which
     already did this for drip mode.
+
+    Deliberately NOT triggered by enabled = 0 on its own. That is the pause
+    toggle, a reversible user action, and discarding a pause's backlog is
+    irrecoverable data loss from a normal click. A paused echo queues nothing
+    new (process_echo skips it), so its backlog is frozen, not growing, and it
+    goes out on re-enable. Drip discards on pause for a different reason that
+    does not apply here: releasing a drip backlog means a burst of separate
+    posts, and its queue cap silently drops new items while full. A digest is
+    one batched email with no cap, so keeping it is what a user expects.
     """
     with get_db() as db:
         orphans = db.execute(
@@ -1517,7 +1526,6 @@ def _discard_orphaned_digest_items() -> None:
               LEFT JOIN email_accounts ea
                      ON ea.id = e.destination_id AND e.destination_type = 'email'
              WHERE e.id IS NULL
-                OR e.enabled = 0
                 OR e.deleted_at IS NOT NULL
                 OR f.id IS NULL
                 OR f.deleted_at IS NOT NULL

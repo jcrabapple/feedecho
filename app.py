@@ -2,6 +2,12 @@
 
 Routes feed items to Mastodon accounts or email addresses. Web UI for managing
 feeds, accounts, echoes, settings, and viewing post history.
+
+Route convention: a handler that performs blocking I/O (outbound HTTP via the
+sync httpx client, SMTP, DNS) is declared ``def``, not ``async def``, so
+FastAPI runs it in the threadpool. An ``async def`` handler runs on the single
+event loop, where one 30-second feed fetch stalls every other request in the
+process. ``tests/test_review_fixes.py`` enforces this.
 """
 
 import os
@@ -19,7 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from database import get_db, init_db
+from database import as_utc_naive, get_db, init_db
 import auth
 from auth import current_user_id
 import security
@@ -60,24 +66,10 @@ def _as_utc_naive(value) -> datetime | None:
     """Normalize a stored timestamp (sqlite TEXT or psycopg datetime) to
     a naive UTC datetime, or None if unparseable/empty.
 
-    Invariant: every writer stores UTC in these TIMESTAMP columns (app code
-    generates UTC strings via scheduler._now(); sqlite CURRENT_TIMESTAMP is
-    UTC; the stock Postgres container runs with timezone UTC). Naive values
-    are therefore treated as UTC here — do not add writers that store
-    local time.
+    Thin alias for ``database.as_utc_naive`` so the dialect rule lives in
+    one place; see that docstring for the UTC-writer invariant.
     """
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        try:
-            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
+    return as_utc_naive(value)
 
 
 def _iso_utc(value) -> str:
@@ -485,6 +477,22 @@ def _get_smtp_settings(mask_password: bool = False, user_id: int = 1):
     return smtp
 
 
+def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
+    """Render a standalone OAuth failure page.
+
+    /oauth/callback is in the multi-mode exempt path set, so the request has
+    no authenticated user attached and anything that calls current_user_id()
+    (like _render_accounts_error) raises 401 instead of showing the error.
+    """
+    return render(
+        "error.html",
+        request,
+        status_code=400,
+        code="OAuth failed",
+        message=f"{message} Return to the accounts page to try again.",
+    )
+
+
 def _get_all_accounts(user_id: int = 1):
     """Fetch Mastodon, email, and Bluesky accounts for one user."""
     with get_db() as db:
@@ -622,7 +630,7 @@ async def verify_email(token: str = "", request: Request = None):
 
 
 @app.post("/resend-verification")
-async def resend_verification(request: Request):
+def resend_verification(request: Request):
     from auth import _require_multi
     from verification import issue_token, resend_allowed
 
@@ -804,7 +812,7 @@ async def admin_email_save(request: Request):
 
 
 @app.post("/admin/email/test")
-async def admin_email_test(request: Request):
+def admin_email_test(request: Request):
     uid = _admin_uid_or_none(request)
     if uid is None:
         return render("error.html", request, status_code=403,
@@ -1100,7 +1108,7 @@ async def add_account(
 
 
 @app.post("/api/accounts/{account_id}/test")
-async def test_account(request: Request, account_id: int):
+def test_account(request: Request, account_id: int):
     uid = current_user_id(request)
     with get_db() as db:
         account = db.execute(
@@ -1305,7 +1313,7 @@ async def save_smtp_settings(
 
 
 @app.post("/api/settings/smtp/test")
-async def test_smtp(
+def test_smtp(
     request: Request,
     test_email: str = Form(""),
 ):
@@ -1372,10 +1380,11 @@ async def save_alt_text_settings(
 
 
 @app.post("/api/settings/alt-text/test")
-async def test_alt_text(request: Request):
+def test_alt_text(request: Request):
     """Test the vision API connection with a minimal request."""
     import alt_text
-    if not alt_text.is_enabled(user_id=current_user_id(request)):
+    uid = current_user_id(request)
+    if not alt_text.is_enabled(user_id=uid):
         return {"success": False, "message": "AI alt text is not configured"}
     try:
         # Use a tiny 1x1 PNG to test the API connection
@@ -1383,7 +1392,10 @@ async def test_alt_text(request: Request):
         tiny_png = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
         )
-        result = alt_text.generate_alt_text(tiny_png, "image/png")
+        # user_id is mandatory here: omitting it silently fell back to
+        # tenant 1, so a tenant tested user 1's endpoint and spent user 1's
+        # API key while their own config went unverified.
+        result = alt_text.generate_alt_text(tiny_png, "image/png", user_id=uid)
         if result:
             return {"success": True, "message": f"API working. Response: {result[:100]}"}
         return {"success": True, "message": "API reachable (empty response to test image)"}
@@ -1483,7 +1495,7 @@ async def delete_feed(request: Request, feed_id: int):
 
 
 @app.post("/api/feeds/{feed_id}/test")
-async def test_feed(request: Request, feed_id: int):
+def test_feed(request: Request, feed_id: int):
     """Fetch a feed and return preview of items."""
     uid = current_user_id(request)
     with get_db() as db:
@@ -1509,7 +1521,7 @@ async def test_feed(request: Request, feed_id: int):
 
 
 @app.post("/api/feeds/{feed_id}/init")
-async def init_feed(request: Request, feed_id: int):
+def init_feed(request: Request, feed_id: int):
     """Initialize a feed's last_item_id so it only posts new items going forward."""
     uid = current_user_id(request)
     with get_db() as db:
@@ -1554,7 +1566,7 @@ async def pause_feed(request: Request, feed_id: int):
 
 
 @app.post("/api/feeds/{feed_id}/fetch")
-async def fetch_now(request: Request, feed_id: int):
+def fetch_now(request: Request, feed_id: int):
     """Trigger an immediate feed check."""
     uid = current_user_id(request)
     with get_db() as db:
@@ -1581,7 +1593,8 @@ async def retry_post(request: Request, posted_id: int):
     with get_db() as db:
         result = db.execute(
             """UPDATE posted_items
-                  SET attempt_count = 0,
+                  SET status = 'failed',
+                      attempt_count = 0,
                       next_retry_at = NULL,
                       error_message = NULL
                 WHERE id = ?
@@ -1928,7 +1941,7 @@ def preview_template(
 # ── API: OAuth ───────────────────────────────────────────────────────────────
 
 @app.get("/oauth/connect")
-async def oauth_connect(request: Request, instance: str = ""):
+def oauth_connect(request: Request, instance: str = ""):
     """Start a session-bound Mastodon OAuth authorization flow."""
     if not instance:
         raise HTTPException(status_code=400, detail="Instance URL is required")
@@ -1966,7 +1979,7 @@ async def oauth_connect(request: Request, instance: str = ""):
 
 
 @app.get("/oauth/callback")
-async def oauth_callback(
+def oauth_callback(
     request: Request,
     code: str = "",
     state: str = "",
@@ -1974,7 +1987,11 @@ async def oauth_callback(
 ):
     """Handle a one-time, session-bound Mastodon OAuth callback."""
     if error:
-        return _render_accounts_error(
+        # Not _render_accounts_error: /oauth/callback is auth-exempt, so
+        # request.state.user_id is unset and current_user_id() would raise
+        # 401 in multi mode — on exactly the paths that exist to report a
+        # failure to the user.
+        return _render_oauth_error(
             request, "Authorization was denied by the OAuth provider."
         )
 
@@ -2008,7 +2025,7 @@ async def oauth_callback(
         token_data = exchange_code(instance, code)
     except Exception:
         logger.exception("OAuth token exchange failed for %s", instance)
-        response = _render_accounts_error(
+        response = _render_oauth_error(
             request, "OAuth token exchange failed. Please try connecting again."
         )
         response.delete_cookie(OAUTH_SESSION_COOKIE, path="/oauth")

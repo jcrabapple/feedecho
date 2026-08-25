@@ -21,6 +21,7 @@ import time
 import httpx
 
 from database import get_db
+from feed_parser import SSRFError, validate_outbound_url
 
 logger = logging.getLogger("feedecho.alt_text")
 
@@ -108,6 +109,15 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
     }
 
     endpoint = f"{base_url}/chat/completions"
+    # The base URL is tenant-supplied, so it gets the same outbound guard as
+    # every other external call in the codebase: without it a tenant can
+    # point the vision API at cloud metadata or an internal service and have
+    # the server make the request for them.
+    try:
+        validate_outbound_url(endpoint)
+    except SSRFError as e:
+        logger.warning("Alt text base URL rejected: %s", e)
+        return ""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -120,22 +130,27 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
                 response.raise_for_status()
                 parsed = response.json()
 
-                content = (
-                    parsed.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content")
-                )
-                if not content:
-                    # Some models return content in reasoning_content
-                    content = (
-                        parsed.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("reasoning_content")
-                    )
-                if content:
-                    return content.strip()
-                return ""
-        except (httpx.HTTPStatusError, httpx.RequestError, KeyError, ValueError) as e:
+                # Defensive unpacking: "never raises" is part of this
+                # function's contract, and OpenAI-compatible endpoints do
+                # return empty choices lists and null messages (content
+                # filters, proxies). Indexing [{}] only helps when the key
+                # is absent, not when it is an empty list.
+                choices = parsed.get("choices") if isinstance(parsed, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    return ""
+                message = choices[0].get("message") if isinstance(choices[0], dict) else None
+                if not isinstance(message, dict):
+                    return ""
+                content = message.get("content") or message.get("reasoning_content")
+                return content.strip() if isinstance(content, str) else ""
+        except (
+            httpx.HTTPStatusError,
+            httpx.RequestError,
+            KeyError,
+            ValueError,
+            IndexError,
+            AttributeError,
+        ) as e:
             logger.warning(
                 "Alt text API call failed (attempt %d/%d): %s",
                 attempt,

@@ -11,8 +11,10 @@ services:
     volumes:
       - feedecho-data:/app/data
     environment:
-      # Access token for the web UI (required)
-      - FEEDCHO_AUTH_TOKEN=${FEEDCHO_AUTH_TOKEN}
+      # Access token for the web UI. Required: an empty value disables auth
+      # entirely, so compose refuses to start rather than exposing the
+      # instance because of a missing .env entry.
+      - FEEDCHO_AUTH_TOKEN=${FEEDCHO_AUTH_TOKEN:?set FEEDCHO_AUTH_TOKEN in .env (an empty value would leave the UI unauthenticated)}
       # Public base URL — required for Mastodon OAuth callbacks
       # e.g. https://feedecho.example.com/oauth/callback
       - FEEDCHO_CALLBACK_URL=${FEEDCHO_CALLBACK_URL:-http://localhost:8453/oauth/callback}

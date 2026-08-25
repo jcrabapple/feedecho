@@ -350,7 +350,11 @@ def login_submit(
 
 def logout():
     response = RedirectResponse(url="/login", status_code=302)
+    # Both cookies: multi mode authenticates on the signed session, single
+    # mode on the shared-secret cookie. Clearing only one made logout a
+    # no-op in the other mode.
     response.delete_cookie(COOKIE_NAME)
+    response.delete_cookie("feedecho_auth")
     return response
 
 

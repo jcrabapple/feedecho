@@ -12,3 +12,8 @@ uv.lock
 Dockerfile
 docker-compose.yml
 .dockerignore
+# Never bake secrets into an image layer: both compose files instruct you to
+# create .env in the project root, and single-mode compose builds from here.
+.env
+.env.*
+!.env.example.multi

@@ -9,6 +9,7 @@ backends (sqlite3.Row / psycopg dict_row).
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import settings
@@ -58,6 +59,49 @@ def qmark(sql: str) -> str:
             out.append("%%" if sql[i] == "%" else sql[i])
             i += 1
     return "".join(out)
+
+
+def as_utc_naive(value) -> datetime | None:
+    """Normalize a stored TIMESTAMP value to a naive UTC datetime.
+
+    The read-side counterpart to :func:`qmark`. sqlite hands TIMESTAMP
+    columns back as the TEXT that was written; psycopg hands them back as
+    ``datetime`` objects. Anything that parses or compares a stored
+    timestamp in Python must normalize first, or it works on sqlite and
+    raises ``TypeError`` on Postgres only.
+
+    Returns None when the value is empty or unparseable.
+
+    Invariant: every writer stores UTC in these TIMESTAMP columns (app and
+    scheduler code generate UTC strings via ``scheduler._now()``; sqlite
+    ``CURRENT_TIMESTAMP`` is UTC). Naive values are therefore treated as
+    UTC. Do not add writers that store local time, and prefer binding an
+    explicit ``_now()`` over Postgres ``CURRENT_TIMESTAMP``, which resolves
+    in the session time zone rather than UTC.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def timestamp_str(value) -> str:
+    """Normalize a stored TIMESTAMP value to 'YYYY-MM-DD HH:MM:SS' (UTC).
+
+    For code that compares a stored timestamp against the app's own UTC
+    timestamp strings. Returns "" when the value is missing or
+    unparseable, so callers can treat "no timestamp" as falsy.
+    """
+    dt = as_utc_naive(value)
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
 class _PgConnection:
@@ -375,6 +419,13 @@ def init_db_sqlite() -> None:
             )
         # Admin flag for hosted mode (A2); never auto-granted.
         _add_column_if_missing(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0")
+        # Session epoch: bumped on password reset, invalidating all prior
+        # session cookies for the user. Added after the users table shipped,
+        # so sqlite databases created before it need the backfill too — the
+        # multi-mode auth middleware and login both SELECT this column, and
+        # a self-hoster switching an existing sqlite DB to multi mode would
+        # otherwise hit "no such column: session_epoch".
+        _add_column_if_missing(db, "users", "session_epoch", "INTEGER NOT NULL DEFAULT 0")
 
         # Migrate single-column UNIQUE constraints to per-user composite
         # constraints so different tenants can use the same destination

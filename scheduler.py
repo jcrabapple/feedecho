@@ -12,7 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 import settings
-from database import get_db
+from database import get_db, timestamp_str
 from email_sender import send_email
 from feed_parser import fetch_feed, fetch_image, get_new_items, truncate
 from filters import is_filtered
@@ -719,12 +719,12 @@ def _update_post(
                    post_url = COALESCE(?, post_url),
                    claimed_at = NULL,
                    claim_token = NULL,
-                   posted_at = CURRENT_TIMESTAMP
+                   posted_at = ?
              WHERE id = ?
                AND status = 'pending'
                AND claim_token = ?
             """,
-            (status, error, post_url, posted_id, claim_token),
+            (status, error, post_url, _now(), posted_id, claim_token),
         )
         return result.rowcount == 1
 
@@ -773,12 +773,12 @@ def _fail_post(
                    next_retry_at = ?,
                    claimed_at = NULL,
                    claim_token = NULL,
-                   posted_at = CURRENT_TIMESTAMP
+                   posted_at = ?
              WHERE id = ?
                AND status = 'pending'
                AND claim_token = ?
             """,
-            (final, error_out, retry_at, posted_id, claim_token),
+            (final, error_out, retry_at, _now(), posted_id, claim_token),
         )
 
     record_failure(echo_id)
@@ -966,7 +966,12 @@ def _bsky_session(account) -> dict:
         resolved_did, pds = resolve_pds(handle)
 
     if access_jwt:
-        expires_at = account["session_expires_at"] or ""
+        # Normalize before comparing: psycopg returns a datetime for the
+        # TIMESTAMP column, sqlite returns the stored string. Comparing a
+        # datetime against the _now() string raises TypeError, which the
+        # caller's broad handler would report as "Bluesky session failed"
+        # on every post after the first.
+        expires_at = timestamp_str(account["session_expires_at"])
         if expires_at and expires_at > now:
             # Persist a late PDS/DID resolution without disturbing the session.
             if resolved_did:
@@ -1290,9 +1295,13 @@ def _requeue_drip_failure(
                           error_message = ?,
                           claimed_at = NULL,
                           claim_token = NULL,
-                          posted_at = CURRENT_TIMESTAMP
+                          posted_at = ?
                     WHERE id = ?""",
-                (f"Drip release gave up after {attempts} attempts", posted_id),
+                (
+                    f"Drip release gave up after {attempts} attempts",
+                    _now(),
+                    posted_id,
+                ),
             )
         record_failure(echo_id)
         logger.error(
@@ -1310,9 +1319,9 @@ def _requeue_drip_failure(
                       claimed_at = NULL,
                       claim_token = NULL,
                       next_retry_at = NULL,
-                      posted_at = CURRENT_TIMESTAMP
+                      posted_at = ?
                 WHERE id = ? AND status = 'failed'""",
-            (posted_id,),
+            (_now(), posted_id),
         )
         if result.rowcount != 1:
             # The row moved on (e.g. claimed by the retry sweep); the
@@ -1347,9 +1356,9 @@ def _discard_drip_backlog(echo_id: int, reason: str) -> None:
                       error_message = ?,
                       claimed_at = NULL,
                       claim_token = NULL,
-                      posted_at = CURRENT_TIMESTAMP
+                      posted_at = ?
                 WHERE echo_id = ? AND status = 'queued'""",
-            (reason, echo_id),
+            (reason, _now(), echo_id),
         )
         db.execute("DELETE FROM drip_items WHERE echo_id = ?", (echo_id,))
     logger.info("Echo %s: %s", echo_id, reason)
@@ -1528,9 +1537,9 @@ def flush_digests() -> None:
             for item in items:
                 # Update posted_items from 'queued' to 'success'
                 db.execute(
-                    """UPDATE posted_items SET status = 'success', posted_at = CURRENT_TIMESTAMP
+                    """UPDATE posted_items SET status = 'success', posted_at = ?
                        WHERE echo_id = ? AND item_id = ? AND status = 'queued'""",
-                    (echo_id, item["item_id"]),
+                    (_now(), echo_id, item["item_id"]),
                 )
             # Delete only the sent items, not any that may have arrived concurrently
             placeholders = ",".join("?" for _ in sent_item_ids)
@@ -1561,7 +1570,11 @@ def check_all_feeds() -> None:
             due.append(feed)
             continue
         try:
-            ts = feed["last_fetched"].replace("T", " ")[:19]
+            # timestamp_str first: psycopg returns a datetime for
+            # last_fetched, and datetime.replace("T", " ") raises TypeError,
+            # which this except would swallow into "always due" — making
+            # every feed poll on every tick and ignoring poll_interval.
+            ts = timestamp_str(feed["last_fetched"])
             last = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(
                 tzinfo=timezone.utc
             )

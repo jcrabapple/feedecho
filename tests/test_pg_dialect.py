@@ -6,6 +6,7 @@ postgres:17-alpine service container.
 """
 
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -447,3 +448,191 @@ class TestAppOnPostgres:
         )
         assert dash.status_code == 200
         assert "Queued" in dash.text
+
+
+@requires_pg
+class TestPostgresTimestampReads:
+    """Regressions for TIMESTAMP columns read back as psycopg datetimes.
+
+    sqlite hands these columns back as the TEXT that was written, so code
+    that parses or compares them in Python passed the sqlite suite while
+    raising TypeError on Postgres only. Both bugs below shipped in
+    v1.13.4 and were invisible to every existing test.
+    """
+
+    def test_bsky_session_reuses_unexpired_cached_jwt(self, pg_env, monkeypatch):
+        """A cached, unexpired session must be reused without any network I/O.
+
+        Before the fix, `session_expires_at > _now()` compared a datetime
+        against a str, raised TypeError, and the caller logged "Bluesky
+        session failed" for every post after the first one.
+        """
+        import scheduler
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (7, 'b@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO bluesky_accounts (id, name, handle, app_password, did,"
+                " pds, access_jwt, refresh_jwt, session_expires_at, user_id)"
+                " VALUES (1, 'B', 'b.example.com', 'pw', 'did:plc:abc',"
+                " 'https://pds.example.com', 'cached-jwt', 'refresh-jwt', ?, 7)",
+                (scheduler._timestamp_after(3600),),
+            )
+            account = db.execute(
+                "SELECT * FROM bluesky_accounts WHERE id = 1"
+            ).fetchone()
+
+        # Any network call means the cache was not honoured.
+        def _boom(*args, **kwargs):
+            raise AssertionError("network call made despite a valid cached session")
+
+        monkeypatch.setattr(scheduler, "resolve_pds", _boom)
+        monkeypatch.setattr(scheduler, "refresh_session", _boom)
+        monkeypatch.setattr(scheduler, "create_session", _boom)
+
+        assert isinstance(
+            account["session_expires_at"], datetime
+        ), "psycopg should return a datetime here; test would be vacuous otherwise"
+
+        session = scheduler._bsky_session(account)
+        assert session["access_jwt"] == "cached-jwt"
+        assert session["pds"] == "https://pds.example.com"
+        assert session["did"] == "did:plc:abc"
+
+    def test_bsky_session_refreshes_expired_cached_jwt(self, pg_env, monkeypatch):
+        """The mirror case: an expired cached JWT must still trigger a refresh."""
+        import scheduler
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (7, 'b@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO bluesky_accounts (id, name, handle, app_password, did,"
+                " pds, access_jwt, refresh_jwt, session_expires_at, user_id)"
+                " VALUES (1, 'B', 'b.example.com', 'pw', 'did:plc:abc',"
+                " 'https://pds.example.com', 'stale-jwt', 'refresh-jwt', ?, 7)",
+                (scheduler._timestamp_after(-3600),),
+            )
+            account = db.execute(
+                "SELECT * FROM bluesky_accounts WHERE id = 1"
+            ).fetchone()
+
+        monkeypatch.setattr(
+            scheduler,
+            "refresh_session",
+            lambda pds, jwt: {
+                "did": "did:plc:abc",
+                "access_jwt": "fresh-jwt",
+                "refresh_jwt": "new-refresh",
+                "expires_at": scheduler._timestamp_after(3600),
+            },
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "create_session",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("should have refreshed, not re-logged-in")
+            ),
+        )
+
+        session = scheduler._bsky_session(account)
+        assert session["access_jwt"] == "fresh-jwt"
+
+    def test_poll_interval_is_honoured_on_pg(self, pg_env, monkeypatch):
+        """Only feeds past their poll_interval are due.
+
+        Before the fix, `last_fetched.replace("T", " ")` raised TypeError on
+        a datetime, the handler treated that as "malformed, so due", and
+        every feed was polled on every 2-minute tick.
+        """
+        import scheduler
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (7, 'p@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, poll_interval, last_fetched, user_id)"
+                " VALUES (1, 'Fresh', 'https://a.example.com/feed', 60, ?, 7)",
+                (scheduler._timestamp_after(-5 * 60),),
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, poll_interval, last_fetched, user_id)"
+                " VALUES (2, 'Stale', 'https://b.example.com/feed', 60, ?, 7)",
+                (scheduler._timestamp_after(-2 * 60 * 60),),
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, poll_interval, last_fetched, user_id)"
+                " VALUES (3, 'Never', 'https://c.example.com/feed', 60, NULL, 7)"
+            )
+            row = db.execute("SELECT last_fetched FROM feeds WHERE id = 1").fetchone()
+        assert isinstance(
+            row["last_fetched"], datetime
+        ), "psycopg should return a datetime here; test would be vacuous otherwise"
+
+        checked: list[int] = []
+        monkeypatch.setattr(scheduler, "check_feed", lambda fid: checked.append(fid))
+        scheduler.check_all_feeds()
+
+        assert 1 not in checked, "feed fetched 5 min ago is not due at a 60 min interval"
+        assert sorted(checked) == [2, 3]
+
+    def test_posted_at_is_written_as_utc_not_session_timezone(self, pg_env):
+        """posted_at must be app-generated UTC, comparable with _drip_rate's window.
+
+        Postgres CURRENT_TIMESTAMP resolves in the session time zone, so it
+        silently skewed the drip window on any server not running UTC. The
+        database default is flipped here (get_db opens a new connection per
+        call, so a per-connection SET would not reach the code under test).
+        """
+        import scheduler
+
+        database.init_db()
+        with database.get_db() as db:
+            dbname = db.execute("SELECT current_database() AS d").fetchone()["d"]
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (7, 'd@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (1, 'F', 'https://a.example.com/feed', 7)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id,"
+                " template, user_id) VALUES (1, 1, 'mastodon', 1, '{{ title }}', 7)"
+            )
+            db.execute(
+                "INSERT INTO posted_items (id, echo_id, item_id, status, claim_token)"
+                " VALUES (1, 1, 'item-1', 'pending', 'tok')"
+            )
+
+        with database.get_db() as db:
+            db.execute(f'ALTER DATABASE "{dbname}" SET TIME ZONE \'America/New_York\'')
+        try:
+            assert scheduler._update_post(1, "tok", "success") is True
+            with database.get_db() as db:
+                assert db.execute(
+                    "SELECT current_setting('TimeZone') AS tz"
+                ).fetchone()["tz"] == (
+                    "America/New_York"
+                ), "time zone override did not take effect; test would be vacuous"
+                stored = db.execute(
+                    "SELECT posted_at FROM posted_items WHERE id = 1"
+                ).fetchone()["posted_at"]
+            # Within a minute of UTC now, not offset by the session time zone.
+            stored_utc = database.as_utc_naive(stored)
+            assert stored_utc is not None, f"posted_at unparseable: {stored!r}"
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            delta = abs((stored_utc - now_utc).total_seconds())
+            assert delta < 60, f"posted_at {stored!r} is not UTC (delta {delta}s)"
+            # And the drip window, which compares against a UTC string, sees it.
+            assert scheduler._drip_rate(1) == 1
+        finally:
+            with database.get_db() as db:
+                db.execute(f'ALTER DATABASE "{dbname}" RESET TIME ZONE')

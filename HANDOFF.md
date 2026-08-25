@@ -73,6 +73,25 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   parsed as local midnight (no UTC off-by-one). app.js cache-buster
   bumped (v=17). Regression test asserts banner date == stored
   trial_ends_at. 523 sqlite + 15 pg green.
+- DONE (issue #7, Kimi-reviewed): the Mastodon app registration no longer
+  hardcodes website="https://feedecho.example.com", the dead link Mastodon
+  rendered behind the "FeedEcho" application name on every post. Resolution
+  is FEEDCHO_APP_WEBSITE -> FEEDCHO_BASE_URL -> settings.PROJECT_URL (repo);
+  CALLBACK_URL derives from BASE_URL when unset instead of always falling
+  back to the placeholder; BASE_URL is .strip()ed. oauth_apps gained website
+  + redirect_uris (both dialects + migrations); cached credentials are reused
+  only while BOTH still match config, since Mastodon cannot edit an existing
+  registration and a drifted callback fails as a redirect mismatch. Legacy
+  NULL rows re-register once. exchange_code passes allow_refresh=False so the
+  token exchange stays pinned to the client the code was issued to. Known and
+  documented: SELECT-then-register-then-upsert TOCTOU on concurrent connects
+  to the same instance (pre-existing; loser retries). ALREADY-CONNECTED
+  ACCOUNTS KEEP THE OLD LINK — the token is bound to the old registration, so
+  the account must be reconnected. Local instance: drop-in
+  ~/.config/systemd/user/feedecho.service.d/callback-url.conf sets
+  FEEDCHO_CALLBACK_URL=https://feedecho.snakepit.us/oauth/callback and
+  deliberately leaves APP_WEBSITE unset, so the public post link is the repo
+  and not Jason's personal hostname. 540 sqlite + 16 pg green.
 - NOT STARTED: Phase 4 (billing): Stripe card-gated trial, B2 backups,
   Cloudflare proxy decision. Private beta targeted months 3-4. Note: the
   hosted account's verification banner is active until system SMTP is

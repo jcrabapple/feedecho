@@ -30,7 +30,7 @@ services:
   feedecho:
     # Pinned to the release tag: `latest` would silently pull unreviewed
     # builds into production on every compose up.
-    image: ghcr.io/jcrabapple/feedecho:1.13.5
+    image: ghcr.io/jcrabapple/feedecho:1.13.6
     pull_policy: always
     container_name: feedecho
     restart: unless-stopped

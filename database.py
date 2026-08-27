@@ -585,6 +585,17 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "oauth_states", "user_id", "INTEGER")
 
         db.execute("""
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code TEXT PRIMARY KEY,
+                created_by INTEGER,
+                used_by INTEGER,
+                used_at TIMESTAMP,
+                revoked INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
             CREATE INDEX IF NOT EXISTS idx_posted_items_echo
             ON posted_items(echo_id, posted_at DESC)
         """)
@@ -879,6 +890,17 @@ def init_db_postgres() -> None:
                 expires_at TIMESTAMP NOT NULL,
                 user_id BIGINT,
                 consumed_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code TEXT PRIMARY KEY,
+                created_by BIGINT,
+                used_by BIGINT,
+                used_at TIMESTAMP,
+                revoked INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)

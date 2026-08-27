@@ -19,6 +19,7 @@ from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 import settings
+import invites
 from database import get_db
 from security import SESSION_TTL_SECONDS, hash_password, sign_session, verify_password
 
@@ -74,6 +75,15 @@ def current_user_id(request: Request) -> int:
 def _require_multi() -> None:
     if not settings.MULTI:
         raise HTTPException(status_code=404, detail="Not found")
+
+
+class _InviteRejected(Exception):
+    """Internal: invite consume failed mid-transaction.
+
+    Raised so the get_db context manager rolls back the whole signup
+    (user row + code consume together); caught just outside the block,
+    where it is safe to render the HTML error banner.
+    """
 
 
 def is_admin(uid: int) -> bool:
@@ -201,7 +211,7 @@ def _absolute_link(path: str) -> str:
 
 def register_page(request: Request):
     _require_multi()
-    return _render_auth(request, "register.html")
+    return _render_auth(request, "register.html", invites_required=invites.invites_required())
 
 
 def register_submit(
@@ -209,9 +219,11 @@ def register_submit(
     email: str = Form(...),
     password: str = Form(...),
     confirm: str = Form(...),
+    invite_code: str = Form(""),
 ):
     _require_multi()
     email = email.strip().lower()
+    invite_code = (invite_code or "").strip()
     errors: list[str] = []
     if not _EMAIL_RE.match(email):
         errors.append("Enter a valid email address.")
@@ -223,7 +235,8 @@ def register_submit(
         errors.append("Passwords do not match.")
     if errors:
         return _render_auth(
-            request, "register.html", error=" ".join(errors), email=email
+            request, "register.html", error=" ".join(errors), email=email,
+            invite_code=invite_code, invites_required=invites.invites_required(),
         )
 
     ip = _client_ip(request)
@@ -235,41 +248,88 @@ def register_submit(
             email=email,
         )
 
-    with get_db() as db:
-        existing = db.execute(
-            "SELECT id FROM users WHERE email = ?", (email,)
-        ).fetchone()
-        if existing:
-            return _render_auth(
-                request,
-                "register.html",
-                error="An account with that email already exists.",
-                email=email,
-            )
-        _record_register(ip)
-        try:
-            db.execute(
-                """
-                INSERT INTO users (email, password_hash, plan, trial_ends_at, email_verified)
-                VALUES (?, ?, 'trial', ?, 0)
-                """,
-                (email, hash_password(password), _trial_end()),
-            )
-        except Exception as e:
-            # Duplicate-email race between SELECT and INSERT: the UNIQUE
-            # constraint fires as IntegrityError (sqlite) / UniqueViolation
-            # (psycopg). Render the same friendly message as the SELECT path.
-            if e.__class__.__name__ in ("IntegrityError", "UniqueViolation"):
+    try:
+        with get_db() as db:
+            existing = db.execute(
+                "SELECT id FROM users WHERE email = ?", (email,)
+            ).fetchone()
+            if existing:
                 return _render_auth(
                     request,
                     "register.html",
                     error="An account with that email already exists.",
                     email=email,
+                    invite_code=invite_code,
+                    invites_required=invites.invites_required(),
                 )
-            raise
-        user = db.execute(
-            "SELECT id FROM users WHERE email = ?", (email,)
-        ).fetchone()
+
+            # Early UX check (non-consuming): renders the friendly banner for
+            # the common failure before doing any work. The authoritative gate
+            # is the atomic consume below — this pre-check creates no claim.
+            if invites.invites_required() and not invites.looks_usable(db, invite_code):
+                return _render_auth(
+                    request,
+                    "register.html",
+                    error="That invite code is not valid.",
+                    email=email,
+                    invite_code=invite_code,
+                    invites_required=True,
+                )
+
+            _record_register(ip)
+            try:
+                db.execute(
+                    """
+                    INSERT INTO users (email, password_hash, plan, trial_ends_at, email_verified)
+                    VALUES (?, ?, 'trial', ?, 0)
+                    """,
+                    (email, hash_password(password), _trial_end()),
+                )
+            except Exception as e:
+                # Duplicate-email race between SELECT and INSERT: the UNIQUE
+                # constraint fires as IntegrityError (sqlite) / UniqueViolation
+                # (psycopg). Render the same friendly message as the SELECT path.
+                # No invite code has been consumed yet (consume happens below,
+                # after the INSERT succeeded), so nothing to roll back.
+                if e.__class__.__name__ in ("IntegrityError", "UniqueViolation"):
+                    return _render_auth(
+                        request,
+                        "register.html",
+                        error="An account with that email already exists.",
+                        email=email,
+                        invite_code=invite_code,
+                        invites_required=invites.invites_required(),
+                    )
+                raise
+            user = db.execute(
+                "SELECT id FROM users WHERE email = ?", (email,)
+            ).fetchone()
+
+            # Invite gate: consume AFTER the user row exists, SAME transaction.
+            # The single conditional UPDATE stamps used_by with the new user's
+            # id; rowcount 1 is the entire validation. If it fails, raise out of
+            # the context manager: the whole transaction — user row included —
+            # rolls back, so a rejected code leaves zero trace. Two simultaneous
+            # signups on one code: the first UPDATE wins, the second matches
+            # zero rows and rolls its user INSERT back. No hold phase, no window.
+            if invites.invites_required():
+                try:
+                    invites.validate_and_consume(db, invite_code, user["id"])
+                except invites.InviteError:
+                    # Abort the whole transaction (user row included), then the
+                    # except below renders the banner once we're outside it.
+                    raise _InviteRejected()
+
+    except _InviteRejected:
+        # Outside the DB context: rollback already happened, safe to render.
+        return _render_auth(
+            request,
+            "register.html",
+            error="That invite code is not valid.",
+            email=email,
+            invite_code=invite_code,
+            invites_required=True,
+        )
 
     # Verification email: best-effort. Signup succeeds even if system SMTP
     # is unconfigured or the send fails; the dashboard banner offers resend.

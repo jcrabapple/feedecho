@@ -132,6 +132,13 @@ PLAN_LIMITS = _load_plan_limits()
 # until the operator moves the user to 'beta'/'paid' or extends trial_ends_at.
 TRIAL_GRACE_NOTE = os.environ.get("FEEDCHO_TRIAL_GRACE_NOTE", "")
 
+# ── Invite codes (hosted beta gate) ─────────────────────────────────────────
+#
+# When True, /register requires a valid unused invite code. Default is False
+# so an upgrade never locks self-hosters out of their own instance (single
+# mode ignores this entirely); the hosted deployment sets FEEDCHO_INVITES_REQUIRED=1.
+INVITES_REQUIRED = os.environ.get("FEEDCHO_INVITES_REQUIRED", "") == "1"
+
 
 def validate_config() -> None:
     """Fail fast on misconfigured multi mode. Called from app startup.

@@ -32,6 +32,7 @@ from auth import current_user_id
 import security
 from feed_parser import fetch_feed, SSRFError, validate_outbound_url
 import plans
+import invites
 from plans import PlanError
 from mastodon import test_connection, post_status, verify_credentials
 from bluesky import (
@@ -375,9 +376,11 @@ async def register_submit(
     email: str = Form(...),
     password: str = Form(...),
     confirm: str = Form(...),
+    invite_code: str = Form(""),
 ):
     return auth.register_submit(
-        request, email=email, password=password, confirm=confirm
+        request, email=email, password=password, confirm=confirm,
+        invite_code=invite_code,
     )
 
 
@@ -907,6 +910,7 @@ async def admin_page(request: Request):
         smtp_rows = db.execute(
             "SELECT key, value FROM system_settings WHERE key LIKE 'smtp_%'"
         ).fetchall()
+        invite_rows = invites.list_codes(db)
     smtp = {row["key"]: row["value"] for row in smtp_rows}
     if "smtp_password" in smtp and smtp["smtp_password"]:
         smtp["smtp_password"] = "\u2022\u2022\u2022\u2022\u2022\u2022 (stored)"
@@ -914,7 +918,9 @@ async def admin_page(request: Request):
         smtp["smtp_password"] = ""
     smtp["configured"] = bool(smtp.get("smtp_host") and smtp.get("smtp_port"))
     return render("admin.html", request, users=users, stats=stats, smtp=smtp,
-                  plan_names=sorted(settings.PLAN_LIMITS.keys()))
+                  plan_names=sorted(settings.PLAN_LIMITS.keys()),
+                  invite_codes=invite_rows,
+                  invites_required=settings.INVITES_REQUIRED)
 
 
 _SMTP_FORM_KEYS = (
@@ -1165,6 +1171,41 @@ async def admin_extend_trial(user_id: int, request: Request):
             (new_end, user_id),
         )
     logger.info("Admin %s extended user %s trial by %d days (to %s)", uid, user_id, days, new_end)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.post("/admin/invites/generate")
+async def admin_generate_invites(request: Request):
+    """Mint 1-50 fresh invite codes."""
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    form = await request.form()
+    try:
+        count = int(form.get("count") or 1)
+    except ValueError:
+        count = 1
+    count = max(1, min(count, 50))
+    with get_db() as db:
+        codes = invites.create_codes(db, count, uid)
+    logger.info("Admin %s generated %d invite codes", uid, len(codes))
+    return RedirectResponse(url="/admin?invites_created=" + str(len(codes)), status_code=302)
+
+
+@app.post("/admin/invites/revoke")
+async def admin_revoke_invite(request: Request):
+    """Revoke an unused invite code (used codes are historical records)."""
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    form = await request.form()
+    code = (form.get("code") or "").strip()
+    with get_db() as db:
+        ok = invites.revoke(db, code, uid)
+        if ok:
+            logger.info("Admin %s revoked an invite code", uid)
     return RedirectResponse(url="/admin", status_code=302)
 
 

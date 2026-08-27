@@ -21,6 +21,13 @@
                 <input type="password" name="confirm" placeholder="Confirm password" required
                        autocomplete="new-password" class="auth-input">
             </div>
+            {% if invites_required %}
+            <div class="form-row">
+                <input type="text" name="invite_code" placeholder="Invite code" required
+                       value="{{ invite_code or '' }}" autocomplete="off" class="auth-input"
+                       spellcheck="false">
+            </div>
+            {% endif %}
             <button type="submit" class="btn">Sign up</button>
         </form>
         <p class="auth-footer">Already have an account? <a href="/login">Log in</a></p>

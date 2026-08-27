@@ -227,6 +227,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/reset-password",
         # Public hosted-service disclosure page.
         "/about",
+        # Legal pages are for people deciding whether to sign up.
+        "/terms",
+        "/privacy",
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
@@ -237,7 +240,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     # care who you are; /static, /healthz and /favicon.svg must not pay for a
     # database read. /forgot-password and /reset-password are for people who
     # cannot get in, where anonymous chrome is the honest answer.
-    _MULTI_PUBLIC_PAGES = {"/login", "/register", "/about", "/verify-email"}
+    _MULTI_PUBLIC_PAGES = {"/login", "/register", "/about", "/verify-email", "/terms", "/privacy"}
 
     async def dispatch(self, request: Request, call_next):
         if settings.MULTI:
@@ -1333,6 +1336,23 @@ async def about_page(request: Request):
 
     _require_multi()  # hosted-service disclosure; 404 in self-hosted mode
     return render("about.html", request)
+
+
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page(request: Request):
+    from auth import _require_multi
+
+    # Hosted-service legal page; 404 in self-hosted mode (no contract there).
+    _require_multi()
+    return render("terms.html", request)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page(request: Request):
+    from auth import _require_multi
+
+    _require_multi()  # hosted-service legal page; 404 in self-hosted mode
+    return render("privacy.html", request)
 
 
 @app.get("/settings", response_class=HTMLResponse)

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Terms of Service — FeedEcho{% endblock %}
+{% block content %}
+<h1>Terms of Service</h1>
+<p class="hint">These terms govern your use of the FeedEcho hosted service at feedecho.net. Last updated: August 27, 2026.</p>
+
+<section>
+    <h2>1. The service</h2>
+    <p>FeedEcho is a hosted service that monitors RSS/Atom/JSON feeds you subscribe to and delivers new items to destination accounts you connect — Mastodon, Bluesky, micro.blog, or email — using templates and filters you configure. The service is operated by the site operator (referred to below as "we", "us", or "the operator").</p>
+</section>
+
+<section>
+    <h2>2. Accounts and eligibility</h2>
+    <ul>
+        <li>You must provide a valid email address and a password of at least 8 characters. You are responsible for keeping your credentials secure.</li>
+        <li>One person or organization per account. You may not resell access to the service.</li>
+        <li>Access during the private beta is by invitation. Invited accounts receive a 14-day free trial; beta participants are not asked for payment while the beta lasts.</li>
+        <li>You must be old enough to form a binding contract in your jurisdiction.</li>
+    </ul>
+</section>
+
+<section>
+    <h2>3. Acceptable use</h2>
+    <p>You agree not to use the service to:</p>
+    <ul>
+        <li>Post spam, unsolicited bulk messages, malware, or content that is unlawful in your or our jurisdiction.</li>
+        <li>Impersonate people or organizations, or post content you are not licensed to share.</li>
+        <li>Monitor feeds you are not permitted to access, or probe/scrape services in violation of their terms.</li>
+        <li>Attempt to access other tenants' data, overload the service, or circumvent its rate limits and security controls.</li>
+    </ul>
+    <p>You remain fully responsible for the content your account posts to your connected platforms. We act only as the delivery mechanism you configure.</p>
+</section>
+
+<section>
+    <h2>4. Your content and credentials</h2>
+    <p>You keep all rights to your feeds, templates, and posted content. You grant us the limited technical right to fetch your feeds and deliver posts to the destinations you configure — no other use. Destination credentials (tokens, app passwords, SMTP credentials) you connect are used solely to deliver your posts and are stored as described in the <a href="/privacy">Privacy Policy</a>.</p>
+</section>
+
+<section>
+    <h2>5. Plans, trials, and payment</h2>
+    <ul>
+        <li>Plans set resource limits (number of feeds, destinations, posting rates, poll intervals). Current limits are shown in your dashboard.</li>
+        <li>Trials last 14 days from signup unless extended by the operator. When a trial ends without an upgrade, posting pauses — your configuration and history are preserved, nothing is deleted.</li>
+        <li>During the private beta there is no charge. When paid plans launch, pricing and billing terms will be presented before any charge, and this section will describe them.</li>
+    </ul>
+</section>
+
+<section>
+    <h2>6. Availability and changes</h2>
+    <ul>
+        <li>The service is provided during beta "as is" and "as available". We aim for reliability but do not guarantee uninterrupted operation, and beta features may change or be withdrawn.</li>
+        <li>We may modify the service, plan limits, or these terms. Material changes to the terms will be announced by email or a dashboard notice before they take effect; continued use after that constitutes acceptance.</li>
+        <li>We may suspend accounts that violate these terms, with notice where practical.</li>
+    </ul>
+</section>
+
+<section>
+    <h2>7. Termination</h2>
+    <p>You can stop using the service at any time; see the <a href="/privacy">Privacy Policy</a> for deletion of your data. We may terminate accounts that breach these terms or remain inactive beyond a reasonable period after trial end, with email notice and a chance to export connected data where feasible.</p>
+</section>
+
+<section>
+    <h2>8. Disclaimer and liability</h2>
+    <p>To the maximum extent permitted by law, the service is provided without warranties of any kind beyond those required by law, and the operator's total liability arising from the service is limited to the amounts you paid for it in the previous 12 months (zero during the free beta). We are not liable for the content of your posts or actions taken by the platforms you connect.</p>
+</section>
+
+<section>
+    <h2>9. Contact</h2>
+    <p>Questions, disputes, or notices: reply to any email this service sent you — the sender address reaches the operator directly — or use the contact address on the <a href="/about">About</a> page.</p>
+</section>
+{% endblock %}

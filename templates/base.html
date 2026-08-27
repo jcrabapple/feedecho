@@ -75,7 +75,7 @@
         <div class="footer-links">
             {# /howto is behind the auth gate: linking it to an anonymous
                viewer just bounces them back to the login page. #}
-            {% if MULTI %}<a href="/about">About</a>{% if authed %} · {% endif %}{% endif %}{% if authed %}<a href="/howto">How To</a>{% endif %}
+            {% if MULTI %}<a href="/about">About</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>{% if authed %} · {% endif %}{% endif %}{% if authed %}<a href="/howto">How To</a>{% endif %}
         </div>
         {% if app_version %}
         <div class="footer-version">

@@ -853,6 +853,69 @@ def _admin_uid_or_none(request: Request) -> int | None:
     return uid if auth.is_admin(uid) else None
 
 
+def _admin_usage(db) -> list:
+    """Per-tenant usage for the admin page's support view.
+
+    One row per user: resource counts, delivery outcomes in the last 24h
+    and 7d, and the most recent delivery error. Set-based (one query for
+    all tenants) so the admin page stays one round trip.
+
+    Trial-paused/suspended owners show explicitly — the #1 "nothing posts"
+    report is a paused trial, and the admin row should say so at a glance.
+    """
+    day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    # Time bounds are Python-computed UTC strings bound as parameters:
+    # datetime('now', ...) is sqlite-only, and CURRENT_TIMESTAMP on Postgres
+    # resolves in the session time zone (see database.as_utc_naive invariant).
+    rows = db.execute("""
+        SELECT
+            u.id AS user_id,
+            (SELECT COUNT(*) FROM feeds f
+              WHERE f.user_id = u.id AND f.deleted_at IS NULL) AS feeds,
+            (SELECT COUNT(*) FROM feeds f
+              WHERE f.user_id = u.id AND f.deleted_at IS NULL AND f.paused = 1) AS feeds_paused,
+            (SELECT COUNT(*) FROM echoes e
+              WHERE e.user_id = u.id AND e.deleted_at IS NULL) AS echoes,
+            (SELECT COUNT(*) FROM echoes e
+              WHERE e.user_id = u.id AND e.deleted_at IS NULL AND e.enabled = 1) AS echoes_enabled,
+            (SELECT COUNT(*) FROM accounts a
+              WHERE a.user_id = u.id) +
+            (SELECT COUNT(*) FROM email_accounts ea
+              WHERE ea.user_id = u.id) +
+            (SELECT COUNT(*) FROM bluesky_accounts b
+              WHERE b.user_id = u.id) +
+            (SELECT COUNT(*) FROM microblog_accounts m
+              WHERE m.user_id = u.id) AS destinations,
+            (SELECT COUNT(*) FROM posted_items pi
+              JOIN echoes e2 ON pi.echo_id = e2.id
+              WHERE e2.user_id = u.id AND pi.status = 'success'
+                AND pi.posted_at >= ?) AS posts_24h,
+            (SELECT COUNT(*) FROM posted_items pi
+              JOIN echoes e2 ON pi.echo_id = e2.id
+              WHERE e2.user_id = u.id AND pi.status = 'success'
+                AND pi.posted_at >= ?) AS posts_7d,
+            (SELECT COUNT(*) FROM posted_items pi
+              JOIN echoes e2 ON pi.echo_id = e2.id
+              WHERE e2.user_id = u.id AND pi.status IN ('failed', 'gave_up')
+                AND pi.posted_at >= ?) AS failures_7d,
+            (SELECT COUNT(*) FROM posted_items pi
+              JOIN echoes e2 ON pi.echo_id = e2.id
+              WHERE e2.user_id = u.id AND pi.status = 'queued') AS queued_now,
+            (SELECT pi.error_message FROM posted_items pi
+              JOIN echoes e2 ON pi.echo_id = e2.id
+              WHERE e2.user_id = u.id AND pi.status IN ('failed', 'gave_up')
+              ORDER BY pi.posted_at DESC LIMIT 1) AS last_error
+        FROM users u
+        WHERE u.email != 'local'
+    """, (day_ago, week_ago, week_ago)).fetchall()
+    return rows
+
+
 def _admin_stats(db) -> dict:
     rows = db.execute(
         "SELECT COUNT(*) AS n,"
@@ -910,6 +973,8 @@ async def admin_page(request: Request):
              ORDER BY created_at DESC
         """).fetchall()
         stats = _admin_stats(db)
+        usage_rows = _admin_usage(db)
+        usage_by_user = {row["user_id"]: row for row in usage_rows}
         smtp_rows = db.execute(
             "SELECT key, value FROM system_settings WHERE key LIKE 'smtp_%'"
         ).fetchall()
@@ -923,7 +988,8 @@ async def admin_page(request: Request):
     return render("admin.html", request, users=users, stats=stats, smtp=smtp,
                   plan_names=sorted(settings.PLAN_LIMITS.keys()),
                   invite_codes=invite_rows,
-                  invites_required=settings.INVITES_REQUIRED)
+                  invites_required=settings.INVITES_REQUIRED,
+                  usage_by_user=usage_by_user)
 
 
 _SMTP_FORM_KEYS = (

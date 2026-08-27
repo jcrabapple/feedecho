@@ -95,6 +95,34 @@
                     {% endif %}
                 </td>
             </tr>
+            {% set usage = usage_by_user.get(u.id) %}
+            {% if usage %}
+            <tr class="usage-row">
+                <td colspan="7" class="usage-cell">
+                    <details>
+                        <summary class="usage-summary">
+                            {{ usage.feeds }} feed{{ 's' if usage.feeds != 1 else '' }}
+                            ({{ usage.feeds_paused }} paused) ·
+                            {{ usage.echoes }} echo{{ 'es' if usage.echoes != 1 else '' }}
+                            ({{ usage.echoes_enabled }} enabled) ·
+                            {{ usage.destinations }} destination{{ 's' if usage.destinations != 1 else '' }} ·
+                            {{ usage.posts_24h }} posts/24h ·
+                            {{ usage.posts_7d }}/7d
+                            {% if usage.failures_7d %}· <span class="usage-fail">{{ usage.failures_7d }} failures/7d</span>{% endif %}
+                            {% if usage.queued_now %}· {{ usage.queued_now }} queued{% endif %}
+                        </summary>
+                        <div class="usage-detail">
+                            {% if usage.last_error %}
+                            <p class="usage-error"><strong>Most recent delivery error</strong> (any time): <code>{{ usage.last_error }}</code></p>
+                            {% else %}
+                            <p class="usage-ok">No delivery errors on record.</p>
+                            {% endif %}
+                            <p class="hint">Delivery outcomes count the last 24h / 7 days. A paused trial or paused feeds explain "nothing is posting" without a bug.</p>
+                        </div>
+                    </details>
+                </td>
+            </tr>
+            {% endif %}
             {% endfor %}
         </tbody>
     </table>

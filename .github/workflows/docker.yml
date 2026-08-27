@@ -12,8 +12,8 @@ env:
 jobs:
   # Gate: tests.yml runs the full matrix on the same push, but nothing linked
   # the two, so a failing tag still published `latest` and the semver tags that
-  # docker-compose.multi.yml and self-hosters pull. This job repeats the fast
-  # sqlite suites and the publish step waits on it.
+  # self-hosters pull. This job repeats the fast sqlite suites and the publish
+  # step waits on it.
   test:
     name: Test gate (sqlite, single + multi)
     runs-on: ubuntu-latest

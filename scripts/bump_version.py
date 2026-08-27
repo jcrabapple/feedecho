@@ -29,9 +29,11 @@ TARGETS: dict[str, int] = {
     "nix/package.nix": 3,
     # rev + tarball URL
     "nix/README.md": 2,
-    # the pinned GHCR image tag
-    "docker-compose.multi.yml": 1,
 }
+# The hosted deployment's compose file (with its pinned GHCR image tag) moved
+# to the private feedecho-hosted overlay (2026-08-27, product-split directive).
+# After bumping, copy the new tag into
+# ~/feedecho-hosted/configs/docker-compose.multi.yml before deploying.
 
 # Files that deliberately name the version a past change shipped in. These are
 # history, not configuration: never rewrite them.
@@ -39,7 +41,6 @@ HISTORICAL = {
     "Dockerfile",
     "docker-entrypoint.sh",
     "tests/test_review_fixes.py",
-    "HANDOFF.md",
 }
 
 

@@ -359,31 +359,13 @@ export FEEDCHO_CALLBACK_URL="https://feedecho.yourdomain.com/oauth/callback"
 export FEEDCHO_AUTH_TOKEN="your-secret-token"  # optional: enable web UI auth
 ```
 
-### Hosted multi-tenant stack (Postgres + Caddy)
+## Hosted version
 
-The same codebase runs a hosted, multi-tenant deployment
-(`FEEDCHO_MODE=multi`): per-user accounts with sessions, tenant-scoped
-feeds/echoes/settings, and Postgres storage. One compose file brings the
-whole stack up:
-
-```bash
-cp .env.example.multi .env       # fill in real secrets; chmod 600
-docker compose -f docker-compose.multi.yml up -d
-```
-
-- `postgres:17-alpine` — database, exposed only on the compose network
-- `feedecho` — the app image (`ghcr.io/jcrabapple/feedecho`), multi mode
-- `caddy:2` — automatic HTTPS and reverse proxy
-
-Required environment (see `.env.example.multi`): `FEEDCHO_MODE=multi`,
-`FEEDCHO_BASE_URL` (public base URL, used for OAuth callbacks),
-`FEEDCHO_SESSION_SECRET` (>= 32 chars), and the Postgres credentials.
-The app refuses to start if a multi-mode deployment is missing a
-database URL or session secret.
-
-CI exercises both modes: the single-mode suite on SQLite, the multi-mode
-suite (`-m multi`), and a live Postgres job (`-m pg`) against
-`postgres:17-alpine`.
+FeedEcho is also run as a hosted service with accounts, plans, and a
+free trial at [feedecho.net](https://feedecho.net). The self-hosted,
+single-tenant mode documented here is the complete cross-posting product;
+hosted-specific machinery (accounts, billing, quotas) is not part of the
+self-hosted distribution.
 
 ## Testing
 
@@ -397,7 +379,7 @@ python -m pytest tests/ -v
 ```
 feedecho/
 ├── app.py              # FastAPI app — routes, auth middleware, OAuth callbacks
-├── database.py         # SQLite layer (7 tables)
+├── database.py         # SQLite/Postgres storage layer
 ├── feed_parser.py     # RSS/Atom/JSON feed fetching + SSRF protection
 ├── mastodon.py        # Mastodon API client
 ├── oauth.py           # Mastodon OAuth 2.0 flow (HMAC-signed state)

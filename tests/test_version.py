@@ -33,7 +33,6 @@ ROOT = Path(__file__).resolve().parent.parent
 HISTORICAL = {
     "Dockerfile",
     "docker-entrypoint.sh",
-    "HANDOFF.md",
     "tests/test_review_fixes.py",
     "tests/test_version.py",
 }
@@ -73,9 +72,14 @@ class TestVersionConsistency:
         assert f'rev = "v{VERSION}"' in readme
         assert f"v{VERSION}.tar.gz" in readme
 
-    def test_compose_image_tag_matches(self):
-        compose = _read("docker-compose.multi.yml")
-        assert f"image: ghcr.io/jcrabapple/feedecho:{VERSION}" in compose
+    def test_no_multi_compose_file_in_oss_repo(self):
+        """The hosted compose file lives in the private feedecho-hosted
+        overlay (product-split, 2026-08-27). Its version-pinned image tag is
+        synced manually at deploy time, not asserted here."""
+        assert not Path("docker-compose.multi.yml").exists()
+        assert not Path("Caddyfile").exists()
+        assert not Path(".env.example.multi").exists()
+        assert not Path("HANDOFF.md").exists()
 
     def test_no_stale_version_anywhere_in_the_tree(self):
         """Catch a *new* hardcoded copy the per-file asserts above don't know

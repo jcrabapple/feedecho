@@ -11,6 +11,7 @@ import html
 import ipaddress
 import json
 import socket
+import threading
 import httpx
 import feedparser
 from datetime import datetime, timezone
@@ -51,6 +52,11 @@ def validate_outbound_url(url: str) -> str:
       127.x, 169.254.x, ::1, fc00::, fe80::)
 
     Raises SSRFError if the URL is unsafe. Returns the URL if safe.
+
+    NOTE: validation alone is TOCTOU-vulnerable (the DNS answer checked here
+    is not the connection httpx later makes). Callers that actually fetch
+    must go through ``ssrf_client()`` so the validated IP is pinned; see
+    ``PinningNetworkBackend``.
     """
     parsed = urlparse(url)
 
@@ -98,6 +104,207 @@ def validate_outbound_url(url: str) -> str:
     return url
 
 
+# ── DNS-rebinding protection: validated-IP pinning (B2) ─────────────────────
+#
+# validate_outbound_url checks the DNS answer at call time, but httpx resolves
+# the hostname AGAIN when it opens the connection. A low-TTL DNS answer (or an
+# attacker-controlled authoritative server) can hand back a different IP
+# between the two lookups, and every redirect hop re-resolves too. That gap
+# turns the validator into theatre on hostile DNS.
+#
+# The fix: validate_outbound_url returns the addresses it approved, and the
+# fetch path connects to one of those exact addresses. The backend below pins
+# per-hostname; TLS is unaffected because httpcore derives SNI and the
+# certificate identity from the URL's hostname, not from the IP we dial — a
+# pinned-but-hostile IP simply fails certificate verification, and a
+# same-CDN address swap to another site behind the same cert is the residual
+# risk documented in HANDOFF.
+
+def _hostname_pin_key(hostname: str) -> str:
+    """The hostname form httpcore passes to NetworkBackend.connect_tcp.
+
+    httpcore dials the IDNA/punycode form of the URL host, while
+    urlparse().hostname yields the unicode form. Keying the pin map on the
+    punycode form makes both sides agree (ASCII hostnames are their own
+    punycode form, so this is a no-op for them).
+    """
+    return hostname.encode("idna").decode("ascii").lower()
+
+
+def _resolve_addrs(hostname: str) -> list[str]:
+    """Resolve a hostname to its IP addresses (both families, best effort)."""
+    addrs: list[str] = []
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return addrs
+    for family, _, _, _, sockaddr in infos:
+        try:
+            addrs.append(str(ipaddress.ip_address(sockaddr[0])))
+        except ValueError:
+            continue
+    return addrs
+
+
+def _pick_pinned_addr(addrs: list[str]) -> str:
+    """Choose one address to dial: the first IPv4, else the first entry.
+
+    Preferring IPv4 keeps the door open for hosts that publish an A record
+    and an unreachable AAAA record; when only IPv6 exists we take the first.
+    """
+    for addr in addrs:
+        if isinstance(ipaddress.ip_address(addr), ipaddress.IPv4Address):
+            return addr
+    return addrs[0]
+
+
+class PinningNetworkBackend:
+    """httpcore NetworkBackend that dials pre-validated addresses.
+
+    Wraps httpcore's default SyncBackend. ``pins`` maps the IDNA hostname to
+    the exact IP approved by validate_outbound_url; connect_tcp dials the
+    pinned address instead of resolving DNS again. Unknown hosts (e.g. from
+    code paths that bypass ssrf_client) fall through to normal resolution —
+    this backend is defense-in-depth for our fetches, not a system-wide VPN.
+    """
+
+    def __init__(self) -> None:
+        import httpcore
+
+        self._inner = httpcore.SyncBackend()
+        self._pins: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def set_pin(self, hostname: str, addr: str) -> None:
+        key = _hostname_pin_key(hostname)
+        with self._lock:
+            self._pins[key] = addr
+
+    def clear_pins(self) -> None:
+        with self._lock:
+            self._pins.clear()
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        with self._lock:
+            pinned = self._pins.get(host)
+        if not pinned:
+            # Fail closed: an SSRF guard that silently falls through to live
+            # DNS on a pin miss is no guard at all. Every outbound host must
+            # be explicitly pinned via ssrf_client before it is dialed.
+            raise ConnectionError(
+                f"SSRF pin miss for {host!r} — host was not pre-validated"
+            )
+        # Dial the pinned address; SNI and cert identity still come from the
+        # URL hostname because httpcore passes them independently of this arg.
+        return self._inner.connect_tcp(
+            pinned, port, timeout=timeout,
+            local_address=local_address, socket_options=socket_options,
+        )
+
+    def connect_unix_socket(self, *args, **kwargs):
+        return self._inner.connect_unix_socket(*args, **kwargs)
+
+    def sleep(self, seconds: float) -> None:
+        self._inner.sleep(seconds)
+
+
+def _pins_for_urls(urls: list[str]) -> dict[str, str]:
+    """Validate each URL and return {pin_key: dial_addr} for all of them.
+
+    Idempotent per URL, so callers can pre-validate the whole redirect set
+    they are willing to follow, or just the first URL.
+    """
+    pins: dict[str, str] = {}
+    for url in urls:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            continue
+        try:
+            ipaddress.ip_address(hostname)
+            key = hostname.lower()
+        except ValueError:
+            key = _hostname_pin_key(hostname)
+        addrs = _resolve_addrs(hostname)
+        if not addrs:
+            raise SSRFError(f"Blocked: cannot resolve hostname '{hostname}'")
+        # _pins_for_urls is the SOLE authority on which address gets pinned:
+        # it resolves and checks independently of validate_outbound_url. Do
+        # NOT refactor it to trust the validator's result — that reopens the
+        # TOCTOU window (two independent resolutions, one for validation and
+        # one for pinning).
+        for addr in addrs:
+            if _is_blocked_ip(ipaddress.ip_address(addr)):
+                raise SSRFError(
+                    f"Blocked: hostname '{hostname}' resolves to "
+                    f"private/reserved IP {addr}"
+                )
+        pins[key] = _pick_pinned_addr(addrs)
+    return pins
+
+
+def ssrf_client(
+    urls: list[str],
+    *,
+    timeout: float = 30,
+) -> tuple[httpx.Client, PinningNetworkBackend]:
+    """Build an httpx.Client whose connections are pinned to validated IPs.
+
+    Every URL in ``urls`` is validated and its address pinned for the life
+    of the client. Returns the client and its pinning backend, so callers
+    (the redirect-validating fetch helper) can pin additional hops as they
+    validate them. Callers MUST close the client when done (try/finally);
+    that releases the pool and its connections.
+    """
+    import httpcore
+    from httpx._config import create_ssl_context
+
+    pins = _pins_for_urls(urls)
+    backend = PinningNetworkBackend()
+    for key, addr in pins.items():
+        backend.set_pin(key, addr)
+    pool = httpcore.ConnectionPool(
+        ssl_context=create_ssl_context(verify=True, cert=None, trust_env=True),
+        network_backend=backend,
+    )
+
+    class _PinnedTransport(httpx.BaseTransport):
+        def handle_request(self, request):
+            req = httpcore.Request(
+                method=request.method,
+                url=httpcore.URL(
+                    scheme=request.url.raw_scheme,
+                    host=request.url.raw_host,
+                    port=request.url.port,
+                    target=request.url.raw_path,
+                ),
+                headers=request.headers.raw,
+                content=request.stream,
+                extensions=request.extensions,
+            )
+            with httpx._transports.default.map_httpcore_exceptions():
+                resp = pool.handle_request(req)
+            return httpx.Response(
+                resp.status,
+                headers=resp.headers,
+                stream=httpx._transports.default.ResponseStream(resp.stream),
+                extensions=resp.extensions,
+            )
+
+        def close(self):
+            # httpx.BaseTransport has no close hook; without this the
+            # ConnectionPool (and its keep-alive sockets/FDs) leak on every
+            # client.close() in the long-running scheduler worker.
+            pool.close()
+
+    client = httpx.Client(
+        transport=_PinnedTransport(),
+        follow_redirects=False,
+        timeout=timeout,
+    )
+    return client, backend
+
+
 # Backwards-compatible alias
 validate_feed_url = validate_outbound_url
 
@@ -105,7 +312,9 @@ validate_feed_url = validate_outbound_url
 def fetch_feed(url: str) -> dict:
     """Fetch and parse a feed URL. Returns dict with feed metadata and items.
 
-    Validates the initial URL and every redirect hop for SSRF protection.
+    Validates the initial URL and every redirect hop for SSRF protection,
+    pinning each hop's connection to the IP validated for that hop (B2: the
+    second DNS lookup a naive fetch performs is the rebinding window).
     Raises SSRFError if any URL (initial or redirect) points to a
     private/internal address.
     Raises httpx.HTTPError on network failure.
@@ -113,10 +322,13 @@ def fetch_feed(url: str) -> dict:
     validate_outbound_url(url)
 
     headers = {"User-Agent": USER_AGENT}
-    with httpx.Client(headers=headers, follow_redirects=False, timeout=30) as client:
+    client, backend = ssrf_client([url])
+    try:
         content, content_type = _fetch_with_redirect_validation(
-            client, url, headers, MAX_FEED_SIZE
+            client, url, headers, MAX_FEED_SIZE, backend=backend
         )
+    finally:
+        client.close()
 
     # JSON Feed
     if "json" in content_type or url.endswith(".json"):
@@ -128,13 +340,19 @@ def fetch_feed(url: str) -> dict:
 
 
 def _fetch_with_redirect_validation(
-    client: httpx.Client, url: str, headers: dict, max_bytes: int = MAX_FEED_SIZE
+    client: httpx.Client,
+    url: str,
+    headers: dict,
+    max_bytes: int = MAX_FEED_SIZE,
+    backend: "PinningNetworkBackend | None" = None,
 ) -> tuple[bytes, str]:
     """Fetch a URL with a hard size cap, validating every redirect hop.
 
     Prevents SSRF via redirect: an attacker can host a public feed that
     redirects to an internal IP. This function validates every Location
-    header before following it.
+    header before following it, and (when a pinning backend is supplied)
+    pins each validated hop's hostname to its validated address, closing
+    the rebinding window on every hop, not just the first.
 
     The body is streamed and abandoned as soon as it exceeds ``max_bytes``.
     Checking the size after a buffered read (the previous behaviour) meant a
@@ -152,6 +370,9 @@ def _fetch_with_redirect_validation(
                 # Resolve relative redirects against the current URL
                 next_url = str(httpx.URL(url).join(location))
                 validate_outbound_url(next_url)
+                if backend is not None:
+                    for key, addr in _pins_for_urls([next_url]).items():
+                        backend.set_pin(key, addr)
                 url = next_url
                 continue
 
@@ -375,16 +596,19 @@ def fetch_image(url: str) -> tuple[bytes, str] | None:
 
     headers = {"User-Agent": USER_AGENT}
     try:
-        with httpx.Client(headers=headers, follow_redirects=False, timeout=30) as client:
+        client, backend = ssrf_client([url])
+        try:
             content, raw_type = _fetch_with_redirect_validation(
-                client, url, headers, MAX_IMAGE_SIZE
+                client, url, headers, MAX_IMAGE_SIZE, backend=backend
             )
-            content_type = raw_type.split(";")[0].strip()
+        finally:
+            client.close()
+        content_type = raw_type.split(";")[0].strip()
 
-            if content_type not in ALLOWED_IMAGE_TYPES:
-                return None
+        if content_type not in ALLOWED_IMAGE_TYPES:
+            return None
 
-            return content, content_type
+        return content, content_type
     except Exception:
         return None
 

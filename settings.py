@@ -60,6 +60,78 @@ TRUSTED_PROXIES = tuple(
     c.strip() for c in os.environ.get("FEEDCHO_TRUSTED_PROXIES", "").split(",") if c.strip()
 )
 
+# ── Plan limits (hosted mode) ────────────────────────────────────────────────
+#
+# Per-plan resource caps. JSON via FEEDCHO_PLAN_LIMITS overrides defaults;
+# unknown keys are kept, so adding a plan in env does not require a code
+# change. Single mode is exempt from all of this (limits are only consulted
+# through plans.limit_for(), which callers gate on settings.MULTI).
+#
+# Keys per plan:
+#   max_feeds           — feeds the plan may have (0 = unlimited)
+#   min_poll_interval   — lowest poll_interval in minutes the plan may set;
+#                         the scheduler CLAMPS down-scoped values rather than
+#                         rejecting, so plan downgrades never break existing
+#                         feeds, they just poll less often
+#   max_destinations    — total connected accounts across all types (0 = unlimited)
+#   max_posts_per_hour  — drip ceiling for the plan (0 = unlimited)
+DEFAULT_PLAN_LIMITS = {
+    "trial": {
+        "max_feeds": 5,
+        "min_poll_interval": 15,
+        "max_destinations": 5,
+        "max_posts_per_hour": 60,
+    },
+    "beta": {
+        "max_feeds": 25,
+        "min_poll_interval": 5,
+        "max_destinations": 15,
+        "max_posts_per_hour": 240,
+    },
+    "paid": {
+        "max_feeds": 100,
+        "min_poll_interval": 1,
+        "max_destinations": 50,
+        "max_posts_per_hour": 1000,
+    },
+}
+
+
+def _load_plan_limits() -> dict:
+    import json
+
+    raw = os.environ.get("FEEDCHO_PLAN_LIMITS", "").strip()
+    if not raw:
+        return {k: dict(v) for k, v in DEFAULT_PLAN_LIMITS.items()}
+    try:
+        overrides = json.loads(raw)
+    except ValueError:
+        logging.getLogger("feedecho").warning(
+            "FEEDCHO_PLAN_LIMITS is not valid JSON; using default plan limits"
+        )
+        return {k: dict(v) for k, v in DEFAULT_PLAN_LIMITS.items()}
+    if not isinstance(overrides, dict):
+        logging.getLogger("feedecho").warning(
+            "FEEDCHO_PLAN_LIMITS must be a JSON object; using default plan limits"
+        )
+        return {k: dict(v) for k, v in DEFAULT_PLAN_LIMITS.items()}
+    merged = {k: dict(v) for k, v in DEFAULT_PLAN_LIMITS.items()}
+    for plan, limits in overrides.items():
+        if isinstance(limits, dict):
+            merged.setdefault(plan, {}).update(
+                {k: v for k, v in limits.items() if isinstance(v, int) and v >= 0}
+            )
+    return merged
+
+
+PLAN_LIMITS = _load_plan_limits()
+
+# Trial handling: the plan column also carries 'single' semantics implicitly
+# (single mode never checks). A trial whose trial_ends_at has passed is
+# PAUSED by the scheduler (feeds skipped, cursor frozen — nothing is deleted)
+# until the operator moves the user to 'beta'/'paid' or extends trial_ends_at.
+TRIAL_GRACE_NOTE = os.environ.get("FEEDCHO_TRIAL_GRACE_NOTE", "")
+
 
 def validate_config() -> None:
     """Fail fast on misconfigured multi mode. Called from app startup.

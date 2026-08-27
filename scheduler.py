@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 import settings
+import plans
 from database import get_db, timestamp_str
 from email_sender import send_email
 from feed_parser import fetch_feed, fetch_image, get_new_items, truncate
@@ -195,14 +196,19 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
             return
 
         # Hosted mode gate: unverified owners' echoes are skipped until the
-        # account email is verified. Done in SQL (index-friendly) rather
-        # than materializing the user table per feed check. Single mode
-        # keeps the original query (user 1 is never verified there).
+        # account email is verified, and EXPIRED-TRIAL owners' feeds are
+        # paused entirely (posting_paused: plan='trial' past trial_ends_at).
+        # Both gates live in the SQL so no user table is materialized per
+        # feed check. Single mode keeps the original query (user 1 has no
+        # trial semantics there).
         if settings.MULTI:
             echoes = db.execute(
-                "SELECT e.* FROM echoes e JOIN users u ON u.id = e.user_id"
-                " WHERE e.feed_id = ? AND e.enabled = 1 AND u.email_verified = 1",
-                (feed_id,),
+                "SELECT e.*, u.plan FROM echoes e JOIN users u ON u.id = e.user_id"
+                " WHERE e.feed_id = ? AND e.enabled = 1 AND u.email_verified = 1"
+                " AND u.suspended = 0"
+                " AND NOT (u.plan = 'trial' AND u.trial_ends_at IS NOT NULL"
+                "          AND u.trial_ends_at <= ?)",
+                (feed_id, _now()),
             ).fetchall()
         else:
             echoes = db.execute(
@@ -517,11 +523,25 @@ def process_echo(echo, item: dict, feed_name: str = "") -> bool:
 
 
 def _drip_limit(echo) -> int:
-    """The echo's drip rate limit (posts/hour); 0 disables drip."""
+    """The echo's drip rate limit (posts/hour); 0 disables drip.
+
+    Hosted mode clamps the configured limit DOWN to the plan's ceiling.
+    The plan comes from the 'plan' key on the echo row (joined at selection
+    time — set-based, never a per-echo lookup). A missing/unreadable plan
+    fails CLOSED at the trial ceiling: drip enforcement never silently
+    vanishes; the worst case is over-throttling until the next tick.
+    """
     try:
-        return int(echo["drip_limit"] or 0)
+        limit = int(echo["drip_limit"] or 0)
     except (KeyError, IndexError, TypeError, ValueError):
         return 0
+    if settings.MULTI and limit > 0:
+        try:
+            plan = echo["plan"] or "trial"
+        except (KeyError, IndexError):
+            plan = "trial"  # fail closed
+        limit = plans.clamp_drip_limit(limit, plan)
+    return limit
 
 
 def _drip_applies(echo) -> bool:
@@ -1707,12 +1727,16 @@ def flush_digests() -> None:
               JOIN echoes e ON d.echo_id = e.id
               JOIN feeds f ON e.feed_id = f.id
               JOIN email_accounts ea ON e.destination_id = ea.id
+              JOIN users u ON u.id = e.user_id
              WHERE e.destination_type = 'email'
                AND e.delivery_mode = 'digest'
                AND e.enabled = 1
                AND f.deleted_at IS NULL
                AND e.deleted_at IS NULL
-        """).fetchall()
+               AND u.suspended = 0
+               AND NOT (u.plan = 'trial' AND u.trial_ends_at IS NOT NULL
+                        AND u.trial_ends_at <= ?)
+        """, (_now(),)).fetchall()
 
     if not pending_echoes:
         return
@@ -1791,9 +1815,26 @@ def flush_digests() -> None:
 def check_all_feeds() -> None:
     now = datetime.now(timezone.utc)
     with get_db() as db:
-        feeds = db.execute(
-            "SELECT id, name, poll_interval, last_fetched FROM feeds WHERE deleted_at IS NULL"
-        ).fetchall()
+        if settings.MULTI:
+            # Trial-pause + suspension gate at the sweep level too: a paused
+            # user's feeds are not even considered "due", so their cursors
+            # freeze (no fetch, no delivery, no retries) and nothing is
+            # deleted. Single mode has no per-user state to check.
+            feeds = db.execute(
+                """
+                SELECT f.id, f.name, f.poll_interval, f.last_fetched
+                  FROM feeds f JOIN users u ON u.id = f.user_id
+                 WHERE f.deleted_at IS NULL
+                   AND u.suspended = 0
+                   AND NOT (u.plan = 'trial' AND u.trial_ends_at IS NOT NULL
+                            AND u.trial_ends_at <= ?)
+                """,
+                (_now(),),
+            ).fetchall()
+        else:
+            feeds = db.execute(
+                "SELECT id, name, poll_interval, last_fetched FROM feeds WHERE deleted_at IS NULL"
+            ).fetchall()
 
     due = []
     for feed in feeds:

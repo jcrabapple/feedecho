@@ -17,7 +17,7 @@ import time
 import uuid
 import secrets as _secrets
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -31,6 +31,8 @@ import auth
 from auth import current_user_id
 import security
 from feed_parser import fetch_feed, SSRFError, validate_outbound_url
+import plans
+from plans import PlanError
 from mastodon import test_connection, post_status, verify_credentials
 from bluesky import (
     BlueskyAuthError,
@@ -435,19 +437,23 @@ def _trial_context(request: Request) -> dict:
         ).fetchone()
     if not row:
         return {}
+    plan = row["plan"] or "trial"
     ctx = {
         "current_user_email": row["email"],
-        "plan": row["plan"] or "trial",
+        "plan": plan,
         "is_admin": bool(row["is_admin"]),
         "email_verified": bool(row["email_verified"]),
+        # Every page can render an accurate paused-posting banner (the
+        # scheduler actually skips this user's feeds, so the banner must
+        # agree with reality, not just the dashboard's).
+        "posting_paused": plans.posting_paused(plan, row["trial_ends_at"]),
+        "plan_limits": settings.PLAN_LIMITS.get(plan) or settings.PLAN_LIMITS["trial"],
     }
     ends = row["trial_ends_at"]
     if ends:
-        try:
-            end = datetime.fromisoformat(str(ends).replace("Z", "+00:00"))
+        end = plans.normalize_trial_ends(ends)
+        if end is not None:
             now = datetime.now(timezone.utc)
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
             if end <= now:
                 ctx["trial_expired"] = True
             else:
@@ -455,9 +461,33 @@ def _trial_context(request: Request) -> dict:
                 # ISO date for a <time class="local-time"> element; the
                 # browser renders it in the viewer's locale (issue #6).
                 ctx["trial_ends_date"] = end.strftime("%Y-%m-%d")
-        except ValueError:
+        else:
             logger.warning("Unparseable trial_ends_at for user %s: %r", uid, ends)
     return ctx
+
+
+def _user_plan(db, uid: int) -> str:
+    """The plan string for a user row ('trial' when unset/missing)."""
+    row = db.execute("SELECT plan FROM users WHERE id = ?", (uid,)).fetchone()
+    return (row["plan"] if row else None) or "trial"
+
+
+def _check_destination_cap(db, uid: int) -> None:
+    """Raise PlanError when one more connected account exceeds the plan.
+
+    The cap counts ALL destination types: every row is a stored credential
+    and an outbound-posting path. HTTPException(402) here; PlanError directly
+    for non-HTTP callers.
+    """
+    if not settings.MULTI:
+        return
+    total = sum(
+        db.execute(
+            f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
+        for t in ("accounts", "email_accounts", "bluesky_accounts", "microblog_accounts")
+    )
+    plans.check_destination_allowance(total, _user_plan(db, uid))
 
 
 def render(name: str, request: Request, status_code: int = 200, **kwargs) -> HTMLResponse:
@@ -883,7 +913,8 @@ async def admin_page(request: Request):
     else:
         smtp["smtp_password"] = ""
     smtp["configured"] = bool(smtp.get("smtp_host") and smtp.get("smtp_port"))
-    return render("admin.html", request, users=users, stats=stats, smtp=smtp)
+    return render("admin.html", request, users=users, stats=stats, smtp=smtp,
+                  plan_names=sorted(settings.PLAN_LIMITS.keys()))
 
 
 _SMTP_FORM_KEYS = (
@@ -1066,6 +1097,77 @@ async def admin_demote(user_id: int, request: Request):
     return RedirectResponse(url="/admin", status_code=302)
 
 
+@app.post("/admin/users/{user_id}/plan")
+async def admin_set_plan(user_id: int, request: Request):
+    """Move a user between plans (trial / beta / paid).
+
+    Moving off 'trial' un-pauses posting immediately (the scheduler gate
+    reads plan + trial_ends_at per tick). Moving TO 'trial' does not change
+    trial_ends_at: a user whose expiry is already in the past is paused the
+    moment the plan flips to trial — that is why extend-trial refuses
+    non-trial users and why this route is a deliberate admin action.
+    """
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    form = await request.form()
+    plan = (form.get("plan") or "").strip()
+    if plan not in settings.PLAN_LIMITS:
+        return render("error.html", request, status_code=400,
+                      code=400, message=f"Unknown plan: {plan!r}")
+    with get_db() as db:
+        row = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            return render("error.html", request, status_code=404,
+                          code=404, message="User not found")
+        db.execute("UPDATE users SET plan = ? WHERE id = ?", (plan, user_id))
+    logger.info("Admin %s set user %s plan to %s", uid, user_id, plan)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.post("/admin/users/{user_id}/extend-trial")
+async def admin_extend_trial(user_id: int, request: Request):
+    """Extend (or restart) a user's trial by N days from now.
+
+    Sets plan back to 'trial' and trial_ends_at to now + days, so an expired
+    trial resumes posting the moment the operator grants more time.
+    """
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        return render("error.html", request, status_code=403,
+                      code=403, message="Admin access required")
+    form = await request.form()
+    try:
+        days = int(form.get("days") or 0)
+    except ValueError:
+        days = 0
+    if not 1 <= days <= 365:
+        return render("error.html", request, status_code=400,
+                      code=400, message="Trial extension must be 1-365 days")
+    with get_db() as db:
+        row = db.execute("SELECT id, plan FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            return render("error.html", request, status_code=404,
+                          code=404, message="User not found")
+        if row["plan"] != "trial":
+            # Extending a paid/beta user's "trial" would silently downgrade
+            # them to trial limits and pause them when it lapses. The plan
+            # dropdown is the tool for that; this button only touches trials.
+            return render("error.html", request, status_code=400,
+                          code=400,
+                          message=f"{row['plan']} plans have no trial to extend — set the plan instead")
+        new_end = (
+            datetime.now(timezone.utc) + timedelta(days=days)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        db.execute(
+            "UPDATE users SET trial_ends_at = ? WHERE id = ?",
+            (new_end, user_id),
+        )
+    logger.info("Admin %s extended user %s trial by %d days (to %s)", uid, user_id, days, new_end)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
 @app.get("/feeds", response_class=HTMLResponse)
 async def feeds_page(request: Request):
     uid = current_user_id(request)
@@ -1245,6 +1347,10 @@ async def add_account(
     uid = current_user_id(request)
     instance = validate_url(instance)
     with get_db() as db:
+        try:
+            _check_destination_cap(db, uid)
+        except PlanError as e:
+            return _render_accounts_error(request, str(e))
         db.execute(
             "INSERT INTO accounts (name, username, instance, access_token, user_id)"
             " VALUES (?, ?, ?, ?, ?)",
@@ -1293,6 +1399,17 @@ async def add_email_account(
 ):
     uid = current_user_id(request)
     with get_db() as db:
+        existing = db.execute(
+            "SELECT id FROM email_accounts WHERE user_id = ? AND email = ?",
+            (uid, email),
+        ).fetchone()
+        if existing is None:
+            # Cap counts NEW rows only: re-saving an existing address is an
+            # upsert that changes nothing the cap measures.
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
         db.execute(
             "INSERT INTO email_accounts (name, email, user_id) VALUES (?, ?, ?)"
             " ON CONFLICT(user_id, email) DO UPDATE SET name = excluded.name",
@@ -1357,6 +1474,10 @@ def add_bluesky_account(
 
     with get_db() as db:
         uid = current_user_id(request)
+        try:
+            _check_destination_cap(db, uid)
+        except PlanError as e:
+            return _render_accounts_error(request, str(e))
         db.execute(
             """
             INSERT INTO bluesky_accounts (
@@ -1464,6 +1585,24 @@ def add_microblog_account(
 
     with get_db() as db:
         uid = current_user_id(request)
+        # The cap must account for EVERY row this connect will write: a
+        # token covering N blogs inserts N rows, not one.
+        current_total = sum(
+            db.execute(
+                f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
+            ).fetchone()["c"]
+            for t in ("accounts", "email_accounts", "bluesky_accounts", "microblog_accounts")
+        )
+        plan = _user_plan(db, uid)
+        cap = plans.limit_for(plan, "max_destinations")
+        if cap and current_total + len(blogs) > cap:
+            room = max(0, cap - current_total)
+            return _render_accounts_error(
+                request,
+                f"Your plan allows {cap} connected accounts and this token covers "
+                f"{len(blogs)} blog{'s' if len(blogs) != 1 else ''} ({room} would fit). "
+                "Upgrade or disconnect accounts to connect them all.",
+            )
         for blog in blogs:
             db.execute(
                 """
@@ -1692,6 +1831,17 @@ async def add_feed(
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     with get_db() as db:
+        if settings.MULTI:
+            plan = _user_plan(db, uid)
+            count = db.execute(
+                "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
+                (uid,),
+            ).fetchone()["c"]
+            try:
+                plans.check_feed_allowance(count, plan)
+            except PlanError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+            poll_interval = plans.clamp_poll_interval(poll_interval, plan)
         db.execute(
             "INSERT INTO feeds (name, url, poll_interval, user_id) VALUES (?, ?, ?, ?)",
             (name, url, poll_interval, uid),
@@ -1722,6 +1872,12 @@ async def edit_feed(
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     with get_db() as db:
+        if settings.MULTI:
+            # Clamp to the plan's floor, never reject: tightening an existing
+            # feed's cadence is fine, lowering it below the plan is not.
+            poll_interval = plans.clamp_poll_interval(
+                poll_interval, _user_plan(db, uid)
+            )
         feed = db.execute(
             "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
             (feed_id, uid),
@@ -1977,6 +2133,9 @@ async def add_echo(
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
     if drip_limit < 0 or drip_limit > 1000:
         raise HTTPException(status_code=400, detail="Drip limit must be between 0 and 1000")
+    if settings.MULTI:
+        with get_db() as db:
+            drip_limit = plans.clamp_drip_limit(drip_limit, _user_plan(db, current_user_id(request)))
 
     _validate_echo_template(template)
 
@@ -2008,6 +2167,9 @@ async def add_echo(
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
+        # No destination cap here: connecting accounts is capped at
+        # connect time (_check_destination_cap); editing an existing echo
+        # only ever references destinations that already exist.
         dest_table = {
             "mastodon": "accounts",
             "email": "email_accounts",
@@ -2083,6 +2245,9 @@ async def edit_echo(
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
     if drip_limit < 0 or drip_limit > 1000:
         raise HTTPException(status_code=400, detail="Drip limit must be between 0 and 1000")
+    if settings.MULTI:
+        with get_db() as db:
+            drip_limit = plans.clamp_drip_limit(drip_limit, _user_plan(db, current_user_id(request)))
 
     _validate_echo_template(template)
 
@@ -2120,6 +2285,9 @@ async def edit_echo(
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
+        # No destination cap here: connecting accounts is capped at
+        # connect time (_check_destination_cap); editing an existing echo
+        # only ever references destinations that already exist.
         dest_table = {
             "mastodon": "accounts",
             "email": "email_accounts",
@@ -2335,6 +2503,10 @@ def oauth_callback(
         username = "unknown"
 
     with get_db() as db:
+        try:
+            _check_destination_cap(db, state_user_id or 1)
+        except PlanError as e:
+            return _render_oauth_error(request, str(e))
         db.execute(
             """INSERT INTO accounts (name, username, instance, access_token, user_id)
                VALUES (?, ?, ?, ?, ?)""",

@@ -45,7 +45,9 @@
             {% for u in users %}
             <tr>
                 <td data-label="Email">{{ u.email }}</td>
-                <td data-label="Plan">{{ u.plan }}</td>
+                <td data-label="Plan">
+                    {{ u.plan }}{% if u.plan == 'trial' and u.trial_ends_at %}<br><small><time class="local-time" datetime="{{ u.trial_ends_at | iso_utc }}">ends {{ u.trial_ends_at | utc_text }} UTC</time></small>{% endif %}
+                </td>
                 <td data-label="Verified">{{ 'Yes' if u.email_verified else 'No' }}</td>
                 <td data-label="Status">
                     {% if u.suspended %}<span class="badge badge-danger">Suspended</span>
@@ -73,6 +75,22 @@
                     {% else %}
                     <form method="post" action="/admin/users/{{ u.id }}/promote" class="inline-form">
                         <button type="submit" class="btn-sm">Make admin</button>
+                    </form>
+                    {% endif %}
+                    <form method="post" action="/admin/users/{{ u.id }}/plan" class="inline-form">
+                        <label class="sr-only" for="plan-{{ u.id }}">Plan</label>
+                        <select name="plan" id="plan-{{ u.id }}" class="btn-sm">
+                            {% for p in plan_names %}
+                            <option value="{{ p }}" {% if u.plan == p %}selected{% endif %}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn-sm">Set plan</button>
+                    </form>
+                    {% if u.plan == 'trial' %}
+                    <form method="post" action="/admin/users/{{ u.id }}/extend-trial" class="inline-form">
+                        <label class="sr-only" for="extend-{{ u.id }}">Days</label>
+                        <input type="number" name="days" id="extend-{{ u.id }}" min="1" max="365" value="14" style="width: 4.5rem;">
+                        <button type="submit" class="btn-sm">Extend trial</button>
                     </form>
                     {% endif %}
                 </td>

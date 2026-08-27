@@ -478,6 +478,7 @@ button:hover { background: var(--primary-hover); }
 .flash { padding: 0.7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
 .flash-ok { background: var(--success-wash); color: var(--success); border: 1px solid var(--success); }
 .flash-error { background: var(--danger-wash); color: var(--danger); border: 1px solid var(--danger); }
+.flash-warn { background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning); }
 
 /* How To page */
 .howto-steps { margin: 0.5rem 0 1rem 1.25rem; line-height: 1.7; }

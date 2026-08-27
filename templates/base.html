@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=13">
+    <link rel="stylesheet" href="/static/css/style.css?v=14">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -61,6 +61,13 @@
         </div>
     </nav>
     <main>
+        {% if posting_paused %}
+        <div class="flash flash-warn" role="status">
+            <strong>Posting paused:</strong> your trial has ended, so FeedEcho has stopped
+            checking your feeds. Nothing was deleted — upgrade or contact the operator to
+            resume, and your feeds pick up exactly where they left off.
+        </div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
     {% if MULTI or authed %}

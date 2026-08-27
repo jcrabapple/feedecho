@@ -42,6 +42,12 @@ from bluesky import (
     test_connection as test_bluesky_connection,
 )
 from template_engine import render_template, available_variables, validate_template
+from microblog import (
+    MicroblogAuthError,
+    MicroblogError,
+    list_destinations as microblog_list_destinations,
+    test_connection as test_microblog_connection,
+)
 from scheduler import start_scheduler, stop_scheduler, check_feed
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
@@ -603,7 +609,7 @@ def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
 
 
 def _get_all_accounts(user_id: int = 1):
-    """Fetch Mastodon, email, and Bluesky accounts for one user."""
+    """Fetch Mastodon, email, Bluesky, and micro.blog accounts for one user."""
     with get_db() as db:
         mastodon = db.execute(
             "SELECT id, name, username, instance, created_at FROM accounts"
@@ -620,13 +626,18 @@ def _get_all_accounts(user_id: int = 1):
             " WHERE user_id = ? ORDER BY handle",
             (user_id,),
         ).fetchall()
-    return mastodon, email, bluesky
+        microblog = db.execute(
+            "SELECT id, name, uid, created_at FROM microblog_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        ).fetchall()
+    return mastodon, email, bluesky, microblog
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
     """Render the accounts page with an error banner."""
     uid = current_user_id(request)
-    mastodon_accounts, email_accounts, bluesky_accounts = _get_all_accounts(uid)
+    mastodon_accounts, email_accounts, bluesky_accounts, microblog_accounts = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     return render(
         "accounts.html",
@@ -634,6 +645,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         mastodon_accounts=mastodon_accounts,
         email_accounts=email_accounts,
         bluesky_accounts=bluesky_accounts,
+        microblog_accounts=microblog_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
         error=message,
@@ -655,6 +667,9 @@ async def dashboard(request: Request):
         bluesky_accounts = db.execute(
             "SELECT COUNT(*) as c FROM bluesky_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
+        microblog_accounts = db.execute(
+            "SELECT COUNT(*) as c FROM microblog_accounts WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
         feeds = db.execute(
             "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
             (uid,),
@@ -665,12 +680,14 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
+                     WHEN e.destination_type = 'microblog' THEN mb.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
+            LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -680,11 +697,13 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
+                     WHEN e.destination_type = 'microblog' THEN mb.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
                      WHEN e.destination_type = 'email' THEN ea.email
                      WHEN e.destination_type = 'bluesky' THEN b.pds
+                     WHEN e.destination_type = 'microblog' THEN mb.uid
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -692,12 +711,13 @@ async def dashboard(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
+            LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
         """, (uid,)).fetchall()
         stats = {
-            "accounts": mastodon_accounts + email_accounts + bluesky_accounts,
+            "accounts": mastodon_accounts + email_accounts + bluesky_accounts + microblog_accounts,
             "feeds": len(feeds),
             "echoes": len(echoes),
             "active_echoes": sum(1 for e in echoes if e["enabled"]),
@@ -1066,13 +1086,14 @@ async def feeds_page(request: Request):
 @app.get("/accounts", response_class=HTMLResponse)
 async def accounts_page(request: Request):
     uid = current_user_id(request)
-    mastodon_accounts, email_accounts, bluesky_accounts = _get_all_accounts(uid)
+    mastodon_accounts, email_accounts, bluesky_accounts, microblog_accounts = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
     return render("accounts.html", request,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
                   bluesky_accounts=bluesky_accounts,
+                  microblog_accounts=microblog_accounts,
                   smtp_configured=smtp_configured,
                   smtp_settings=smtp_settings)
 
@@ -1087,12 +1108,14 @@ async def echoes_page(request: Request):
                      WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
+                     WHEN e.destination_type = 'microblog' THEN mb.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
+            LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -1112,10 +1135,15 @@ async def echoes_page(request: Request):
             "SELECT id, name, handle FROM bluesky_accounts WHERE user_id = ? ORDER BY handle",
             (uid,),
         ).fetchall()
+        microblog_accounts = db.execute(
+            "SELECT id, name, uid FROM microblog_accounts WHERE user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
                   bluesky_accounts=bluesky_accounts,
+                  microblog_accounts=microblog_accounts,
                   template_vars=available_variables())
 
 
@@ -1129,11 +1157,13 @@ async def history_page(request: Request):
                      WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
                      WHEN e.destination_type = 'email' THEN ea.name
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
+                     WHEN e.destination_type = 'microblog' THEN mb.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
                      WHEN e.destination_type = 'email' THEN ea.email
                      WHEN e.destination_type = 'bluesky' THEN b.pds
+                     WHEN e.destination_type = 'microblog' THEN mb.uid
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -1141,6 +1171,7 @@ async def history_page(request: Request):
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
+            LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 100
@@ -1398,6 +1429,94 @@ def delete_bluesky_account(request: Request, account_id: int):
             (account_id, uid),
         )
     return RedirectResponse(url="/accounts?status=bluesky_deleted", status_code=303)
+
+
+# ── API: Micro.blog Accounts ────────────────────────────────────────────────
+
+@app.post("/api/microblog-accounts")
+def add_microblog_account(
+    request: Request,
+    token: str = Form(...),
+):
+    """Verify a Micro.blog app token and store one row per blog it can post to.
+
+    Synchronous route (threadpool-offloaded): it performs blocking HTTPS
+    and SQLite work that must not run on the event loop.
+    """
+    token = token.strip()
+    if not token:
+        return _render_accounts_error(request, "Enter a Micro.blog app token.")
+
+    try:
+        blogs = microblog_list_destinations(token)
+    except MicroblogAuthError as e:
+        return _render_accounts_error(request, str(e))
+    except MicroblogError as e:
+        logger.warning("Micro.blog connect failed: %s", e)
+        return _render_accounts_error(
+            request, "Could not reach micro.blog to verify the token. Try again."
+        )
+    except Exception:
+        logger.exception("Micro.blog account verification failed")
+        return _render_accounts_error(
+            request, "Could not verify the Micro.blog token. Try again."
+        )
+
+    with get_db() as db:
+        uid = current_user_id(request)
+        for blog in blogs:
+            db.execute(
+                """
+                INSERT INTO microblog_accounts (name, uid, token, user_id)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, uid) DO UPDATE SET
+                    name = excluded.name,
+                    token = excluded.token
+                """,
+                (blog["name"], blog["uid"], token, uid),
+            )
+    return RedirectResponse(url="/accounts?status=microblog_connected", status_code=303)
+
+
+@app.post("/api/microblog-accounts/{account_id}/test")
+def test_microblog_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM microblog_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not account:
+        raise HTTPException(status_code=404, detail="Micro.blog account not found")
+    success, message = test_microblog_connection(account["token"])
+    return {"success": success, "message": message}
+
+
+@app.post("/api/microblog-accounts/{account_id}/delete")
+def delete_microblog_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        dependent = db.execute(
+            """
+            SELECT COUNT(*) as c FROM echoes
+             WHERE destination_type = 'microblog'
+               AND destination_id = ?
+               AND deleted_at IS NULL
+               AND user_id = ?
+            """,
+            (account_id, uid),
+        ).fetchone()["c"]
+    if dependent:
+        return _render_accounts_error(
+            request,
+            "This micro.blog account is used by echoes. Delete or reassign those echoes first.",
+        )
+    with get_db() as db:
+        db.execute(
+            "DELETE FROM microblog_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
+    return RedirectResponse(url="/accounts?status=microblog_deleted", status_code=303)
 
 
 # ── API: Settings ───────────────────────────────────────────────────────────
@@ -1786,7 +1905,7 @@ async def give_up_post(request: Request, posted_id: int):
 # ── API: Echoes ─────────────────────────────────────────────────────────────
 
 VALID_VISIBILITY = {"public", "unlisted", "private", "direct"}
-VALID_DEST_TYPES = {"mastodon", "email", "bluesky"}
+VALID_DEST_TYPES = {"mastodon", "email", "bluesky", "microblog"}
 VALID_FILTER_MODES = {"exclude", "include"}
 
 
@@ -1833,6 +1952,7 @@ async def add_echo(
     account_id: int = Form(None),
     email_account_id: int = Form(None),
     bluesky_account_id: int = Form(None),
+    microblog_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -1869,10 +1989,14 @@ async def add_echo(
         destination_id = email_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="email_account_id required for email destination")
-    else:
+    elif destination_type == "bluesky":
         destination_id = bluesky_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="bluesky_account_id required for bluesky destination")
+    else:
+        destination_id = microblog_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="microblog_account_id required for microblog destination")
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -1888,6 +2012,7 @@ async def add_echo(
             "mastodon": "accounts",
             "email": "email_accounts",
             "bluesky": "bluesky_accounts",
+            "microblog": "microblog_accounts",
         }[destination_type]
         dest = db.execute(
             f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
@@ -1935,6 +2060,7 @@ async def edit_echo(
     account_id: int = Form(None),
     email_account_id: int = Form(None),
     bluesky_account_id: int = Form(None),
+    microblog_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -1968,10 +2094,14 @@ async def edit_echo(
         destination_id = email_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="email_account_id required for email destination")
-    else:
+    elif destination_type == "bluesky":
         destination_id = bluesky_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="bluesky_account_id required for bluesky destination")
+    else:
+        destination_id = microblog_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="microblog_account_id required for microblog destination")
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -1994,6 +2124,7 @@ async def edit_echo(
             "mastodon": "accounts",
             "email": "email_accounts",
             "bluesky": "bluesky_accounts",
+            "microblog": "microblog_accounts",
         }[destination_type]
         dest = db.execute(
             f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",

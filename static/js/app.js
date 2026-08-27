@@ -31,6 +31,20 @@ async function testBlueskyAccount(accountId) {
     }
 }
 
+async function testMicroblogAccount(accountId) {
+    try {
+        const resp = await fetch(`/api/microblog-accounts/${accountId}/test`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            alert('Test failed: ' + (data.detail || resp.statusText));
+            return;
+        }
+        alert(data.message || (data.success ? 'OK' : 'Failed'));
+    } catch (e) {
+        alert('Request failed: ' + e.message);
+    }
+}
+
 async function testFeed(feedId) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/test`, { method: 'POST' });
@@ -198,10 +212,12 @@ function editEcho(echoId) {
     const mastoOpts = document.getElementById('mastodon-options').innerHTML.trim();
     const emailOpts = document.getElementById('email-options').innerHTML.trim();
     const blueskyOpts = document.getElementById('bluesky-options').innerHTML.trim();
+    const microblogOpts = document.getElementById('microblog-options').innerHTML.trim();
 
     const mastoStyle = destType === 'mastodon' ? '' : 'display:none';
     const emailStyle = destType === 'email' ? '' : 'display:none';
     const blueskyStyle = destType === 'bluesky' ? '' : 'display:none';
+    const microblogStyle = destType === 'microblog' ? '' : 'display:none';
 
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form">
@@ -214,6 +230,7 @@ function editEcho(echoId) {
                         ${mastoOpts ? '<option value="mastodon"' + (destType === 'mastodon' ? ' selected' : '') + '>Mastodon Account</option>' : ''}
                         ${emailOpts ? '<option value="email"' + (destType === 'email' ? ' selected' : '') + '>Email Address</option>' : ''}
                         ${blueskyOpts ? '<option value="bluesky"' + (destType === 'bluesky' ? ' selected' : '') + '>Bluesky Account</option>' : ''}
+                        ${microblogOpts ? '<option value="microblog"' + (destType === 'microblog' ? ' selected' : '') + '>Micro.blog Blog</option>' : ''}
                     </select>
                 </label>
             </div>
@@ -238,6 +255,11 @@ function editEcho(echoId) {
             <div class="form-row" id="edit-bluesky-fields-${echoId}" style="${blueskyStyle}">
                 <label>Bluesky Account
                     <select name="bluesky_account_id">${blueskyOpts}</select>
+                </label>
+            </div>
+            <div class="form-row" id="edit-microblog-fields-${echoId}" style="${microblogStyle}">
+                <label>Micro.blog Blog
+                    <select name="microblog_account_id">${microblogOpts}</select>
                 </label>
             </div>
             <div class="form-row">
@@ -301,6 +323,8 @@ function editEcho(echoId) {
     if (emailSelect) emailSelect.value = destId;
     const blueskySelect = row.querySelector('select[name="bluesky_account_id"]');
     if (blueskySelect) blueskySelect.value = destId;
+    const microblogSelect = row.querySelector('select[name="microblog_account_id"]');
+    if (microblogSelect) microblogSelect.value = destId;
 }
 
 function toggleEditDest(echoId) {
@@ -308,6 +332,7 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-mastodon-fields-${echoId}`).style.display = destType === 'mastodon' ? '' : 'none';
     document.getElementById(`edit-email-fields-${echoId}`).style.display = destType === 'email' ? '' : 'none';
     document.getElementById(`edit-bluesky-fields-${echoId}`).style.display = destType === 'bluesky' ? '' : 'none';
+    document.getElementById(`edit-microblog-fields-${echoId}`).style.display = destType === 'microblog' ? '' : 'none';
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
     const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);

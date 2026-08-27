@@ -246,6 +246,7 @@ class TestNoBlockingCallsOnAsyncHandlers:
         "generate_alt_text",
         "resolve_pds",
         "create_session",
+        "list_destinations",
         "post_status",
         "upload_media",
     }

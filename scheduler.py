@@ -32,6 +32,11 @@ from bluesky import (
     truncate_graphemes,
     upload_blob,
 )
+from microblog import (
+    MicroblogAuthError,
+    MicroblogError,
+    create_post as microblog_create_post,
+)
 from notify import (
     max_attempts,
     next_retry_delay,
@@ -693,6 +698,16 @@ def _render_and_dispatch(
             claim_token,
         )
 
+    if echo["destination_type"] == "microblog":
+        return _send_microblog(
+            echo,
+            item,
+            content,
+            echo["destination_id"],
+            posted_id,
+            claim_token,
+        )
+
     gave_up = _fail_post(
         posted_id,
         claim_token,
@@ -1263,6 +1278,126 @@ def _send_bluesky(
     if uri:
         rkey = uri.rsplit("/", 1)[-1]
         post_url = f"https://bsky.app/profile/{session['did']}/post/{rkey}"
+
+    ok = _update_post(posted_id, claim_token, "success", post_url=post_url)
+    if ok:
+        record_success(echo["id"])
+    return ok
+
+
+def _send_microblog(
+    echo,
+    item: dict,
+    content: str,
+    account_id: int,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Dispatch one rendered item to a micro.blog blog via Micropub.
+
+    The stored token posts to the row's blog uid (mp-destination). When the
+    echo attaches images, the feed item's first image URL is passed through
+    as photo= (Micro.blog fetches and hosts it), with AI alt text in
+    mp-photo-alt when the alt-text feature is enabled — matching the
+    Mastodon/Bluesky degrade-to-text-only behavior on any image problem.
+    """
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM microblog_accounts WHERE id = ? AND user_id = ?",
+            (account_id, echo["user_id"]),
+        ).fetchone()
+
+    if not account:
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Micro.blog account {account_id} not found",
+            permanent=True,
+        )
+
+    # Image passthrough: Micro.blog fetches photo= itself, so unlike the
+    # Mastodon/Bluesky paths there is no blob upload. Alt text still needs
+    # the image bytes, so fetch here and degrade to photo-without-alt on
+    # any failure. Content preparation is pure string work but must not
+    # strand the claimed row either.
+    photo_url = ""
+    photo_alt = ""
+    try:
+        attach_image = bool(echo["attach_image"])
+    except (KeyError, IndexError):
+        attach_image = False
+
+    if attach_image:
+        image_url = item.get("image_url", "")
+        if image_url:
+            photo_url = image_url
+            try:
+                if alt_text.is_enabled(user_id=echo["user_id"]):
+                    image_result = fetch_image(image_url)
+                    if image_result:
+                        img_bytes, img_type = image_result
+                        try:
+                            photo_alt = (
+                                alt_text.generate_alt_text(
+                                    img_bytes, img_type, user_id=echo["user_id"]
+                                )
+                                or ""
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Echo %s: alt text generation failed for item %s",
+                                echo["id"],
+                                item["id"],
+                                exc_info=True,
+                            )
+            except Exception:
+                logger.warning(
+                    "Echo %s: micro.blog alt-text pipeline failed for item %s",
+                    echo["id"],
+                    item["id"],
+                    exc_info=True,
+                )
+
+    # Re-validate claim ownership immediately before the post: alt-text
+    # generation above is slow network I/O, so the lease can lapse and
+    # another worker reclaim the row. Same pattern as Mastodon/Bluesky.
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before micro.blog dispatch; skipping item %s",
+            echo["id"],
+            item["id"],
+        )
+        return False
+
+    try:
+        result = microblog_create_post(
+            token=account["token"],
+            content=content,
+            destination=account["uid"],
+            photo_url=photo_url,
+            photo_alt=photo_alt,
+        )
+    except MicroblogAuthError as e:
+        # Token rejected: retries cannot help until the user reconnects.
+        logger.error("Echo %s: micro.blog token rejected: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Micro.blog token rejected: {e}",
+            permanent=True,
+        )
+    except MicroblogError as e:
+        logger.exception("Echo %s: micro.blog post failed", echo["id"])
+        return _fail_post(posted_id, claim_token, echo["id"], f"Micro.blog delivery failed: {e}")
+    except Exception:
+        logger.exception("Echo %s: micro.blog post failed unexpectedly", echo["id"])
+        return _fail_post(posted_id, claim_token, echo["id"], "Micro.blog delivery failed")
+
+    # Persist the post URL for auditing/duplicate detection. Micropub
+    # returns it in the Location header (captured as result["location"]).
+    post_url = result.get("location", "") if isinstance(result, dict) else ""
 
     ok = _update_post(posted_id, claim_token, "success", post_url=post_url)
     if ok:

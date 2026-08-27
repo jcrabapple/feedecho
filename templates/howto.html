@@ -2,7 +2,7 @@
 {% block title %}How To — FeedEcho{% endblock %}
 {% block content %}
 <h1>How To</h1>
-<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, or email. Everything is built from three pieces: feeds, accounts, and echoes.</p>
+<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, or email. Everything is built from three pieces: feeds, accounts, and echoes.</p>
 
 <section>
     <h2>1. Add a feed</h2>
@@ -18,7 +18,7 @@
 
 <section>
     <h2>2. Add an account</h2>
-    <p>An account is a destination FeedEcho can post to. Three kinds are supported.</p>
+    <p>An account is a destination FeedEcho can post to. Four kinds are supported.</p>
     <h3>Mastodon</h3>
     <ol class="howto-steps">
         <li>Open <a href="/accounts">Accounts</a>.</li>
@@ -30,6 +30,12 @@
         <li>In the Bluesky app, open Settings → Privacy and security → App passwords and create one.</li>
         <li>Under <strong>Connect Bluesky</strong>, enter your handle and the app password.</li>
         <li>Click <strong>Connect</strong>. The handle is resolved to your personal data server automatically.</li>
+    </ol>
+    <h3>Micro.blog</h3>
+    <ol class="howto-steps">
+        <li>Create an app token at <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a> (Account → Edit Apps → Add Token).</li>
+        <li>Under <strong>Connect Micro.blog</strong>, paste the token. FeedEcho finds every blog the token can post to and connects each one.</li>
+        <li>Use the <strong>Test</strong> button to confirm the token before relying on it.</li>
     </ol>
     <h3>Email</h3>
     <ol class="howto-steps">

@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Echoes</h1>
 
-<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, or email) using a template.</p>
+<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, or email) using a template.</p>
 
 <form method="post" action="/api/echoes" class="echo-form">
     <div class="form-row">
@@ -24,6 +24,9 @@
                 {% endif %}
                 {% if bluesky_accounts %}
                 <option value="bluesky">Bluesky Account</option>
+                {% endif %}
+                {% if microblog_accounts %}
+                <option value="microblog">Micro.blog Blog</option>
                 {% endif %}
             </select>
         </label>
@@ -94,7 +97,16 @@
         </label>
         <label>Attach image
             <input type="checkbox" name="attach_image" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Upload the feed item's first image as a media attachment. Mastodon and Bluesky only.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's first image. Mastodon and Bluesky upload it as media; micro.blog fetches it by URL.</span>
+        </label>
+    </div>
+    <div class="form-row" id="microblog-fields" style="display: none;">
+        <label>Micro.blog Blog
+            <select name="microblog_account_id">
+                {% for account in microblog_accounts %}
+                <option value="{{ account.id }}">{{ account.name }} ({{ account.uid }})</option>
+                {% endfor %}
+            </select>
         </label>
     </div>
     <div class="form-row" id="digest-fields" style="display: none;">
@@ -127,7 +139,7 @@
             {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
             <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
             <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
-            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
+            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
         </div>
     </details>
     <button type="submit">Create Echo</button>
@@ -169,6 +181,8 @@
                 <span class="badge badge-success">Email</span> {{ echo.destination_name }}
                 {% elif echo.destination_type == 'bluesky' %}
                 <span class="badge badge-info">Bluesky</span> <code>{{ echo.destination_name }}</code>
+                {% elif echo.destination_type == 'microblog' %}
+                <span class="badge badge-info">Micro.blog</span> <code>{{ echo.destination_name }}</code>
                 {% endif %}
                 {% if echo.filter_keywords %}
                 <br><span class="badge badge-warning" title="Filter keywords: {{ echo.filter_keywords | e }}">
@@ -188,7 +202,7 @@
                 <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
                 {% endif %}
             </td>
-            <td data-label="Visibility">{{ '—' if echo.destination_type == 'bluesky' else echo.visibility }}</td>
+            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog') else echo.visibility }}</td>
             <td data-label="Status">
                 {% if echo.enabled %}
                 <span class="badge badge-success">Enabled</span>
@@ -226,12 +240,17 @@
     {% for a in bluesky_accounts %}<option value="{{ a.id }}">@{{ a.handle }}</option>{% endfor %}
 </script>
 
+<script id="microblog-options" type="text/html">
+    {% for a in microblog_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+</script>
+
 <script>
 function toggleDestFields() {
     const destType = document.getElementById('destination-type').value;
     document.getElementById('mastodon-fields').style.display = destType === 'mastodon' ? '' : 'none';
     document.getElementById('email-fields').style.display = destType === 'email' ? '' : 'none';
     document.getElementById('bluesky-fields').style.display = destType === 'bluesky' ? '' : 'none';
+    document.getElementById('microblog-fields').style.display = destType === 'microblog' ? '' : 'none';
     const digestFields = document.getElementById('digest-fields');
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
     const dripFields = document.getElementById('drip-fields');

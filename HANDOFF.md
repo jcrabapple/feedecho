@@ -157,6 +157,30 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   /register both 302 to /), plus the local single-mode instance. Rendered in
   Chrome: single-mode login, multi-mode anonymous login, /about as tenant and
   as admin.
+- DONE (Kimi-reviewed, UNRELEASED as of 2026-08-27): micro.blog destination.
+  A fourth destination type 'microblog' posts feed items to Micro.blog via
+  its Micropub API (form-encoded POST https://micro.blog/micropub,
+  h=entry&content=&mp-destination=&photo=&mp-photo-alt=). Connect flow takes
+  an app token (micro.blog/account/apps), calls q=config, and stores ONE ROW
+  PER BLOG the token can post to (microblog_accounts: name/uid/token/user_id,
+  UNIQUE(user_id, uid), upsert on reconnect refreshes name+token). Echoes
+  target a specific blog; scheduler _send_microblog sends content plus the
+  item's image URL as photo= when attach_image is set (Micro.blog fetches and
+  hosts it — no blob upload), with AI alt text in mp-photo-alt when enabled;
+  degrade-to-text-only on image failure, same as Mastodon/Bluesky. 401/403 →
+  permanent gave_up; other errors bounded-retry; claim re-checked before the
+  irreversible post. Seams touched: database DDL (BOTH dialects), app.py
+  account routes + echo CRUD + 4 SQL CASE/JOIN sites + dashboard stats,
+  templates (accounts, echoes incl. edit-row JS options, howto), app.js
+  (testMicroblogAccount, editEcho microblog options, toggleEditDest) with
+  cache-bust v=19, BLOCKING set + list_destinations. Tests: 34 new in
+  tests/test_microblog.py (all network monkeypatched). Kimi gate: 1 MEDIUM
+  (sender account fetch now scoped AND user_id = echo.user_id), 2 LOW (dead
+  MAX_POST_LENGTH removed; auth classification now status-code-only so a 500
+  body mentioning "unauthorized" stays retryable) — all fixed with new pinning
+  tests. 663 sqlite + 20 pg green. KNOWN PARITY GAP (pre-existing, not this
+  feature): _send_mastodon and _send_bluesky still fetch their account rows
+  without AND user_id = ?; worth folding into a future cleanup.
 
 ## 4. Key Decisions (and why)
 

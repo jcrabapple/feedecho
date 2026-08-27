@@ -23,6 +23,14 @@
 <div class="alert alert-success" role="status">Bluesky account deleted.</div>
 {% endif %}
 
+{% if request.query_params.get('status') == 'microblog_connected' %}
+<div class="alert alert-success" role="status">Micro.blog blog(s) connected successfully.</div>
+{% endif %}
+
+{% if request.query_params.get('status') == 'microblog_deleted' %}
+<div class="alert alert-success" role="status">Micro.blog blog deleted.</div>
+{% endif %}
+
 <section class="oauth-section">
     <h2>Connect Mastodon via OAuth</h2>
     <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
@@ -73,6 +81,16 @@
         <label class="sr-only" for="bsky-app-password">App password</label>
         <input type="password" name="app_password" id="bsky-app-password" placeholder="App password (xxxx-xxxx-xxxx-xxxx)" required>
         <button type="submit">Connect Account</button>
+    </form>
+</section>
+
+<section>
+    <h2>Connect Micro.blog</h2>
+    <p class="hint">Create an <strong>App Token</strong> at micro.blog (Account → Edit Apps → Add Token, or <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a>) and paste it here. FeedEcho discovers every blog the token can post to and connects each one. Tokens can post on your behalf but cannot change account settings.</p>
+    <form method="post" action="/api/microblog-accounts" class="inline-form">
+        <label class="sr-only" for="microblog-token">Micro.blog app token</label>
+        <input type="password" name="token" id="microblog-token" placeholder="Micro.blog app token" required autocomplete="off">
+        <button type="submit">Connect Blogs</button>
     </form>
 </section>
 
@@ -170,7 +188,38 @@
 </div>
 {% endif %}
 
-{% if not mastodon_accounts and not email_accounts and not bluesky_accounts %}
-<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, or add an email address above.</p>
+{% if microblog_accounts %}
+<h2>Micro.blog Blogs</h2>
+<div class="data-table-wrapper">
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Blog</th>
+            <th>URL</th>
+            <th>Added</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for account in microblog_accounts %}
+        <tr>
+            <td data-label="Blog">{{ account.name }}</td>
+            <td data-label="URL"><code>{{ account.uid }}</code></td>
+            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+            <td data-label="Actions" class="action-cell">
+                <button class="btn-sm" onclick="testMicroblogAccount({{ account.id }})">Test</button>
+                <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts %}
+<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, or add an email address above.</p>
 {% endif %}
 {% endblock %}

@@ -96,6 +96,34 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   Cloudflare proxy decision. Private beta targeted months 3-4. Note: the
   hosted account's verification banner is active until system SMTP is
   configured in /admin and the link is clicked.
+- DONE (issue #8, Kimi-reviewed, v1.14.0 released + deployed): the running
+  version shows in the site footer, linked to the GitHub releases page.
+  `_version.py` is the single source of truth for the Python side — `app.py`
+  imports it for `FastAPI(version=)` and `pyproject.toml` declares
+  `dynamic = ["version"]` with `[tool.hatch.version] path = "_version.py"`, so
+  a bump rewrites 8 literals across 5 files (was 9 across 6) via
+  `scripts/bump_version.py X.Y.Z`, which asserts a per-file count.
+  `tests/test_version.py` pins every copy AND scans `git ls-files` for
+  version-shaped strings (GHCR tag, `archive/refs/tags/vX`, nix `rev`/
+  `version`) that drifted, so a partial bump fails CI instead of shipping a
+  footer that lies. Editable-install path verified: `pip install -e ".[dev]"`
+  on 3.12 resolves the dynamic version and both CI job commands pass.
+  Visibility rule: single mode shows the version to any viewer past the auth
+  gate (no token = operator); multi mode shows it to `is_admin` only, because
+  `/register` is public and a tenant cannot upgrade the service.
+  `AuthMiddleware` now records `request.state.authed`; the public paths
+  short-circuit before session parsing, so /login, /register and /about never
+  show a version even to an admin (deliberate, documented in `render()`).
+  The footer also renders in single mode for the first time, only links pages
+  the viewer can reach (/howto when authed, /about in multi), and is omitted
+  entirely when neither applies. Version link carries an `.sr-only`
+  "opens in a new tab" cue. style.css cache-buster v=13. 606 sqlite + 20 pg
+  green, CI 3/3 on the tag. Verified in production as admin (footer shows
+  v1.14.0) and anonymously (no version on /login or /about), local instance on
+  1.14.0 across 7 pages, and rendered in Chrome at 1280px + 390px.
+  KNOWN, NOT FIXED (pre-existing, wider than this change): the top nav links
+  /howto and the app pages to anonymous viewers on /login, which bounce back
+  to the login page.
 
 ## 4. Key Decisions (and why)
 

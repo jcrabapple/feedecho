@@ -71,11 +71,15 @@ class TestAboutPage:
             resp = c.get("/about", headers={"accept": "text/html"}, follow_redirects=False)
         assert resp.status_code in (302, 303)
 
-    def test_no_footer_in_single_mode(self, monkeypatch, tmp_path):
+    def test_single_mode_footer_has_no_about_link(self, monkeypatch, tmp_path):
+        # Single mode grew a footer in issue #8 (it carries the running
+        # version), but /about is hosted-service disclosure and 404s here,
+        # so the link must not be offered.
         monkeypatch.setattr(settings, "MULTI", False)
         monkeypatch.setattr(settings, "AUTH_TOKEN", None)
         monkeypatch.setattr(database, "DB_PATH", tmp_path / "single2.db")
         database.init_db()
         with TestClient(app) as c:
             resp = c.get("/")
-        assert "site-footer" not in resp.text
+        assert "site-footer" in resp.text
+        assert 'href="/about"' not in resp.text

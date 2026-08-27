@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from database import as_utc_naive, get_db, init_db
+from _version import __version__ as APP_VERSION
 import auth
 from auth import current_user_id
 import security
@@ -51,7 +52,7 @@ logging_setup.setup_logging()
 logger = logging.getLogger("feedecho")
 access_logger = logging.getLogger("feedecho.access")
 
-app = FastAPI(title="FeedEcho", version="1.13.6")
+app = FastAPI(title="FeedEcho", version=APP_VERSION)
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -221,6 +222,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def _single(self, request: Request, call_next):
         if not settings.AUTH_TOKEN:
+            # No shared secret configured: every viewer is the operator.
+            request.state.authed = True
             return await call_next(request)
 
         path = request.url.path
@@ -246,6 +249,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 settings.AUTH_TOKEN.encode("utf-8", "surrogatepass"),
             )
         ):
+            request.state.authed = True
             return await call_next(request)
 
         # If this is the login endpoint, let it through
@@ -284,6 +288,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 and row["session_epoch"] == claims.get("epoch", 0)
             ):
                 request.state.user_id = claims["user_id"]
+                request.state.authed = True
                 return await call_next(request)
 
         accept = request.headers.get("accept", "")
@@ -409,9 +414,24 @@ def _trial_context(request: Request) -> dict:
 
 def render(name: str, request: Request, status_code: int = 200, **kwargs) -> HTMLResponse:
     template = jinja.get_template(name)
-    context = {"MULTI": settings.MULTI}
+    authed = bool(getattr(request.state, "authed", False))
+    context = {
+        "MULTI": settings.MULTI,
+        "authed": authed,
+        "project_url": settings.PROJECT_URL,
+    }
     if settings.MULTI:
         context.update(_trial_context(request))
+    # The running version, in the footer, so whoever is responsible for
+    # updating this deployment can see whether it is behind (issue #8).
+    # Self-hosted: anyone past the auth gate is the operator. Hosted: admins
+    # only — a tenant cannot upgrade the service, and /register is public, so
+    # gating on "logged in" would hand the exact version to anyone willing to
+    # sign up. Known asymmetry, deliberate: AuthMiddleware short-circuits the
+    # public paths (/login, /register, /about) before reading the session, so
+    # those pages never show a version even to an admin. Every other page does.
+    if authed and (bool(context.get("is_admin")) if settings.MULTI else True):
+        context["app_version"] = APP_VERSION
     context.update(kwargs)
     return HTMLResponse(
         template.render(request=request, **context), status_code=status_code

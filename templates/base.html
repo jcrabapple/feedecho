@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=12">
+    <link rel="stylesheet" href="/static/css/style.css?v=13">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,9 +56,19 @@
     <main>
         {% block content %}{% endblock %}
     </main>
-    {% if MULTI %}
+    {% if MULTI or authed %}
     <footer class="site-footer">
-        <a href="/about">About</a> · <a href="/howto">How To</a>
+        <div class="footer-links">
+            {# /howto is behind the auth gate: linking it to an anonymous
+               viewer just bounces them back to the login page. #}
+            {% if MULTI %}<a href="/about">About</a>{% if authed %} · {% endif %}{% endif %}{% if authed %}<a href="/howto">How To</a>{% endif %}
+        </div>
+        {% if app_version %}
+        <div class="footer-version">
+            FeedEcho <a href="{{ (project_url ~ '/releases') | safe_url }}" target="_blank" rel="noopener"
+               title="Release notes on GitHub — check whether a newer version is available">v{{ app_version }}<span class="sr-only"> — release notes on GitHub, opens in a new tab</span></a>
+        </div>
+        {% endif %}
     </footer>
     {% endif %}
     <script src="/static/js/app.js?v=18"></script>

@@ -8,7 +8,7 @@ rewrites all of them together and asserts an expected count per file, so a new
 occurrence added later fails loudly instead of silently shipping a stale value.
 
 Usage:
-    python scripts/bump_version.py 1.14.0
+    python scripts/bump_version.py X.Y.Z
 
 ``tests/test_version.py`` re-checks the same invariant in CI.
 """

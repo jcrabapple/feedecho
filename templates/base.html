@@ -28,10 +28,13 @@
 </head>
 <body>
     <nav class="navbar">
-        <a href="/" class="nav-brand">
+        {# Anonymous viewers get a sign-in funnel, not links to pages that
+           bounce them straight back to /login. #}
+        <a href="{{ '/' if authed else '/login' }}" class="nav-brand">
             <span class="nav-icon" aria-hidden="true">📡</span> FeedEcho
         </a>
         <div class="nav-links">
+            {% if authed %}
             <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
             <a href="/feeds" class="{% if request.url.path == '/feeds' %}active{% endif %}">Feeds</a>
             <a href="/accounts" class="{% if request.url.path == '/accounts' %}active{% endif %}">Accounts</a>
@@ -41,6 +44,10 @@
             <a href="/howto" class="{% if request.url.path == '/howto' %}active{% endif %}">How To</a>
             {% if MULTI and is_admin %}
             <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Admin</a>
+            {% endif %}
+            {% elif MULTI %}
+            <a href="/login" class="{% if request.url.path == '/login' %}active{% endif %}">Log in</a>
+            <a href="/register" class="{% if request.url.path == '/register' %}active{% endif %}">Sign up</a>
             {% endif %}
             <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme" title="Toggle light/dark theme">◐</button>
             {% if MULTI and current_user_email %}

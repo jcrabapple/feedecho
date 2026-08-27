@@ -197,6 +197,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
     token required. Multi mode: feedecho_session cookie required on all
     paths except the public set. Mode is read per request so tests can
     flip settings.MULTI without reloading the app.
+
+    Beyond allow/deny it records ``request.state.authed`` (and, in multi
+    mode, ``request.state.user_id``) so ``render()`` can give a viewer the
+    chrome that matches what they can actually reach. That identification is
+    best-effort on the PUBLIC pages too: without it a signed-in user lands on
+    /about with an anonymous nav and no way back into the app.
     """
 
     _MULTI_EXEMPT_PATHS = {
@@ -215,45 +221,63 @@ class AuthMiddleware(BaseHTTPMiddleware):
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
+    # Exempt paths that still render the app's nav/footer, so the viewer is
+    # worth identifying. Deliberately NOT the whole exempt set:
+    # /oauth/callback authorizes on the signed OAuth state and its handler
+    # documents that request.state.user_id is unset there; /logout must not
+    # care who you are; /static, /healthz and /favicon.svg must not pay for a
+    # database read. /forgot-password and /reset-password are for people who
+    # cannot get in, where anonymous chrome is the honest answer.
+    _MULTI_PUBLIC_PAGES = {"/login", "/register", "/about", "/verify-email"}
+
     async def dispatch(self, request: Request, call_next):
         if settings.MULTI:
             return await self._multi(request, call_next)
         return await self._single(request, call_next)
 
-    async def _single(self, request: Request, call_next):
-        if not settings.AUTH_TOKEN:
-            # No shared secret configured: every viewer is the operator.
-            request.state.authed = True
-            return await call_next(request)
+    @staticmethod
+    def _token_matches(request: Request) -> bool:
+        """Whether this request carries the shared secret.
 
-        path = request.url.path
-
-        # Allow health check and static files without auth
-        if path in _AUTH_EXEMPT_PATHS or path.startswith(tuple(_AUTH_EXEMPT_PREFIXES)):
-            return await call_next(request)
-
-        # Check cookie or header
+        Pure comparison, no database, so it is cheap enough to run on every
+        request including the exempt ones — and single mode has no user
+        attribution, so knowing "this is the operator" everywhere cannot
+        change any authorization decision.
+        """
         token = (
             request.cookies.get(auth.AUTH_COOKIE_NAME)
             or request.headers.get("x-auth-token")
         )
-
-        if (
-            token
-            and settings.AUTH_TOKEN
+        if not token or not settings.AUTH_TOKEN:
+            return False
+        return (
             # Compare bytes: compare_digest raises TypeError on str arguments
             # containing non-ASCII, which would surface as a 500 from a cookie
             # an attacker (or a confused browser) fully controls.
-            and _secrets.compare_digest(
+            _secrets.compare_digest(
                 token.encode("utf-8", "surrogatepass"),
                 settings.AUTH_TOKEN.encode("utf-8", "surrogatepass"),
             )
-        ):
+        )
+
+    async def _single(self, request: Request, call_next):
+        path = request.url.path
+        # No shared secret configured: every viewer is the operator.
+        if not settings.AUTH_TOKEN or self._token_matches(request):
             request.state.authed = True
+            if path == "/login" and request.method == "GET":
+                # Nothing to log into: either no token is configured or this
+                # viewer already presented it. A login form here is a dead end.
+                return RedirectResponse(url="/", status_code=302)
             return await call_next(request)
 
-        # If this is the login endpoint, let it through
-        if path == "/login":
+        # Health check, static files, the OAuth callback and the login form
+        # itself stay reachable without the token.
+        if (
+            path in _AUTH_EXEMPT_PATHS
+            or path.startswith(tuple(_AUTH_EXEMPT_PREFIXES))
+            or path == "/login"
+        ):
             return await call_next(request)
 
         # Redirect browser requests to login, 401 for API/JSON
@@ -264,32 +288,50 @@ class AuthMiddleware(BaseHTTPMiddleware):
             {"detail": "Authentication required"}, status_code=401
         )
 
+    @staticmethod
+    def _session_user(request: Request) -> int | None:
+        """The user behind a valid session cookie, or None.
+
+        Suspension and session-epoch are enforced per request, not just at
+        login: a valid HMAC session for a suspended account, or one issued
+        before the last password reset, is rejected.
+        """
+        token = request.cookies.get("feedecho_session")
+        claims = security.read_session(token) if token else None
+        if not claims:
+            return None
+        with get_db() as db:
+            row = db.execute(
+                "SELECT suspended, session_epoch FROM users WHERE id = ?",
+                (claims["user_id"],),
+            ).fetchone()
+        if (
+            row
+            and not row["suspended"]
+            and row["session_epoch"] == claims.get("epoch", 0)
+        ):
+            return claims["user_id"]
+        return None
+
     async def _multi(self, request: Request, call_next):
         path = request.url.path
         if path in self._MULTI_EXEMPT_PATHS or path.startswith(
             tuple(self._MULTI_EXEMPT_PREFIXES)
         ):
+            if path in self._MULTI_PUBLIC_PAGES:
+                uid = self._session_user(request)
+                if uid is not None:
+                    request.state.user_id = uid
+                    request.state.authed = True
+                    if path in ("/login", "/register") and request.method == "GET":
+                        return RedirectResponse(url="/", status_code=302)
             return await call_next(request)
 
-        token = request.cookies.get("feedecho_session")
-        claims = security.read_session(token) if token else None
-        if claims:
-            # Suspension and session-epoch are enforced per request, not
-            # just at login: a valid HMAC session for a suspended account,
-            # or one issued before the last password reset, is rejected.
-            with get_db() as db:
-                row = db.execute(
-                    "SELECT suspended, session_epoch FROM users WHERE id = ?",
-                    (claims["user_id"],),
-                ).fetchone()
-            if (
-                row
-                and not row["suspended"]
-                and row["session_epoch"] == claims.get("epoch", 0)
-            ):
-                request.state.user_id = claims["user_id"]
-                request.state.authed = True
-                return await call_next(request)
+        uid = self._session_user(request)
+        if uid is not None:
+            request.state.user_id = uid
+            request.state.authed = True
+            return await call_next(request)
 
         accept = request.headers.get("accept", "")
         if "text/html" in accept and request.method == "GET":
@@ -427,9 +469,9 @@ def render(name: str, request: Request, status_code: int = 200, **kwargs) -> HTM
     # Self-hosted: anyone past the auth gate is the operator. Hosted: admins
     # only — a tenant cannot upgrade the service, and /register is public, so
     # gating on "logged in" would hand the exact version to anyone willing to
-    # sign up. Known asymmetry, deliberate: AuthMiddleware short-circuits the
-    # public paths (/login, /register, /about) before reading the session, so
-    # those pages never show a version even to an admin. Every other page does.
+    # sign up. Anonymous viewers never see it: the middleware only marks a
+    # request authed after the session or token checked out, on public pages
+    # included.
     if authed and (bool(context.get("is_admin")) if settings.MULTI else True):
         context["app_version"] = APP_VERSION
     context.update(kwargs)

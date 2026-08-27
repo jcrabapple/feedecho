@@ -40,8 +40,13 @@ version to any viewer past the auth gate (they are the operator), multi mode
 shows it only to `is_admin`. That also matches the issue's own wording. Covered
 by `test_withheld_from_a_signed_in_tenant` / `test_shown_to_an_admin`.
 
-**2. Credentialed viewers on exempt paths look anonymous — REAL, accepted and
-documented, not changed.** Making the exempt branch parse the session would also
+**2. Credentialed viewers on exempt paths look anonymous — REAL, accepted here,
+FIXED in the following release** (see
+`docs/reviews/2026-08-27-kimi-k3-nav-gating.md`: the middleware now identifies
+the viewer on /login, /register, /about and /verify-email, so an admin does get
+the version footer on /about).
+
+Original reasoning for deferring it: Making the exempt branch parse the session would also
 start rendering the multi-mode nav chrome (email + logout) on `/login`, `/about`
 and `/register` for logged-in users — a wider behaviour change than a footer
 feature should carry. The asymmetry is now stated in the `render()` comment: the

@@ -139,6 +139,13 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 4. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
 5. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
+### Which version am I running?
+
+The footer of every page shows the running version (`FeedEcho vX.Y.Z`), linked
+to the [releases page](https://github.com/jcrabapple/feedecho/releases) so you
+can see whether a newer one is out. It is only rendered for a logged-in
+operator, so an unauthenticated login page never advertises the version.
+
 ### Bluesky details
 
 - Accounts connect via **App Passwords**, which are scoped to creating posts (and other app activity) and can be revoked individually without changing your main password.

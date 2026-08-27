@@ -124,6 +124,39 @@ VPS, Kimi K3 review gate before every release (Jason's standing rule).
   KNOWN, NOT FIXED (pre-existing, wider than this change): the top nav links
   /howto and the app pages to anonymous viewers on /login, which bounce back
   to the login page.
+- DONE (Kimi-reviewed, v1.15.0 released + deployed): that nav defect is fixed.
+  `base.html` renders the app links only when `authed`; anonymous multi-mode
+  viewers get Log in + Sign up (current page marked `active`), single mode's
+  login page is brand + theme toggle, and the brand href points at /login for
+  anonymous viewers instead of / (which redirected back). An authenticated GET
+  of /login (both modes) or /register (multi) now 302s to / instead of
+  rendering a dead form — POST untouched, and single mode redirects even with
+  no token configured, matching what POST already did.
+  To make `authed` correct on public pages, `AuthMiddleware` grew
+  `_token_matches()` (single, pure compare, now runs before the exempt
+  short-circuit) and `_session_user()` (multi, same suspension +
+  session_epoch enforcement as the old inline code), and runs the session read
+  best-effort on `_MULTI_PUBLIC_PAGES` = /login, /register, /about,
+  /verify-email. Deliberately excluded: /oauth/callback (its handler
+  authorizes on the signed OAuth state and documents user_id as unset),
+  /logout, and /static + /healthz + /favicon.svg (must not pay for a DB read —
+  pinned by a get_db call-counting test). /forgot-password and /reset-password
+  stay anonymous on purpose (they are for people who cannot get in) and that is
+  pinned too. Consequence: an admin now sees the version footer on /about,
+  which closes the finding deferred in the v1.14.0 review.
+  Kimi passed the gate with 3 LOW findings, all in the new tests' coverage, all
+  fixed: funnel assertions were partly satisfied by the brand anchor;
+  /verify-email had no coverage despite being the riskiest newly-identified
+  path (verified it keys off `consume_token`, never `current_user_id`, now
+  pinned by a cross-account test where a signed-in user clicks a token issued
+  to someone else); the deliberate exclusions were unpinned.
+  629 sqlite + 20 pg green (23 new in tests/test_nav_gating.py, 13 confirmed
+  RED against the old behaviour), CI 3/3 on the tag. Verified in production
+  anonymously (no app links on /login, /register, /about; no version) and as
+  admin (full nav + Admin + email + version on / and /about; /login and
+  /register both 302 to /), plus the local single-mode instance. Rendered in
+  Chrome: single-mode login, multi-mode anonymous login, /about as tenant and
+  as admin.
 
 ## 4. Key Decisions (and why)
 

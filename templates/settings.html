@@ -50,9 +50,9 @@
     </form>
 
     <form method="post" action="/api/settings/smtp/test" class="inline-form" style="margin-top: 0.5rem;">
-        <label class="sr-only" for="smtp-test-email">Test recipient email address</label>
+        <label for="smtp-test-email">Test recipient (optional, defaults to From Email)</label>
         <input type="email" name="test_email" id="smtp-test-email"
-               placeholder="email@example.com (optional, defaults to from address)">
+               placeholder="email@example.com">
         <button type="submit" class="btn-sm">Send Test Email</button>
     </form>
 </section>

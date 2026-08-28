@@ -450,8 +450,56 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
 }
 
 @media (max-width: 640px) {
+    /* Labels claim their own line and inputs go full-width beneath them.
+       The natural inline-form flex layout squeezes `flex: 1` inputs down to
+       whatever the label left over (a "Name" input rendered ~30px wide), so
+       contents were unreadable on phones. Wrapping labels (display:block,
+       full width) push the input to the next flex line; the 100% basis
+       below makes it fill the line. */
+    .inline-form label {
+        display: block;
+        width: 100%;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-bottom: 0.15rem;
+    }
+    .inline-form input {
+        flex: 1 1 100%;
+        min-width: 0;
+        width: 100%;
+    }
+    .inline-form input[type="number"] {
+        flex: 0 1 auto;
+        min-width: 5rem;
+    }
+    /* sr-only labels (before the P2 visible-label change) stay out of flow */
+    .inline-form label.sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+    /* keep the submit button from stretching to full width */
+    .inline-form button { flex: 0 0 auto; }
+}
+
+@media (max-width: 640px) {
     .form-row { flex-direction: column; }
     .form-row label { width: 100%; }
+    /* A wrapping label next to a standalone <label for> (P2 visible-label
+       pattern) puts the caption and control on separate lines; without a
+       full-width basis the input shrinks to its content. */
+    .form-row input, .form-row select, .form-row textarea {
+        width: 100%;
+    }
+    .form-row input[type="checkbox"] {
+        width: 24px;
+    }
 }
 
 .template-vars {

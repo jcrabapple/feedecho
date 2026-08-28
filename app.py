@@ -25,7 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from database import as_utc_naive, get_db, init_db
+from database import as_utc_naive, dialect, get_db, init_db
 from _version import __version__ as APP_VERSION
 import auth
 from auth import current_user_id
@@ -938,13 +938,29 @@ def _admin_stats(db) -> dict:
     return {k: (rows[k] or 0) for k in ("n", "admins", "suspended", "verified", "active_trials")}
 
 
+def _admin_lock(db) -> None:
+    """Serialize last-admin guard+write across concurrent requests.
+
+    On Postgres, pg_advisory_xact_lock is transaction-scoped (released at
+    commit/rollback) and re-entrant within a transaction, so calling it from
+    the guard and again nowhere else is safe; two concurrent admin actions
+    serialize here, closing the count-then-act race between guard and UPDATE.
+    SQLite has no such primitive; it is single-writer (busy_timeout 30s) and
+    single mode has one tenant, so a no-op is correct there.
+    """
+    if dialect() == "postgres":
+        db.execute("SELECT pg_advisory_xact_lock(824213001)")
+
+
 def _admin_guard_last_admin(db, user_id: int, column: str) -> str | None:
     """Error message if an action would leave zero admins, else None.
 
     column is 'suspended' (guard: last ACTIVE admin) or 'is_admin'
     (guard: last admin bit). Single-connection check + write keeps this
-    race-free per request transaction.
+    race-free per request transaction; on Postgres the advisory lock in
+    _admin_lock also serializes concurrent requests against each other.
     """
+    _admin_lock(db)
     if column == "is_admin":
         # Demoting: preserve at least one admin bit, whatever its state.
         count = db.execute(
@@ -1534,6 +1550,14 @@ async def add_email_account(
     email: str = Form(...),
 ):
     uid = current_user_id(request)
+    # Recipients become message headers: reject control characters and
+    # whitespace here rather than at send time (same rule as the SMTP
+    # settings route below).
+    email = email.strip()
+    if not re.match(r"^[^@\s\r\n]+@[^@\s\r\n]+$", email):
+        return _render_accounts_error(
+            request, "Enter a valid email address"
+        )
     with get_db() as db:
         existing = db.execute(
             "SELECT id FROM email_accounts WHERE user_id = ? AND email = ?",
@@ -1721,8 +1745,19 @@ def add_microblog_account(
 
     with get_db() as db:
         uid = current_user_id(request)
-        # The cap must account for EVERY row this connect will write: a
-        # token covering N blogs inserts N rows, not one.
+        # The cap must account for EVERY NEW row this connect will write: a
+        # token covering N blogs inserts N rows, not one. Rows the upsert
+        # would only update (blogs already connected to this user) don't
+        # change what the cap measures, so re-connecting an existing token —
+        # e.g. to rotate it — must not be blocked at the cap. Mirrors the
+        # email route's "Cap counts NEW rows only" rule.
+        existing_uids = {
+            row["uid"]
+            for row in db.execute(
+                "SELECT uid FROM microblog_accounts WHERE user_id = ?", (uid,)
+            ).fetchall()
+        }
+        new_blog_count = sum(1 for b in blogs if b["uid"] not in existing_uids)
         current_total = sum(
             db.execute(
                 f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
@@ -1731,12 +1766,13 @@ def add_microblog_account(
         )
         plan = _user_plan(db, uid)
         cap = plans.limit_for(plan, "max_destinations")
-        if cap and current_total + len(blogs) > cap:
+        if cap and new_blog_count and current_total + new_blog_count > cap:
             room = max(0, cap - current_total)
             return _render_accounts_error(
                 request,
                 f"Your plan allows {cap} connected accounts and this token covers "
-                f"{len(blogs)} blog{'s' if len(blogs) != 1 else ''} ({room} would fit). "
+                f"{len(blogs)} blog{'s' if len(blogs) != 1 else ''} "
+                f"({new_blog_count} new, {room} would fit). "
                 "Upgrade or disconnect accounts to connect them all.",
             )
         for blog in blogs:

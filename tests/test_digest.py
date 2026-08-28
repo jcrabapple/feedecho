@@ -302,12 +302,16 @@ class TestDigestFlush:
             rows = db.execute("SELECT * FROM digest_items WHERE echo_id = 1").fetchall()
         assert len(rows) == 2
 
-        # posted_items should still be 'queued' (not updated to 'success')
+        # posted_items should be 'failed' with no retry time: the notify
+        # counter must see digest send errors, but the retry sweep must
+        # not claim them — only flush_digests owns digest delivery.
         with db_tmp.get_db() as db:
             rows = db.execute(
-                "SELECT status FROM posted_items WHERE echo_id = 1"
+                "SELECT status, next_retry_at FROM posted_items WHERE echo_id = 1"
             ).fetchall()
-        assert all(r["status"] == "queued" for r in rows)
+        assert all(
+            r["status"] == "failed" and r["next_retry_at"] is None for r in rows
+        )
 
     def test_flush_multiple_echoes_separately(self, db_tmp, monkeypatch):
         """Each echo with digest mode should get its own email."""

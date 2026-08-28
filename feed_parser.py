@@ -330,8 +330,10 @@ def fetch_feed(url: str) -> dict:
     finally:
         client.close()
 
-    # JSON Feed
-    if "json" in content_type or url.endswith(".json"):
+    # JSON Feed. The path (not the full URL) decides: query strings like
+    # /feed.json?token=... are common on private feeds, and such URLs often
+    # also omit a JSON content-type, so both signals must use the path.
+    if "json" in content_type or urlparse(url).path.endswith(".json"):
         return parse_json_feed(json.loads(content))
 
     # RSS/Atom via feedparser

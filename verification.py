@@ -19,6 +19,13 @@ RESEND_LIMIT = 3  # per user, per purpose, per 24h
 _TS = "%Y-%m-%d %H:%M:%S"
 
 
+def _now_str() -> str:
+    """Explicit UTC timestamp string. On PG the SQL NOW-ish default resolves
+    in the session time zone while every reader assumes UTC, so this module
+    binds UTC params everywhere instead (same rule as invites._now_str)."""
+    return datetime.now(timezone.utc).strftime(_TS)
+
+
 def issue_token(user_id: int, purpose: str) -> str:
     """Create a fresh token, invalidating prior unconsumed tokens of the
     same purpose (a new verification/reset supersedes the old link).
@@ -37,9 +44,9 @@ def issue_token(user_id: int, purpose: str) -> str:
                 # Consume (not delete) the prior token so issuance history
                 # stays countable for the resend throttle.
                 db.execute(
-                    "UPDATE email_tokens SET consumed_at = CURRENT_TIMESTAMP"
+                    "UPDATE email_tokens SET consumed_at = ?"
                     " WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL",
-                    (user_id, purpose),
+                    (_now_str(), user_id, purpose),
                 )
                 db.execute(
                     "INSERT INTO email_tokens"
@@ -93,10 +100,10 @@ def consume_token(token: str, purpose: str) -> int | None:
         if not row or row["consumed_at"]:
             return None
         cur = db.execute(
-            "UPDATE email_tokens SET consumed_at = CURRENT_TIMESTAMP"
+            "UPDATE email_tokens SET consumed_at = ?"
             " WHERE id = ? AND consumed_at IS NULL"
-            " AND expires_at > CURRENT_TIMESTAMP",
-            (row["id"],),
+            " AND expires_at > ?",
+            (_now_str(), row["id"], _now_str()),
         )
         if cur.rowcount != 1:
             # Concurrent consumer won, or the token expired.
@@ -116,7 +123,7 @@ def peek_token(token: str, purpose: str) -> int | None:
         row = db.execute(
             "SELECT user_id FROM email_tokens"
             " WHERE token_hash = ? AND purpose = ?"
-            " AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
-            (digest, purpose),
+            " AND consumed_at IS NULL AND expires_at > ?",
+            (digest, purpose, _now_str()),
         ).fetchone()
     return row["user_id"] if row else None

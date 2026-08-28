@@ -23,7 +23,10 @@ STATE_TTL_SECONDS = 10 * 60
 # silently shipping two different links.
 FALLBACK_WEBSITE = "https://github.com/jcrabapple/feedecho"
 
-_STATE_SECRET = (AUTH_TOKEN or STATE_SECRET or secrets.token_urlsafe(32)).encode("utf-8")
+# STATE_SECRET wins: in multi mode a carried-over single-mode AUTH_TOKEN must
+# never silently key OAuth-state HMACs (mirrors security.session_secret()'s
+# gate, which exists for exactly this scenario).
+_STATE_SECRET = (STATE_SECRET or AUTH_TOKEN or secrets.token_urlsafe(32)).encode("utf-8")
 
 
 def _now() -> datetime:

@@ -98,7 +98,7 @@
     <form method="post" action="/api/settings/alt-text" class="echo-form">
         <div class="form-row">
             <label>Enable AI alt text
-                <input type="checkbox" name="alt_text_ai_enabled" value="true" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }}>
+                <input type="checkbox" name="alt_text_ai_enabled" value="1" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }}>
                 <span class="hint" style="margin: 0.2rem 0 0;">Generate alt text before uploading images to Mastodon.</span>
             </label>
         </div>

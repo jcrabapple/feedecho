@@ -60,6 +60,14 @@ DRIP_QUEUE_CAP = 30
 # dumping a stale backlog as one burst.
 DRIP_DOWNGRADE_BATCH = 10
 
+# Digest email size cap. Bodies are assembled item-by-item; overflow is
+# held for the next flush instead of silently truncated (which reported
+# dropped content as delivered). A single item larger than the whole cap
+# is sent truncated so one giant item cannot wedge the queue forever.
+DIGEST_MAX_CHARS = 10000
+# Room reserved for the held-items notice appended when overflow occurs.
+DIGEST_NOTICE_RESERVE = 80
+
 # Per-echo locks serializing drip rate checks across the feed-check and
 # flush threads, so concurrent workers cannot exceed the hourly cap.
 _drip_locks: dict[int, threading.Lock] = {}
@@ -1761,22 +1769,65 @@ def flush_digests() -> None:
         if not items:
             continue
 
-        # Build digest body
+        # Build digest body incrementally so overflow can be detected
+        # per-item: everything that fits goes out now, the rest stays
+        # queued for the next flush. Silently truncating here reported
+        # dropped content as delivered.
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         subject = f"FeedEcho Digest — {echo_row['feed_name']} — {date_str}"
 
-        body_parts = [f"FeedEcho Digest for {echo_row['feed_name']}", f"Date: {date_str}", ""]
+        header = [f"FeedEcho Digest for {echo_row['feed_name']}", f"Date: {date_str}", ""]
 
+        body_parts = list(header)
+        used = sum(len(p) + 1 for p in body_parts)
+        sent_items, held_items = [], []
         for i, item in enumerate(items, 1):
             title = item["item_title"] or item["item_url"] or f"Item {i}"
-            body_parts.append(f"{i}. {title}")
-            body_parts.append(f"   {item['rendered_content']}")
-            body_parts.append("")
+            lines = (
+                f"{i}. {title}",
+                f"   {item['rendered_content']}",
+                "",
+            )
+            added = sum(len(ln) + 1 for ln in lines)
+            if used + added > DIGEST_MAX_CHARS - DIGEST_NOTICE_RESERVE:
+                held_items.append(item)
+                continue
+            body_parts.extend(lines)
+            used += added
+            sent_items.append(item)
 
-        # Truncate overly long digests
+        if held_items and not sent_items:
+            # A single item larger than the whole cap: normally send it
+            # truncated so one giant item cannot wedge the queue forever.
+            # Degenerate case (a pathological title/URL that leaves no room
+            # for any content): keep everything held instead of sending a
+            # content-less title.
+            first = held_items.pop(0)
+            body_parts.append(f"1. {first['item_title'] or first['item_url'] or 'Item 1'}")
+            budget = DIGEST_MAX_CHARS - DIGEST_NOTICE_RESERVE - used - len(body_parts[-1]) - 8
+            if budget <= 0:
+                held_items.insert(0, first)
+            else:
+                body_parts.append(f"   {first['rendered_content'][:budget]}…")
+                sent_items.append(first)
+
+        if not sent_items:
+            # Nothing fit this round (pathological content only): leave the
+            # queue untouched rather than send an empty digest or drop the
+            # item. Logged loudly so a wedged queue is discoverable.
+            logger.warning(
+                "Digest for echo %s held: an item exceeds the %d char cap",
+                echo_id,
+                DIGEST_MAX_CHARS,
+            )
+            continue
+
         body = "\n".join(body_parts)
-        if len(body) > 10000:  # reasonable email size cap
-            body = body[:9950] + "\n\n... (truncated)"
+        if held_items:
+            body += (
+                f"\n\n[{len(held_items)} newer item{'s' if len(held_items) != 1 else ''}"
+                " held for the next digest to stay under the size cap.]"
+            )
 
         try:
             send_email(
@@ -1785,24 +1836,48 @@ def flush_digests() -> None:
                 body=body,
                 user_id=echo_row["user_id"],
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Digest flush failed for echo %s (%s, %d items)",
                 echo_id,
                 echo_row["feed_name"],
                 len(items),
             )
-            # Don't mark as sent — leave items in digest_items for next run
+            # Surface digest send failures to the user: mark the claimed rows
+            # 'failed' (without a retry time — the retry sweep must not grab
+            # digest items, only flush_digests owns them) so the failure
+            # counter in notify.record_failure can reach its threshold and
+            # alert on a permanently broken SMTP config.
+            with get_db() as db:
+                for item in items:
+                    db.execute(
+                        """UPDATE posted_items
+                              SET status = 'failed',
+                                  error_message = ?,
+                                  next_retry_at = NULL,
+                                  attempt_count = attempt_count + 1
+                            WHERE echo_id = ? AND item_id = ?
+                              AND status IN ('queued', 'failed')""",
+                        (f"Digest send failed: {exc}", echo_id, item["item_id"]),
+                    )
+            record_failure(echo_id)
+            # Leave digest_items intact — the next successful flush sends them.
             continue
 
-        # Success — delete only the sent items and update posted_items to 'success'
-        sent_item_ids = [item["item_id"] for item in items]
+        # Success — delete only the sent items and update posted_items to
+        # 'success'; held items stay queued for the next flush.
+        sent_item_ids = [item["item_id"] for item in sent_items]
         with get_db() as db:
-            for item in items:
-                # Update posted_items from 'queued' to 'success'
+            for item in sent_items:
+                # Update posted_items to 'success'. 'failed' is included:
+                # a prior flush may have marked the row failed on a send
+                # error; a successful send now must still finalize it,
+                # else the queue row below is deleted with the posted_item
+                # stuck on 'failed'.
                 db.execute(
                     """UPDATE posted_items SET status = 'success', posted_at = ?
-                       WHERE echo_id = ? AND item_id = ? AND status = 'queued'""",
+                       WHERE echo_id = ? AND item_id = ?
+                         AND status IN ('queued', 'failed')""",
                     (_now(), echo_id, item["item_id"]),
                 )
             # Delete only the sent items, not any that may have arrived concurrently
@@ -1814,10 +1889,11 @@ def flush_digests() -> None:
 
         record_success(echo_id)
         logger.info(
-            "Digest flushed for echo %s (%s): %d items sent",
+            "Digest flushed for echo %s (%s): %d items sent, %d held",
             echo_id,
             echo_row["feed_name"],
-            len(items),
+            len(sent_items),
+            len(held_items),
         )
 
 

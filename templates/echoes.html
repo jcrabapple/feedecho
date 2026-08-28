@@ -31,14 +31,20 @@
             </select>
         </label>
     </div>
-    <div class="form-row" id="mastodon-fields">
-        <label>Mastodon Account
-            <select name="account_id">
-                {% for account in mastodon_accounts %}
-                <option value="{{ account.id }}">@{{ account.username }}@{{ account.instance | replace('https://', '') }}</option>
-                {% endfor %}
-            </select>
-        </label>
+{# The first <option> in #destination-type is whichever account type exists
+   first in the same if-chain below. Its field row must start visible and the
+   rest hidden server-side: hiding only via the inline script flashes the
+   Mastodon row on every load and leaves it wrong with JS disabled. #}
+{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ''))) %}
+{% macro dest_hidden(dest) %}{% if dest != first_dest %} style="display: none;"{% endif %}{% endmacro %}
+<div class="form-row" id="mastodon-fields"{{ dest_hidden('mastodon') }}>
+    <label>Mastodon Account
+        <select name="account_id">
+            {% for account in mastodon_accounts %}
+            <option value="{{ account.id }}">@{{ account.username }}@{{ account.instance | replace('https://', '') }}</option>
+            {% endfor %}
+        </select>
+    </label>
         <label>Visibility
             <select name="visibility">
                 <option value="public">Public</option>
@@ -48,7 +54,7 @@
             </select>
         </label>
     </div>
-    <div class="form-row" id="email-fields" style="display: none;">
+    <div class="form-row" id="email-fields"{{ dest_hidden('email') }}>
         <label>Email Address
             <select name="email_account_id">
                 {% for account in email_accounts %}
@@ -57,7 +63,7 @@
             </select>
         </label>
     </div>
-    <div class="form-row" id="bluesky-fields" style="display: none;">
+    <div class="form-row" id="bluesky-fields"{{ dest_hidden('bluesky') }}>
         <label>Bluesky Account
             <select name="bluesky_account_id">
                 {% for account in bluesky_accounts %}
@@ -93,14 +99,14 @@
     <div class="form-row">
         <label>Content warning
             <input type="text" name="content_warning" placeholder="e.g. Spoilers, US Politics" maxlength="500">
-            <span class="hint" style="margin: 0.2rem 0 0;">Optional. Applied as Mastodon spoiler text; hides post body behind the warning.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
         </label>
         <label>Attach image
             <input type="checkbox" name="attach_image" value="true">
             <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's first image. Mastodon and Bluesky upload it as media; micro.blog fetches it by URL.</span>
         </label>
     </div>
-    <div class="form-row" id="microblog-fields" style="display: none;">
+    <div class="form-row" id="microblog-fields"{{ dest_hidden('microblog') }}>
         <label>Micro.blog Blog
             <select name="microblog_account_id">
                 {% for account in microblog_accounts %}

@@ -117,12 +117,30 @@ async function fetchNow(feedId, btn) {
     }
 }
 
+// Restore scroll position across the full reloads that table-row actions
+// trigger (pause/retry/give-up/toggle). Dumping the user back to the top of
+// a long history list after every action is exactly the friction this avoids.
+function reloadPreservingScroll() {
+    try {
+        sessionStorage.setItem('feedecho-scroll-y', String(window.scrollY));
+    } catch (e) {}
+    location.reload();
+}
+(function () {
+    let y = null;
+    try { y = Number(sessionStorage.getItem('feedecho-scroll-y')); } catch (e) {}
+    if (y) {
+        try { sessionStorage.removeItem('feedecho-scroll-y'); } catch (e) {}
+        window.addEventListener('load', () => window.scrollTo(0, y), { once: true });
+    }
+})();
+
 async function pauseFeed(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/pause`, { method: 'POST' });
         const data = await resp.json();
         if (data.success) {
-            location.reload();
+            reloadPreservingScroll();
         } else {
             showStatus(btn, data.detail || 'Failed to toggle pause', 'error');
         }
@@ -160,10 +178,14 @@ function editFeed(feedId) {
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
             <div class="form-row edit-actions">
                 <button type="submit" class="btn-sm">Save</button>
-                <button type="button" class="btn-sm btn-danger" onclick="cancelFeedEdit(${feedId})">Cancel</button>
+                <button type="button" class="btn-sm" onclick="cancelFeedEdit(${feedId})">Cancel</button>
             </div>
         </form>
     </td>`;
+
+    // innerHTML replacement above destroyed the focused Edit button; drop
+    // focus into the form it opened instead of leaving it on <body>.
+    row.querySelector('input, select, textarea')?.focus();
 }
 
 async function retryPost(postedId, btn) {
@@ -171,7 +193,7 @@ async function retryPost(postedId, btn) {
         const resp = await fetch(`/api/history/${postedId}/retry`, { method: 'POST' });
         const data = await resp.json();
         showStatus(btn, data.message || data.detail || 'Done', data.success ? 'success' : 'error');
-        if (data.success) location.reload();
+        if (data.success) reloadPreservingScroll();
     } catch (e) {
         showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
@@ -199,7 +221,7 @@ async function giveUpPost(postedId, btn) {
         const resp = await fetch(`/api/history/${postedId}/give-up`, { method: 'POST' });
         const data = await resp.json();
         showStatus(btn, data.message || data.detail || 'Done', data.success ? 'success' : 'error');
-        if (data.success) location.reload();
+        if (data.success) reloadPreservingScroll();
     } catch (e) {
         showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
@@ -210,7 +232,7 @@ async function toggleEcho(echoId, btn) {
         const resp = await fetch(`/api/echoes/${echoId}/toggle`, { method: 'POST' });
         const data = await resp.json();
         if (data.success) {
-            location.reload();
+            reloadPreservingScroll();
         } else {
             showStatus(btn, data.detail || data.error || 'Failed to toggle echo', 'error');
         }
@@ -344,7 +366,7 @@ function editEcho(echoId) {
             </div>
             <div class="form-row edit-actions">
                 <button type="submit" class="btn-sm">Save</button>
-                <button type="button" class="btn-sm btn-danger" onclick="cancelEdit(${echoId})">Cancel</button>
+                <button type="button" class="btn-sm" onclick="cancelEdit(${echoId})">Cancel</button>
             </div>
         </form>
     </td>`;
@@ -360,6 +382,15 @@ function editEcho(echoId) {
     if (blueskySelect) blueskySelect.value = destId;
     const microblogSelect = row.querySelector('select[name="microblog_account_id"]');
     if (microblogSelect) microblogSelect.value = destId;
+
+    // Sync conditional rows to the echo's current delivery mode: without this
+    // a digest echo opens showing both "batch into one email" and "Max posts
+    // per hour", and the drip field only hides after the next onchange.
+    toggleEditDest(echoId);
+
+    // innerHTML replacement above destroyed the focused Edit button; drop
+    // focus into the form it opened instead of leaving it on <body>.
+    row.querySelector('input, select, textarea')?.focus();
 }
 
 function toggleEditDest(echoId) {
@@ -382,6 +413,10 @@ function cancelEdit(echoId) {
     if (row && editState.has(echoId)) {
         row.innerHTML = editState.get(echoId);
         editState.delete(echoId);
+        // The editor form vanished with the focused control inside it; return
+        // focus to the row's Edit button so keyboard users are not dumped to
+        // the top of the document.
+        row.querySelector('button')?.focus();
     }
 }
 
@@ -391,6 +426,8 @@ function cancelFeedEdit(feedId) {
     if (row && editState.has(key)) {
         row.innerHTML = editState.get(key);
         editState.delete(key);
+        // Same focus-return contract as cancelEdit.
+        row.querySelector('button')?.focus();
     }
 }
 
@@ -514,3 +551,28 @@ function formatLocalTimes() {
 
 // app.js is a classic script at the end of <body>, so the DOM is parsed.
 formatLocalTimes();
+
+// Mobile table semantics: the <=640px card layout sets thead and all table
+// elements to display:block, which strips table semantics, and leaves each
+// cell labelled only by ::before content from data-label that many screen
+// readers never announce. Hydrate the header text into every cell as real
+// (visually hidden) text; CSS keeps the ::before for sighted narrow layouts.
+// role="cell" keeps the value from being double-announced with the sr-only
+// copy present.
+function hydrateTableHeaders() {
+    document.querySelectorAll('table.data-table').forEach((table) => {
+        const headers = Array.from(table.querySelectorAll('thead th')).map((th) => th.textContent.trim());
+        if (!headers.length) return;
+        table.querySelectorAll('tbody tr').forEach((tr) => {
+            tr.querySelectorAll('td[data-label]').forEach((td) => {
+                if (td.querySelector('.sr-only.table-label')) return;
+                const label = document.createElement('span');
+                label.className = 'sr-only table-label';
+                label.textContent = td.dataset.label;
+                td.setAttribute('role', 'cell');
+                td.insertBefore(label, td.firstChild);
+            });
+        });
+    });
+}
+hydrateTableHeaders();

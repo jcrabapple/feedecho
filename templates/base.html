@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=19">
+    <link rel="stylesheet" href="/static/css/style.css?v=20">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,7 +27,8 @@
     </script>
 </head>
 <body>
-    <nav class="navbar">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <nav class="navbar" aria-label="Primary">
         {# Anonymous viewers get a sign-in funnel, not links to pages that
            bounce them straight back to /login. #}
         <a href="/" class="nav-brand">
@@ -35,19 +36,19 @@
         </a>
         <div class="nav-links">
             {% if authed %}
-            <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
-            <a href="/feeds" class="{% if request.url.path == '/feeds' %}active{% endif %}">Feeds</a>
-            <a href="/accounts" class="{% if request.url.path == '/accounts' %}active{% endif %}">Accounts</a>
-            <a href="/echoes" class="{% if request.url.path == '/echoes' %}active{% endif %}">Echoes</a>
-            <a href="/history" class="{% if request.url.path == '/history' %}active{% endif %}">History</a>
-            <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
-            <a href="/howto" class="{% if request.url.path == '/howto' %}active{% endif %}">How To</a>
+            <a href="/" {% if request.url.path == '/' %}aria-current="page" class="active"{% endif %}>Dashboard</a>
+            <a href="/feeds" {% if request.url.path == '/feeds' %}aria-current="page" class="active"{% endif %}>Feeds</a>
+            <a href="/accounts" {% if request.url.path == '/accounts' %}aria-current="page" class="active"{% endif %}>Accounts</a>
+            <a href="/echoes" {% if request.url.path == '/echoes' %}aria-current="page" class="active"{% endif %}>Echoes</a>
+            <a href="/history" {% if request.url.path == '/history' %}aria-current="page" class="active"{% endif %}>History</a>
+            <a href="/settings" {% if request.url.path == '/settings' %}aria-current="page" class="active"{% endif %}>Settings</a>
+            <a href="/howto" {% if request.url.path == '/howto' %}aria-current="page" class="active"{% endif %}>How To</a>
             {% if MULTI and is_admin %}
-            <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Admin</a>
+            <a href="/admin" {% if request.url.path == '/admin' %}aria-current="page" class="active"{% endif %}>Admin</a>
             {% endif %}
             {% elif MULTI %}
-            <a href="/login" class="{% if request.url.path == '/login' %}active{% endif %}">Log in</a>
-            <a href="/register" class="{% if request.url.path == '/register' %}active{% endif %}">Sign up</a>
+            <a href="/login" {% if request.url.path == '/login' %}aria-current="page" class="active"{% endif %}>Log in</a>
+            <a href="/register" {% if request.url.path == '/register' %}aria-current="page" class="active"{% endif %}>Sign up</a>
             {% endif %}
             <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme" title="Toggle light/dark theme">◐</button>
             {% if MULTI and current_user_email %}
@@ -60,7 +61,7 @@
             {% endif %}
         </div>
     </nav>
-    <main>
+    <main id="main">
         {% if posting_paused %}
         <div class="flash flash-warn" role="status">
             <strong>Posting paused:</strong> your trial has ended, so FeedEcho has stopped
@@ -85,6 +86,6 @@
         {% endif %}
     </footer>
     {% endif %}
-    <script src="/static/js/app.js?v=19"></script>
+    <script src="/static/js/app.js?v=20"></script>
 </body>
 </html>

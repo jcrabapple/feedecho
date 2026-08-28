@@ -32,13 +32,13 @@
     <table class="data-table">
         <thead>
             <tr>
-                <th>Email</th>
-                <th>Plan</th>
-                <th>Verified</th>
-                <th>Status</th>
-                <th>Role</th>
-                <th>Joined</th>
-                <th>Actions</th>
+                <th scope="col">Email</th>
+                <th scope="col">Plan</th>
+                <th scope="col">Verified</th>
+                <th scope="col">Status</th>
+                <th scope="col">Role</th>
+                <th scope="col">Joined</th>
+                <th scope="col">Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -64,13 +64,15 @@
                         <button type="submit" class="btn-sm">Unsuspend</button>
                     </form>
                     {% else %}
-                    <form method="post" action="/admin/users/{{ u.id }}/suspend" class="inline-form">
+                    <form method="post" action="/admin/users/{{ u.id }}/suspend" class="inline-form"
+                          onsubmit="return confirm('Suspend {{ u.email }}? Their feeds stop posting until unsuspended.')">
                         <button type="submit" class="btn-sm btn-danger">Suspend</button>
                     </form>
                     {% endif %}
                     {% if u.is_admin %}
-                    <form method="post" action="/admin/users/{{ u.id }}/demote" class="inline-form">
-                        <button type="submit" class="btn-sm btn-danger">Demote</button>
+                    <form method="post" action="/admin/users/{{ u.id }}/demote" class="inline-form"
+                          onsubmit="return confirm('Remove admin access from {{ u.email }}?')">
+                        <button type="submit" class="btn-sm btn-danger">Remove admin</button>
                     </form>
                     {% else %}
                     <form method="post" action="/admin/users/{{ u.id }}/promote" class="inline-form">
@@ -153,11 +155,11 @@
     <table class="data-table">
         <thead>
             <tr>
-                <th>Code</th>
-                <th>Status</th>
-                <th>Used by</th>
-                <th>Created</th>
-                <th>Actions</th>
+                <th scope="col">Code</th>
+                <th scope="col">Status</th>
+                <th scope="col">Used by</th>
+                <th scope="col">Created</th>
+                <th scope="col">Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -173,7 +175,8 @@
                 <td data-label="Created"><small>{% if c.created_at %}<time class="local-time" datetime="{{ c.created_at | iso_utc }}">{{ c.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                 <td data-label="Actions">
                     {% if not c.used_by and not c.revoked %}
-                    <form method="post" action="/admin/invites/revoke" class="inline">
+                    <form method="post" action="/admin/invites/revoke" class="inline"
+                          onsubmit="return confirm('Revoke this invite code? An unused code cannot be used again afterwards.')">
                         <input type="hidden" name="code" value="{{ c.code }}">
                         <button type="submit" class="btn-sm btn-danger">Revoke</button>
                     </form>
@@ -199,7 +202,12 @@
         </div>
         <div class="form-row">
             <label>Username <input type="text" name="smtp_username" value="{{ smtp.get('smtp_username', '') }}" autocomplete="username"></label>
-            <label>Password <input type="password" name="smtp_password" value="" placeholder="{% if smtp.get('smtp_password') %}Stored — leave blank to keep{% endif %}" autocomplete="new-password"></label>
+        <div class="form-row">
+            <label for="admin-smtp-password">Password</label>
+            <input type="password" id="admin-smtp-password" name="smtp_password" value="" autocomplete="new-password"
+                   aria-describedby="admin-smtp-password-hint" placeholder="{{ 'Stored' if smtp.get('smtp_password') else 'App password' }}">
+            <span class="hint" id="admin-smtp-password-hint">{% if smtp.get('smtp_password') %}A password is stored. Leave this blank to keep it; typing replaces it.{% else %}No password stored yet.{% endif %}</span>
+        </div>
         </div>
         <div class="form-row">
             <label>From address <input type="email" name="smtp_from_email" value="{{ smtp.get('smtp_from_email', '') }}" placeholder="feedecho@example.com"></label>

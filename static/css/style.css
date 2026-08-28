@@ -132,7 +132,33 @@ body {
     white-space: nowrap;
 }
 .nav-links a:hover { color: var(--text); background: var(--surface-light); }
-.nav-links a.active { color: var(--primary); }
+.nav-links a.active {
+    color: var(--primary);
+    /* Non-color cue for the current page (WCAG 1.4.1): colour alone is not
+       enough, so active links also get weight and an underline bar. */
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+/* Skip link: first focusable element on every page, hidden until focused. */
+.skip-link {
+    position: absolute;
+    left: 0.75rem;
+    top: -3rem;
+    z-index: 1000;
+    padding: 0.5rem 0.9rem;
+    border-radius: 0 0 6px 6px;
+    background: var(--primary);
+    color: var(--primary-contrast);
+    font-size: 0.85rem;
+    text-decoration: none;
+    transition: top 0.15s;
+}
+.skip-link:focus {
+    top: 0;
+    outline: 2px solid var(--primary-contrast);
+    outline-offset: -2px;
+}
 
 /* Account chrome (multi mode) */
 .nav-account {

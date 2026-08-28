@@ -4,13 +4,12 @@
 <h1>Feeds</h1>
 
 <form method="post" action="/api/feeds" class="inline-form">
-    <label class="sr-only" for="feed-name">Feed name</label>
+    <label for="feed-name">Name</label>
     <input type="text" name="name" id="feed-name" placeholder="Feed name" required>
-    <label class="sr-only" for="feed-url">Feed URL</label>
+    <label for="feed-url">URL</label>
     <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required>
-    <label class="sr-only" for="feed-poll-interval">Poll interval (minutes)</label>
-    <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440"
-           title="Poll interval (minutes)">
+    <label for="feed-poll-interval">Poll interval (minutes)</label>
+    <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
     <button type="submit">Add Feed</button>
 </form>
 
@@ -19,13 +18,13 @@
 <table class="data-table">
     <thead>
         <tr>
-            <th>Name</th>
-            <th>URL</th>
-            <th>Interval</th>
-            <th>Last Fetched</th>
-            <th>Item ID Set</th>
-            <th>Echoes</th>
-            <th>Actions</th>
+            <th scope="col">Name</th>
+            <th scope="col">URL</th>
+            <th scope="col">Interval</th>
+            <th scope="col">Last Fetched</th>
+            <th scope="col">Tracking</th>
+            <th scope="col">Echoes</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -41,19 +40,19 @@
             <td data-label="URL"><a href="{{ feed.url | safe_url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>
             <td data-label="Last Fetched"><small>{% if feed.last_fetched %}<time class="local-time" datetime="{{ feed.last_fetched | iso_utc }}">{{ feed.last_fetched | utc_text }} UTC</time>{% else %}Never{% endif %}</small></td>
-            <td data-label="Item ID Set">
+            <td data-label="Tracking">
                 {% if feed.last_item_id %}
-                <span class="badge badge-success">Yes</span>
+                <span class="badge badge-success">Tracking new items</span>
                 {% else %}
-                <span class="badge badge-warning">No — click Init</span>
+                <span class="badge badge-warning">Not initialized — click Initialize</span>
                 {% endif %}
             </td>
             <td data-label="Echoes">{{ feed_echoes[feed.id] }}</td>
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="editFeed({{ feed.id }})">Edit</button>
-                <button class="btn-sm" onclick="withBusy(this, (btn) => testFeed({{ feed.id }}, btn))">Test</button>
-                <button class="btn-sm" onclick="withBusy(this, (btn) => initFeed({{ feed.id }}, btn))">Init</button>
-                <button class="btn-sm" onclick="withBusy(this, (btn) => fetchNow({{ feed.id }}, btn))">Fetch</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => testFeed({{ feed.id }}, btn))" title="Fetch the feed now and show a preview of its items">Test</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => initFeed({{ feed.id }}, btn))" title="Set the feed's current latest item as the starting point so only newer items get posted">Initialize</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => fetchNow({{ feed.id }}, btn))" title="Check the feed for new items right now">Fetch</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => pauseFeed({{ feed.id }}, btn))">{{ 'Resume' if feed.paused else 'Pause' }}</button>
                 <form method="post" action="/api/feeds/{{ feed.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this feed? Echoes and post history are preserved.')">Delete</button>
@@ -64,6 +63,7 @@
     </tbody>
 </table>
 </div>
+<p class="hint">A new feed starts paused for tracking: the first <strong>Initialize</strong> records where to start so nothing already in the feed is back-posted. From then on each check posts only items newer than the last one seen.</p>
 {% else %}
 <p class="empty-state">No feeds yet. Add one above to get started.</p>
 {% endif %}

@@ -10,7 +10,7 @@
     {% if smtp_configured %}
     <div class="alert alert-success" role="status">SMTP is configured ({{ smtp_settings.smtp_host }}:{{ smtp_settings.smtp_port }}).</div>
     {% else %}
-    <div class="alert alert-warning" role="alert">SMTP not configured. Email echoes will fail until this is set up.</div>
+    <div class="alert alert-warning" role="status">SMTP not configured. Email echoes will fail until this is set up.</div>
     {% endif %}
 
     <form method="post" action="/api/settings/smtp" class="echo-form">
@@ -39,12 +39,12 @@
             </label>
         </div>
         <div class="form-row">
-            <label>Use TLS
-                <select name="smtp_use_tls">
-                    <option value="1" {{ 'selected' if smtp_settings.smtp_use_tls != '0' else '' }}>STARTTLS (port 587)</option>
-                    <option value="0" {{ 'selected' if smtp_settings.smtp_use_tls == '0' else '' }}>SSL/TLS (port 465)</option>
-                </select>
-            </label>
+            <label for="smtp-use-tls">Use TLS</label>
+            <select id="smtp-use-tls" name="smtp_use_tls">
+                <option value="1" {{ 'selected' if smtp_settings.smtp_use_tls != '0' else '' }}>STARTTLS</option>
+                <option value="0" {{ 'selected' if smtp_settings.smtp_use_tls == '0' else '' }}>SSL/TLS (implicit)</option>
+            </select>
+            <span class="hint" style="margin: 0.2rem 0 0;">STARTTLS usually pairs with port 587; implicit SSL/TLS with port 465. Set the Port field to match your provider.</span>
         </div>
         <button type="submit">Save SMTP Settings</button>
     </form>
@@ -63,23 +63,23 @@
 
     <form method="post" action="/api/settings/retry-notify" class="echo-form">
         <div class="form-row">
-            <label>Max delivery attempts
-                <input type="number" name="retry_max_attempts" value="{{ retry_notify.get('retry_max_attempts', '5') }}" min="0" max="100">
-                <span class="hint" style="margin: 0.2rem 0 0;">0 = retry forever</span>
-            </label>
-            <label>Retry backoff (minutes)
-                <input type="number" name="retry_backoff_minutes" value="{{ retry_notify.get('retry_backoff_minutes', '5') }}" min="1" max="1440">
-                <span class="hint" style="margin: 0.2rem 0 0;">First retry delay; doubles each attempt</span>
-            </label>
+            <label for="retry-max-attempts">Max delivery attempts</label>
+            <input type="number" id="retry-max-attempts" name="retry_max_attempts" value="{{ retry_notify.get('retry_max_attempts', '5') }}" min="0" max="100" aria-describedby="retry-max-attempts-hint">
+            <span class="hint" id="retry-max-attempts-hint" style="margin: 0.2rem 0 0;">0 = retry forever</span>
         </div>
         <div class="form-row">
-            <label>Notify after consecutive failures
-                <input type="number" name="notify_failure_threshold" value="{{ retry_notify.get('notify_failure_threshold', '3') }}" min="0" max="100">
-                <span class="hint" style="margin: 0.2rem 0 0;">0 = notifications off</span>
-            </label>
-            <label>Notification email
-                <input type="email" name="notify_email" value="{{ retry_notify.get('notify_email', '') }}" placeholder="defaults to first email account">
-            </label>
+            <label for="retry-backoff">Retry backoff (minutes)</label>
+            <input type="number" id="retry-backoff" name="retry_backoff_minutes" value="{{ retry_notify.get('retry_backoff_minutes', '5') }}" min="1" max="1440" aria-describedby="retry-backoff-hint">
+            <span class="hint" id="retry-backoff-hint" style="margin: 0.2rem 0 0;">First retry delay; doubles each attempt</span>
+        </div>
+        <div class="form-row">
+            <label for="notify-threshold">Notify after consecutive failures</label>
+            <input type="number" id="notify-threshold" name="notify_failure_threshold" value="{{ retry_notify.get('notify_failure_threshold', '3') }}" min="0" max="100" aria-describedby="notify-threshold-hint">
+            <span class="hint" id="notify-threshold-hint" style="margin: 0.2rem 0 0;">0 = notifications off</span>
+        </div>
+        <div class="form-row">
+            <label for="notify-email">Notification email</label>
+            <input type="email" id="notify-email" name="notify_email" value="{{ retry_notify.get('notify_email', '') }}" placeholder="defaults to first email account">
         </div>
         <button type="submit">Save Retry &amp; Notification Settings</button>
     </form>
@@ -92,15 +92,14 @@
     {% if alt_text_configured %}
     <div class="alert alert-success" role="status">Vision API configured ({{ alt_text_settings.alt_text_ai_base_url }}, model: {{ alt_text_settings.alt_text_ai_model }}).</div>
     {% else %}
-    <div class="alert alert-warning" role="alert">Vision API not configured. Image attachments will be uploaded without alt text.</div>
+    <div class="alert alert-warning" role="status">Vision API not configured. Image attachments will be uploaded without alt text.</div>
     {% endif %}
 
     <form method="post" action="/api/settings/alt-text" class="echo-form">
         <div class="form-row">
-            <label>Enable AI alt text
-                <input type="checkbox" name="alt_text_ai_enabled" value="1" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }}>
-                <span class="hint" style="margin: 0.2rem 0 0;">Generate alt text before uploading images to Mastodon.</span>
-            </label>
+            <label for="alt-text-enabled">Enable AI alt text</label>
+            <input type="checkbox" id="alt-text-enabled" name="alt_text_ai_enabled" value="1" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }} aria-describedby="alt-text-enabled-hint">
+            <span class="hint" id="alt-text-enabled-hint" style="margin: 0.2rem 0 0;">Generate alt text for attached images before they are posted to your connected accounts.</span>
         </div>
         <div class="form-row">
             <label>API Base URL

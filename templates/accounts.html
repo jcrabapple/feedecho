@@ -35,7 +35,7 @@
     <h2>Connect Mastodon via OAuth</h2>
     <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
     <form method="get" action="/oauth/connect" class="inline-form">
-        <label class="sr-only" for="oauth-instance">Mastodon instance URL</label>
+        <label for="oauth-instance">Instance URL</label>
         <input type="text" name="instance" id="oauth-instance" placeholder="https://dmv.community" required>
         <button type="submit">Connect Account</button>
     </form>
@@ -45,13 +45,13 @@
     <details>
         <summary>Or add Mastodon manually with a token</summary>
         <form method="post" action="/api/accounts" class="inline-form" style="margin-top: 0.75rem;">
-            <label class="sr-only" for="masto-name">Display name</label>
+            <label for="masto-name">Display name</label>
             <input type="text" name="name" id="masto-name" placeholder="Display name" required>
-            <label class="sr-only" for="masto-username">Username</label>
+            <label for="masto-username">Username</label>
             <input type="text" name="username" id="masto-username" placeholder="Username">
-            <label class="sr-only" for="masto-instance">Instance URL</label>
+            <label for="masto-instance">Instance URL</label>
             <input type="url" name="instance" id="masto-instance" placeholder="https://dmv.community" required>
-            <label class="sr-only" for="masto-token">Access token</label>
+            <label for="masto-token">Access token</label>
             <input type="password" name="access_token" id="masto-token" placeholder="Access token" required>
             <button type="submit">Add Account</button>
         </form>
@@ -62,9 +62,9 @@
     <h2>Add Email Address</h2>
     <p class="hint">Route feed items to an email inbox instead of (or in addition to) Mastodon. <a href="/settings">Configure SMTP first.</a></p>
     <form method="post" action="/api/email-accounts" class="inline-form">
-        <label class="sr-only" for="email-acct-name">Name</label>
+        <label for="email-acct-name">Name</label>
         <input type="text" name="name" id="email-acct-name" placeholder="Name" required>
-        <label class="sr-only" for="email-acct-address">Email address</label>
+        <label for="email-acct-address">Email address</label>
         <input type="email" name="email" id="email-acct-address" placeholder="user@example.com" required>
         <button type="submit">Add Email Address</button>
     </form>
@@ -74,11 +74,11 @@
     <h2>Connect Bluesky</h2>
     <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored only in FeedEcho's local database. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
     <form method="post" action="/api/bluesky-accounts" class="inline-form">
-        <label class="sr-only" for="bsky-name">Display name</label>
+        <label for="bsky-name">Display name</label>
         <input type="text" name="name" id="bsky-name" placeholder="Display name">
-        <label class="sr-only" for="bsky-handle">Bluesky handle</label>
+        <label for="bsky-handle">Bluesky handle</label>
         <input type="text" name="handle" id="bsky-handle" placeholder="username.bsky.social" required>
-        <label class="sr-only" for="bsky-app-password">App password</label>
+        <label for="bsky-app-password">App password</label>
         <input type="password" name="app_password" id="bsky-app-password" placeholder="App password (xxxx-xxxx-xxxx-xxxx)" required>
         <button type="submit">Connect Account</button>
     </form>
@@ -88,7 +88,7 @@
     <h2>Connect Micro.blog</h2>
     <p class="hint">Create an <strong>App Token</strong> at micro.blog (Account → Edit Apps → Add Token, or <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a>) and paste it here. FeedEcho discovers every blog the token can post to and connects each one. Tokens can post on your behalf but cannot change account settings.</p>
     <form method="post" action="/api/microblog-accounts" class="inline-form">
-        <label class="sr-only" for="microblog-token">Micro.blog app token</label>
+        <label for="microblog-token">Micro.blog app token</label>
         <input type="password" name="token" id="microblog-token" placeholder="Micro.blog app token" required autocomplete="off">
         <button type="submit">Connect Blogs</button>
     </form>
@@ -100,11 +100,11 @@
 <table class="data-table">
 <thead>
     <tr>
-        <th>Handle</th>
-        <th>Name</th>
-        <th>Instance</th>
-        <th>Added</th>
-        <th>Actions</th>
+        <th scope="col">Handle</th>
+        <th scope="col">Name</th>
+        <th scope="col">Instance</th>
+        <th scope="col">Added</th>
+        <th scope="col">Actions</th>
     </tr>
 </thead>
 <tbody>
@@ -117,7 +117,7 @@
         <td data-label="Actions" class="action-cell">
             <button class="btn-sm" onclick="withBusy(this, (btn) => testAccount({{ account.id }}, btn))">Test</button>
             <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
-                <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
+                <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
             </form>
         </td>
     </tr>
@@ -133,10 +133,10 @@
 <table class="data-table">
     <thead>
         <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Added</th>
-            <th>Actions</th>
+            <th scope="col">Name</th>
+            <th scope="col">Email</th>
+            <th scope="col">Added</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -147,7 +147,7 @@
             <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Actions" class="action-cell">
                 <form method="post" action="/api/email-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this email address?')">Delete</button>
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this email address? Any echo that delivers to it will stop working until you point it somewhere else.')">Delete</button>
                 </form>
             </td>
         </tr>
@@ -163,10 +163,10 @@
 <table class="data-table">
     <thead>
         <tr>
-            <th>Handle</th>
-            <th>Name</th>
-            <th>Added</th>
-            <th>Actions</th>
+            <th scope="col">Handle</th>
+            <th scope="col">Name</th>
+            <th scope="col">Added</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -178,7 +178,7 @@
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="withBusy(this, (btn) => testBlueskyAccount({{ account.id }}, btn))">Test</button>
                 <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                 </form>
             </td>
         </tr>
@@ -194,10 +194,10 @@
 <table class="data-table">
     <thead>
         <tr>
-            <th>Blog</th>
-            <th>URL</th>
-            <th>Added</th>
-            <th>Actions</th>
+            <th scope="col">Blog</th>
+            <th scope="col">URL</th>
+            <th scope="col">Added</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -209,7 +209,7 @@
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="withBusy(this, (btn) => testMicroblogAccount({{ account.id }}, btn))">Test</button>
                 <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this blog? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                 </form>
             </td>
         </tr>
@@ -222,4 +222,18 @@
 {% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts %}
 <p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, or add an email address above.</p>
 {% endif %}
+
+<script>
+// Success banners are keyed off ?status=... so they would re-appear on every
+// refresh or on a shared/bookmarked URL. Show the message once, then clean
+// the URL so the state it announces is not re-announced.
+(function () {
+    if (!window.history || !history.replaceState) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('status')) {
+        url.searchParams.delete('status');
+        history.replaceState(null, '', url.pathname + (url.search || ''));
+    }
+})();
+</script>
 {% endblock %}

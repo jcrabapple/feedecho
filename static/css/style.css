@@ -804,6 +804,15 @@ code {
 .landing-feature p { margin: 0; color: var(--text-muted); font-size: 0.9rem; line-height: 1.55; }
 .landing-how { padding: 1.5rem 0 2rem; }
 .landing-how h2 { margin: 0 0 0.75rem; }
-.landing-steps { line-height: 1.7; margin: 0 0 1rem; }
+.landing-steps {
+    line-height: 1.7;
+    margin: 0 0 1rem;
+    padding-left: 1.25rem; /* keep list markers on narrow screens */
+    overflow-wrap: break-word;
+}
+@media (max-width: 640px) {
+    .landing-steps { padding-left: 1.1rem; }
+    .landing-steps li strong { display: block; }
+}
 .landing-how-cta { color: var(--text-muted); }
 .landing-how-cta a { color: var(--accent); }

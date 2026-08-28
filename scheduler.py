@@ -942,7 +942,7 @@ def _send_mastodon(
         return False
 
     try:
-        post_status(
+        result = post_status(
             instance=account["instance"],
             access_token=account["access_token"],
             content=truncate(content, MASTODON_MAX_CHARS),
@@ -955,7 +955,16 @@ def _send_mastodon(
         logger.exception("Echo %s: Mastodon post failed", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], "Mastodon delivery failed")
 
-    ok = _update_post(posted_id, claim_token, "success")
+    # The API returns the canonical permalink; persisting it gives the
+    # history page a "view post" link exactly like the Bluesky and
+    # micro.blog paths. Some instances omit `url`, and delivery still
+    # succeeded, so a missing URL is not an error.
+    post_url = ""
+    raw_url = result.get("url") if isinstance(result, dict) else None
+    if isinstance(raw_url, str) and raw_url:
+        post_url = raw_url
+
+    ok = _update_post(posted_id, claim_token, "success", post_url=post_url or None)
     if ok:
         record_success(echo["id"])
     return ok

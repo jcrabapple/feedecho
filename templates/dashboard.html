@@ -109,7 +109,12 @@
                 <td data-label="Time"><small>{% if post.posted_at %}<time class="local-time" datetime="{{ post.posted_at | iso_utc }}">{{ post.posted_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                 <td data-label="Feed">{{ post.feed_name }}</td>
                 <td data-label="Account">{{ post.account_name or '' }}</td>
-                <td data-label="Item">{{ post.item_title[:60] }}{% if post.item_title|length > 60 %}…{% endif %}</td>
+                <td data-label="Item">
+                    {{ post.item_title[:60] }}{% if post.item_title|length > 60 %}…{% endif %}
+                    {% if post.post_url | safe_url %}
+                    <br><small><a href="{{ post.post_url | safe_url }}" target="_blank" rel="noopener">view post ↗</a></small>
+                    {% endif %}
+                </td>
                 <td data-label="Status">
                     {% if post.status == 'success' %}
                     <span class="badge badge-success">Success</span>

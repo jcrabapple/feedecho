@@ -24,12 +24,12 @@
             <td data-label="Feed">{{ post.feed_name }}</td>
             <td data-label="Account">{{ post.account_name }}<br><small>{{ post.instance }}</small></td>
             <td data-label="Item">
-                {% if post.item_url %}
+                {% if post.item_url | safe_url %}
                 <a href="{{ post.item_url | safe_url }}" target="_blank" rel="noopener">{{ post.item_title[:60] }}{% if post.item_title|length > 60 %}…{% endif %}</a>
                 {% else %}
                 {{ post.item_title[:60] }}{% if post.item_title|length > 60 %}…{% endif %}
                 {% endif %}
-                {% if post.post_url %}
+                {% if post.post_url | safe_url %}
                 <br><small><a href="{{ post.post_url | safe_url }}" target="_blank" rel="noopener">view post ↗</a></small>
                 {% endif %}
             </td>

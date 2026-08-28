@@ -50,7 +50,7 @@
             <a href="/login" {% if request.url.path == '/login' %}aria-current="page" class="active"{% endif %}>Log in</a>
             <a href="/register" {% if request.url.path == '/register' %}aria-current="page" class="active"{% endif %}>Sign up</a>
             {% endif %}
-            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme" title="Toggle light/dark theme">◐</button>
+            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme" title="Switch theme">◐</button>
             {% if MULTI and current_user_email %}
             <div class="nav-account">
                 <span class="nav-email" title="{{ current_user_email }}">{{ current_user_email }}</span>

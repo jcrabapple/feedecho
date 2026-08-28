@@ -227,6 +227,14 @@ async function giveUpPost(postedId, btn) {
     }
 }
 
+async function disableEcho(echoId, btn) {
+    return toggleEcho(echoId, btn);
+}
+
+async function enableEcho(echoId, btn) {
+    return toggleEcho(echoId, btn);
+}
+
 async function toggleEcho(echoId, btn) {
     try {
         const resp = await fetch(`/api/echoes/${echoId}/toggle`, { method: 'POST' });
@@ -526,7 +534,12 @@ function formatLocalTimes() {
 
     function render(theme) {
         btn.textContent = theme === 'light' ? '☀' : '☾';
-        btn.setAttribute('aria-pressed', theme === 'light' ? 'true' : 'false');
+        // The accessible name states the action the click performs from the
+        // current theme, so "sun, pressed" ambiguity never reaches the user.
+        const label = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+        btn.setAttribute('aria-label', label);
+        btn.setAttribute('title', label);
+        btn.removeAttribute('aria-pressed');
     }
 
     render(currentTheme());

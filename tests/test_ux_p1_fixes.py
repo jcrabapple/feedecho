@@ -162,7 +162,7 @@ class TestBusyState:
             "accounts.html": ["testAccount", "testBlueskyAccount", "testMicroblogAccount"],
             "feeds.html": ["testFeed", "initFeed", "fetchNow", "pauseFeed"],
             "history.html": ["retryPost", "giveUpPost"],
-            "echoes.html": ["toggleEcho"],
+            "echoes.html": ["disableEcho", "enableEcho"],
         }
         for template, fns in wrappers.items():
             page = (REPO_ROOT / "templates" / template).read_text(encoding="utf-8")

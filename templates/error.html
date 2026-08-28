@@ -4,6 +4,10 @@
 <div class="error-page">
     <h1>{{ code }}</h1>
     <p>{{ message }}</p>
+    {% if authed %}
     <a href="/">Back to dashboard</a>
+    {% else %}
+    <a href="/login">Log in</a> or <a href="/register">sign up</a>
+    {% endif %}
 </div>
 {% endblock %}

@@ -622,6 +622,49 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     }
 }
 
+@media (max-width: 640px) {
+    /* Admin action cells: each control cluster (Suspend / Make admin /
+       plan select + Set plan / days input + Extend trial) is its own
+       .inline-form. In the card layout these forms sat side by side inside
+       the ACTIONS cell, colliding at the right edge: "Make admin" clipped
+       under the plan dropdown, "Extend trial" cut off. Stack one action
+       cluster per line instead, controls sized to content and wrapped
+       safely. The admin template's Actions cells carry no .action-cell
+       class (only accounts/feeds/echoes/history do), so target the cell by
+       its data-label. */
+    .data-table td[data-label="Actions"] {
+        display: block;            /* not flex: forms stack vertically */
+        white-space: normal;       /* let button labels live */
+        text-align: left;
+    }
+    .data-table td[data-label="Actions"] .inline-form {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+        max-width: 100%;
+    }
+    .data-table td[data-label="Actions"] .inline-form:last-child {
+        margin-bottom: 0;
+    }
+    .data-table td[data-label="Actions"] .inline-form select,
+    .data-table td[data-label="Actions"] .inline-form input:not([type="checkbox"]) {
+        flex: 1 1 auto;
+        min-width: 0;
+        max-width: 9rem;           /* dropdown/input stay compact, never overlap */
+        min-height: 44px;
+    }
+    .data-table td[data-label="Actions"] .inline-form .btn-sm {
+        margin-right: 0;
+        margin-bottom: 0;
+        min-height: 44px;
+    }
+    /* standalone button-only forms: keep the button compact, not stretched */
+    .data-table td[data-label="Actions"] .inline-form .btn-sm:only-child {
+        flex: 0 0 auto;
+    }
+}
+
 .template-vars {
     margin-bottom: 0.5rem;
     font-size: 0.85rem;

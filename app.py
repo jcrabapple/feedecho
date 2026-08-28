@@ -460,6 +460,30 @@ def _trial_context(request: Request) -> dict:
         "posting_paused": plans.posting_paused(plan, row["trial_ends_at"]),
         "plan_limits": settings.PLAN_LIMITS.get(plan) or settings.PLAN_LIMITS["trial"],
     }
+    # Trial users see their limits and where they stand against them on the
+    # dashboard (the banner lives in dashboard.html). One cheap count query
+    # for feeds + destinations only when the plan is a trial; paid/beta
+    # never pay for it.
+    if plan == "trial":
+        with get_db() as db:
+            feeds_used = db.execute(
+                "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
+                (uid,),
+            ).fetchone()["c"]
+            dest_used = sum(
+                db.execute(
+                    f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
+                ).fetchone()["c"]
+                for t in ("accounts", "email_accounts", "bluesky_accounts", "microblog_accounts")
+            )
+        ctx["trial_usage"] = {
+            "feeds": feeds_used,
+            "max_feeds": plans.limit_for(plan, "max_feeds"),
+            "destinations": dest_used,
+            "max_destinations": plans.limit_for(plan, "max_destinations"),
+            "min_poll_interval": plans.limit_for(plan, "min_poll_interval"),
+            "max_posts_per_hour": plans.limit_for(plan, "max_posts_per_hour"),
+        }
     ends = row["trial_ends_at"]
     if ends:
         end = plans.normalize_trial_ends(ends)

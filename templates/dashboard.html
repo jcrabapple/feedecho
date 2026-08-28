@@ -6,11 +6,21 @@
 {% if MULTI and plan == 'trial' %}
 <div class="trial-banner">
     {% if trial_expired %}
-    <strong>Trial ended:</strong> your free trial has ended. Paid plans launch soon.
+    <p><strong>Trial ended:</strong> your free trial has ended. Paid plans launch soon.</p>
     {% elif trial_ends_date %}
-    <strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>. Paid plans launch soon.
+    <p><strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>. Paid plans launch soon.</p>
     {% else %}
-    <strong>Trial:</strong> your free trial is active. Paid plans launch soon.
+    <p><strong>Trial:</strong> your free trial is active. Paid plans launch soon.</p>
+    {% endif %}
+    {% if trial_usage %}
+    <p class="trial-usage">
+        {% with u = trial_usage %}
+        Plan limits: {{ u.feeds }} of {{ u.max_feeds }} feed{{ 's' if u.max_feeds != 1 else '' }} ·
+        {{ u.destinations }} of {{ u.max_destinations }} connected account{{ 's' if u.max_destinations != 1 else '' }} ·
+        polls every {{ u.min_poll_interval }} min or more ·
+        drip up to {{ u.max_posts_per_hour }} posts/hour.
+        {% endwith %}
+    </p>
     {% endif %}
 </div>
 {% endif %}

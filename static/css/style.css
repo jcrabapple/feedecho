@@ -198,6 +198,9 @@ body {
     font-size: 0.9rem;
     color: var(--text);
 }
+.trial-banner p { margin: 0 0 0.3rem; }
+.trial-banner p:last-child { margin-bottom: 0; }
+.trial-usage { color: var(--text-muted); font-size: 0.85rem; }
 
 /* Email-verification banner (multi mode dashboard) */
 .verify-banner {

@@ -2,7 +2,7 @@
 
 Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, and email using configurable templates.
 
-Built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which shut down in August 2026.
+Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
 ## Features
 

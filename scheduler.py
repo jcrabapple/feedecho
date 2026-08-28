@@ -1843,13 +1843,15 @@ def flush_digests() -> None:
                 echo_row["feed_name"],
                 len(items),
             )
-            # Surface digest send failures to the user: mark the claimed rows
-            # 'failed' (without a retry time — the retry sweep must not grab
-            # digest items, only flush_digests owns them) so the failure
-            # counter in notify.record_failure can reach its threshold and
-            # alert on a permanently broken SMTP config.
+            # Surface digest send failures to the user: mark the ATTEMPTED
+            # rows (the ones in the body) 'failed' — without a retry time,
+            # so the retry sweep never grabs them; only flush_digests owns
+            # digest delivery — so the failure counter in
+            # notify.record_failure can reach its threshold and alert on a
+            # permanently broken SMTP config. Held items were never
+            # attempted this round and stay 'queued'.
             with get_db() as db:
-                for item in items:
+                for item in sent_items:
                     db.execute(
                         """UPDATE posted_items
                               SET status = 'failed',

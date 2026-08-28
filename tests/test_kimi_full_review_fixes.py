@@ -354,6 +354,42 @@ class TestDigestFailureNotifies:
             ).fetchone()["c"]
         assert queued == 1, "digest_items survive for the next flush"
 
+    def test_held_items_stay_queued_when_send_fails(self, db_tmp, monkeypatch):
+        """A size-cap hold is not an attempt: when the send of a truncated
+        body fails, only the attempted (sent-listed) items are marked
+        'failed'; held items keep status 'queued' with no attempt inflation."""
+        import scheduler
+
+        def boom(**kw):
+            raise RuntimeError("SMTP down")
+
+        monkeypatch.setattr(scheduler, "send_email", boom)
+        echo = _setup_email_echo(db_tmp, template="{{ title }}: {{ summary }}")
+        # ~12 fit per flush; the rest are held at build time.
+        for i in range(20):
+            scheduler.process_echo(echo, _item(
+                id=f"item-{i}", title=f"Post {i}",
+                link=f"https://example.com/{i}", summary="x" * 800,
+            ))
+
+        scheduler.flush_digests()  # send fails
+
+        with db_tmp.get_db() as db:
+            rows = db.execute(
+                "SELECT item_id, status FROM posted_items WHERE echo_id = ?",
+                (echo["id"],),
+            ).fetchall()
+        statuses = {r["item_id"]: r["status"] for r in rows}
+        failed = [k for k, v in statuses.items() if v == "failed"]
+        queued = [k for k, v in statuses.items() if v == "queued"]
+        assert failed, "attempted items must be marked failed"
+        assert queued, "held items must stay queued (never attempted)"
+        # The held set is exactly the tail that could not fit: every
+        # attempted index precedes every held index.
+        max_failed = max(int(k.split("-")[1]) for k in failed)
+        min_queued = min(int(k.split("-")[1]) for k in queued)
+        assert max_failed < min_queued
+
     def test_repeated_failures_trigger_alert(self, db_tmp, monkeypatch):
         import scheduler
 

@@ -220,5 +220,5 @@ class TestForgotThrottle:
             )
         with TestClient(app) as c:
             c.cookies.set("feedecho_session", old_cookie)
-            resp = c.get("/", follow_redirects=False)
+            resp = c.get("/feeds", follow_redirects=False)
         assert resp.status_code in (302, 303, 401)  # epoch bumped: dead session

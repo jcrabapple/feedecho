@@ -230,6 +230,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Legal pages are for people deciding whether to sign up.
         "/terms",
         "/privacy",
+        # Hosted landing page: public for visitors, dashboard for authed
+        # (the route branches on authed).
+        "/",
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
@@ -240,7 +243,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
     # care who you are; /static, /healthz and /favicon.svg must not pay for a
     # database read. /forgot-password and /reset-password are for people who
     # cannot get in, where anonymous chrome is the honest answer.
-    _MULTI_PUBLIC_PAGES = {"/login", "/register", "/about", "/verify-email", "/terms", "/privacy"}
+    _MULTI_PUBLIC_PAGES = {
+        "/login", "/register", "/about", "/verify-email", "/terms", "/privacy", "/"
+    }
 
     async def dispatch(self, request: Request, call_next):
         if settings.MULTI:
@@ -692,6 +697,10 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    # Hosted: / is the public landing page for visitors; signed-in users get
+    # the dashboard. Single mode has no marketing surface — / is the app.
+    if settings.MULTI and not bool(getattr(request.state, "authed", False)):
+        return render("landing.html", request)
     uid = current_user_id(request)
     with get_db() as db:
         mastodon_accounts = db.execute(

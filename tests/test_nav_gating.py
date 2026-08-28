@@ -65,8 +65,8 @@ class TestSingleMode:
         nav = _nav(page)
         for link in APP_LINKS:
             assert link not in nav, link
-        # The brand cannot point at / either: that redirects back here.
-        assert 'href="/login" class="nav-brand"' in nav
+        # Single mode has no landing page: the brand points at / (the app).
+        assert 'href="/" class="nav-brand"' in nav
         # The form is still there, and the theme toggle still works logged out.
         assert "Access token" in page
         assert "theme-toggle" in nav
@@ -165,7 +165,8 @@ class TestMultiMode:
                 assert ">Sign up</a>" in links, path
                 assert 'href="/login"' in links, path
                 assert 'href="/register"' in links, path
-                assert 'href="/login" class="nav-brand"' in nav, path
+                # Anonymous brand points at / (the hosted landing page).
+                assert 'href="/" class="nav-brand"' in nav, path
 
     @pytest.mark.parametrize("path", ["/forgot-password", "/reset-password"])
     def test_excluded_public_paths_stay_anonymous(self, multi_env, path):

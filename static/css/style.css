@@ -737,3 +737,73 @@ code {
 .usage-detail { margin: 0.5rem 0 0.25rem; font-size: 0.85rem; }
 .usage-error { color: var(--danger); margin: 0.2rem 0; overflow-wrap: anywhere; }
 .usage-ok { color: var(--success); margin: 0.2rem 0; }
+
+/* Landing page (hosted, anonymous) */
+.landing-hero {
+    display: flex;
+    gap: 2.5rem;
+    align-items: center;
+    padding: 2.5rem 0 2rem;
+    flex-wrap: wrap;
+}
+.landing-hero-text { flex: 1 1 22rem; }
+.landing-hero-text h1 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    line-height: 1.15;
+    margin: 0 0 1rem;
+}
+.landing-lede {
+    color: var(--text-muted);
+    font-size: 1.05rem;
+    line-height: 1.65;
+    margin: 0 0 1.5rem;
+    max-width: 34rem;
+}
+.landing-cta { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+.landing-cta .btn { text-decoration: none; }
+.btn-landing-primary {
+    background: var(--accent);
+    color: var(--bg);
+    padding: 0.7rem 1.4rem;
+    font-weight: 600;
+    border-radius: 8px;
+}
+.btn-landing-primary:hover { background: var(--accent-hover); }
+.btn-landing-secondary {
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 0.7rem 1.4rem;
+    font-weight: 600;
+    border-radius: 8px;
+}
+.btn-landing-secondary:hover { background: var(--accent-wash); }
+.landing-trial-note {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    margin: 0.9rem 0 0;
+}
+.landing-hero-art { flex: 1 1 24rem; min-width: 0; }
+.landing-hero-art img {
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    display: block;
+}
+.landing-features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1rem;
+    padding: 1.5rem 0;
+}
+.landing-feature {
+    border: 1px solid var(--accent-wash);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+}
+.landing-feature h3 { margin: 0 0 0.4rem; font-size: 1rem; }
+.landing-feature p { margin: 0; color: var(--text-muted); font-size: 0.9rem; line-height: 1.55; }
+.landing-how { padding: 1.5rem 0 2rem; }
+.landing-how h2 { margin: 0 0 0.75rem; }
+.landing-steps { line-height: 1.7; margin: 0 0 1rem; }
+.landing-how-cta { color: var(--text-muted); }
+.landing-how-cta a { color: var(--accent); }

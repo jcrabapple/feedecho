@@ -113,7 +113,7 @@ class TestAdminActions:
         with database.get_db() as db:
             db.execute("UPDATE users SET suspended = 1 WHERE id = ?", (USER_ID,))
         with _client(USER_ID, "user@example.com") as c:
-            resp = c.get("/", follow_redirects=False)
+            resp = c.get("/feeds", follow_redirects=False)
         assert resp.status_code in (302, 303, 401)
         # Unsuspend restores the same session
         with database.get_db() as db:

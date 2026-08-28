@@ -240,8 +240,13 @@ class TestClientIp:
 class TestSessionEnforcement:
     BROWSER = {"Accept": "text/html"}
 
-    def test_protected_page_redirects_to_login_without_session(self, client):
+    def test_anonymous_root_is_landing_page(self, client):
+        # / is now the public hosted landing page; protected app pages still
+        # redirect anonymous visitors to /login.
         resp = client.get("/", follow_redirects=False, headers=self.BROWSER)
+        assert resp.status_code == 200
+        assert "echoed everywhere" in resp.text
+        resp = client.get("/feeds", follow_redirects=False, headers=self.BROWSER)
         assert resp.status_code == 302
         assert resp.headers["location"] == "/login"
 
@@ -256,7 +261,7 @@ class TestSessionEnforcement:
 
     def test_tampered_cookie_redirects_to_login(self, client):
         client.cookies.set("feedecho_session", "garbage.garbage")
-        resp = client.get("/", follow_redirects=False, headers=self.BROWSER)
+        resp = client.get("/feeds", follow_redirects=False, headers=self.BROWSER)
         assert resp.status_code == 302
         assert resp.headers["location"] == "/login"
 
@@ -268,7 +273,7 @@ class TestSessionEnforcement:
         assert resp.headers.get("set-cookie", "").startswith(
             "feedecho_session="
         )
-        after = client.get("/", follow_redirects=False, headers=self.BROWSER)
+        after = client.get("/feeds", follow_redirects=False, headers=self.BROWSER)
         assert after.status_code == 302
 
     def test_healthz_exempt(self, client):

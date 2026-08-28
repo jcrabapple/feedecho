@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}FeedEcho — your feeds, echoed everywhere{% endblock %}
+{% block content %}
+<section class="landing-hero">
+    <div class="landing-hero-text">
+        <h1>Your feeds,<br>echoed everywhere.</h1>
+        <p class="landing-lede">
+            FeedEcho watches your RSS feeds and posts new items to Mastodon,
+            Bluesky, micro.blog, or email — automatically, on your terms.
+            You write the templates and set the pace; it does the rest.
+        </p>
+        <div class="landing-cta">
+            <a href="/register" class="btn btn-landing-primary">Start your free trial</a>
+            <a href="/login" class="btn btn-landing-secondary">Log in</a>
+        </div>
+        <p class="landing-trial-note">14-day free trial · invite-only beta · no card required</p>
+    </div>
+    <div class="landing-hero-art">
+        <img src="/static/img/landing-hero.png" alt="Illustration: a feed card relaying posts to Mastodon, email, and cloud destinations" width="1024" height="576">
+    </div>
+</section>
+
+<section class="landing-features">
+    <div class="landing-feature">
+        <h3>Every destination</h3>
+        <p>Mastodon, Bluesky, micro.blog, and email — connect each once, target any of them per feed.</p>
+    </div>
+    <div class="landing-feature">
+        <h3>Your voice, templated</h3>
+        <p>Jinja2 templates shape each post: titles, links, summaries, truncation — your format, not ours.</p>
+    </div>
+    <div class="landing-feature">
+        <h3>Filters and warnings</h3>
+        <p>Keyword filters include or exclude items; optional content warnings hold posts behind a spoiler.</p>
+    </div>
+    <div class="landing-feature">
+        <h3>Drip or digest</h3>
+        <p>Rate-limit bursts with drip posting, or batch a whole day into one tidy email digest.</p>
+    </div>
+    <div class="landing-feature">
+        <h3>Accessible images</h3>
+        <p>Feed images attach automatically, with AI-generated alt text when you enable it.</p>
+    </div>
+    <div class="landing-feature">
+        <h3>Reliable delivery</h3>
+        <p>Bounded retries with backoff, duplicate protection, and email alerts when a feed breaks.</p>
+    </div>
+</section>
+
+<section class="landing-how">
+    <h2>How it works</h2>
+    <ol class="landing-steps">
+        <li><strong>Connect a destination.</strong> Authorize Mastodon, add a Bluesky app password, a micro.blog token, or your SMTP details.</li>
+        <li><strong>Add a feed.</strong> Any RSS, Atom, or JSON feed — set how often to check it.</li>
+        <li><strong>Create an echo.</strong> A template that turns new items into posts, with optional filters, images, and pacing.</li>
+    </ol>
+    <p class="landing-how-cta">That's the whole setup. <a href="/register">Start your free trial</a> and let your feeds echo.</p>
+</section>
+{% endblock %}

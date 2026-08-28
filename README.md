@@ -1,4 +1,8 @@
-# FeedEcho
+<div align="center">
+  <img src="static/img/logo.svg" width="96" alt="FeedEcho logo: RSS arcs doubling as echo waves">
+  <h1>FeedEcho</h1>
+  <p><em>Your feeds, echoed everywhere.</em></p>
+</div>
 
 Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, and email using configurable templates.
 

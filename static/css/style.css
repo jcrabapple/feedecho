@@ -613,6 +613,13 @@ code {
     margin-bottom: 0.5rem;
 }
 
+.auth-tagline {
+    color: var(--accent);
+    margin: -0.25rem 0 0.35rem;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
 .auth-subtitle {
     color: var(--text-muted);
     margin-bottom: 1.5rem;

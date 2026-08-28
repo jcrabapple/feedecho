@@ -115,7 +115,7 @@
         <td data-label="Instance">{{ account.instance }}</td>
         <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
         <td data-label="Actions" class="action-cell">
-            <button class="btn-sm" onclick="testAccount({{ account.id }})">Test</button>
+            <button class="btn-sm" onclick="withBusy(this, (btn) => testAccount({{ account.id }}, btn))">Test</button>
             <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
                 <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
             </form>
@@ -176,7 +176,7 @@
             <td data-label="Name">{{ account.name }}</td>
             <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="testBlueskyAccount({{ account.id }})">Test</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => testBlueskyAccount({{ account.id }}, btn))">Test</button>
                 <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
                 </form>
@@ -207,7 +207,7 @@
             <td data-label="URL"><code>{{ account.uid }}</code></td>
             <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="testMicroblogAccount({{ account.id }})">Test</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => testMicroblogAccount({{ account.id }}, btn))">Test</button>
                 <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account?')">Delete</button>
                 </form>

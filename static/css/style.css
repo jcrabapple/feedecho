@@ -358,7 +358,11 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     min-height: 44px; /* iOS touch target */
 }
 .inline-form input { flex: 1; min-width: 0; }
-.inline-form input:focus { border-color: var(--primary); outline: none; }
+.inline-form input:focus {
+    border-color: var(--primary);
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
 
 .echo-form {
     background: var(--surface);
@@ -395,7 +399,8 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
 .form-row textarea { font-family: 'Courier New', monospace; min-height: 60px; }
 .form-row input:focus, .form-row select:focus, .form-row textarea:focus {
     border-color: var(--primary);
-    outline: none;
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
 }
 .form-row input[type="checkbox"] {
     width: 24px;
@@ -471,6 +476,22 @@ button:hover { background: var(--primary-hover); }
 .btn-danger { background: var(--danger); color: var(--primary-contrast); border-color: var(--danger); }
 .btn-danger:hover { background: var(--danger); filter: brightness(1.12); }
 .action-cell { white-space: nowrap; }
+
+/* Inline action status (showStatus): feedback rendered next to the button
+   that fired it, instead of a blocking alert() dialog. */
+.action-status {
+    margin-top: 0.4rem;
+    padding: 0.45rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    max-width: 34rem;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+.action-status-success { background: var(--success-wash); color: var(--success); border: 1px solid var(--success); }
+.action-status-error { background: var(--danger-wash); color: var(--danger); border: 1px solid var(--danger); }
+.action-status-info { background: var(--surface-light); color: var(--text); border: 1px solid var(--border); }
 
 /* Error page (admin 403, etc.) */
 .error-page {
@@ -645,7 +666,8 @@ code {
 }
 
 .auth-input:focus {
-    outline: none;
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
     border-color: var(--primary);
 }
 

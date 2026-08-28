@@ -212,7 +212,7 @@
             </td>
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="editEcho({{ echo.id }})">Edit</button>
-                <button class="btn-sm" onclick="toggleEcho({{ echo.id }})">Toggle</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => toggleEcho({{ echo.id }}, btn))">Toggle</button>
                 <form method="post" action="/api/echoes/{{ echo.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this echo?')">Delete</button>
                 </form>

@@ -52,10 +52,10 @@
             <td data-label="Error"><small>{{ post.error_message or '' }}</small></td>
             <td data-label="Actions" class="action-cell">
                 {% if post.status in ('failed', 'gave_up') %}
-                <button class="btn-sm" onclick="retryPost({{ post.id }})">Retry</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => retryPost({{ post.id }}, btn))">Retry</button>
                 {% endif %}
                 {% if post.status == 'failed' %}
-                <button class="btn-sm" onclick="giveUpPost({{ post.id }})">Give up</button>
+                <button class="btn-sm" onclick="withBusy(this, (btn) => giveUpPost({{ post.id }}, btn))">Give up</button>
                 {% endif %}
             </td>
         </tr>

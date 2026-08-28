@@ -10,20 +10,24 @@
         {% endif %}
         <form method="post" action="/register" class="auth-form">
             <div class="form-row">
-                <input type="email" name="email" placeholder="Email" required
+                <label for="register-email">Email</label>
+                <input type="email" name="email" id="register-email" placeholder="Email" required
                        value="{{ email or '' }}" autocomplete="email" autofocus class="auth-input">
             </div>
             <div class="form-row">
-                <input type="password" name="password" placeholder="Password (8+ characters)" required
+                <label for="register-password">Password</label>
+                <input type="password" name="password" id="register-password" placeholder="Password (8+ characters)" required
                        autocomplete="new-password" class="auth-input">
             </div>
             <div class="form-row">
-                <input type="password" name="confirm" placeholder="Confirm password" required
+                <label for="register-confirm">Confirm password</label>
+                <input type="password" name="confirm" id="register-confirm" placeholder="Confirm password" required
                        autocomplete="new-password" class="auth-input">
             </div>
             {% if invites_required %}
             <div class="form-row">
-                <input type="text" name="invite_code" placeholder="Invite code" required
+                <label for="register-invite">Invite code</label>
+                <input type="text" name="invite_code" id="register-invite" placeholder="Invite code" required
                        value="{{ invite_code or '' }}" autocomplete="off" class="auth-input"
                        spellcheck="false">
             </div>

@@ -3,95 +3,131 @@
 // Store original row HTML for cancelEdit; avoids XSS from inline HTML serialization
 const editState = new Map();
 
-async function testAccount(accountId) {
+// Inline status feedback (replaces blocking alert() dialogs): renders the
+// outcome next to the triggering button in a polite live region so screen
+// readers announce it, and the text stays re-readable and styleable.
+// kind: 'success' | 'error' | 'info'
+function showStatus(btn, text, kind) {
+    if (!btn) return;
+    const host = btn.parentElement;
+    if (!host) return;
+    let box = host.querySelector('.action-status');
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'action-status';
+        box.setAttribute('role', 'status');
+        box.setAttribute('aria-live', 'polite');
+        host.appendChild(box);
+    }
+    box.className = 'action-status action-status-' + (kind || 'info');
+    box.textContent = text; // textContent, never innerHTML: server strings are untrusted
+}
+
+// Busy-state wrapper: disables the clicked button and swaps its label for the
+// duration of the async action so double-clicks cannot fire duplicate POSTs.
+// fn receives no arguments; wrap it (e.g. `onclick="withBusy(this, () => testAccount(3))"`).
+async function withBusy(btn, fn) {
+    if (btn.disabled) return;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Working...';
+    try {
+        await fn();
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+async function testAccount(accountId, btn) {
     try {
         const resp = await fetch(`/api/accounts/${accountId}/test`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) {
-            alert('Test failed: ' + (data.detail || resp.statusText));
+            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
             return;
         }
-        alert(data.message || (data.success ? 'OK' : 'Failed'));
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function testBlueskyAccount(accountId) {
+async function testBlueskyAccount(accountId, btn) {
     try {
         const resp = await fetch(`/api/bluesky-accounts/${accountId}/test`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) {
-            alert('Test failed: ' + (data.detail || resp.statusText));
+            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
             return;
         }
-        alert(data.message || (data.success ? 'OK' : 'Failed'));
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function testMicroblogAccount(accountId) {
+async function testMicroblogAccount(accountId, btn) {
     try {
         const resp = await fetch(`/api/microblog-accounts/${accountId}/test`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) {
-            alert('Test failed: ' + (data.detail || resp.statusText));
+            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
             return;
         }
-        alert(data.message || (data.success ? 'OK' : 'Failed'));
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function testFeed(feedId) {
+async function testFeed(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/test`, { method: 'POST' });
         const data = await resp.json();
         if (data.success) {
             const p = data.preview;
-            alert(`Feed: ${p.title}\nType: ${p.type}\nItems: ${p.item_count}\n\nLatest: ${p.items[0]?.title || 'none'}`);
+            showStatus(btn, `Feed: ${p.title} · Type: ${p.type} · Items: ${p.item_count} · Latest: ${p.items[0]?.title || 'none'}`, 'success');
         } else {
-            alert('Feed test failed: ' + data.error);
+            showStatus(btn, 'Feed test failed: ' + data.error, 'error');
         }
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function initFeed(feedId) {
+async function initFeed(feedId, btn) {
     if (!confirm('Initialize feed? This sets the last seen item so only new posts going forward will be cross-posted.')) return;
     try {
         const resp = await fetch(`/api/feeds/${feedId}/init`, { method: 'POST' });
         const data = await resp.json();
-        alert(data.message || (data.success ? 'OK' : 'Failed'));
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function fetchNow(feedId) {
+async function fetchNow(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/fetch`, { method: 'POST' });
         const data = await resp.json();
-        alert(data.message || (data.success ? 'OK' : 'Failed'));
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function pauseFeed(feedId) {
+async function pauseFeed(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/pause`, { method: 'POST' });
         const data = await resp.json();
         if (data.success) {
             location.reload();
         } else {
-            alert(data.detail || 'Failed to toggle pause');
+            showStatus(btn, data.detail || 'Failed to toggle pause', 'error');
         }
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
@@ -130,57 +166,56 @@ function editFeed(feedId) {
     </td>`;
 }
 
-async function retryPost(postedId) {
+async function retryPost(postedId, btn) {
     try {
         const resp = await fetch(`/api/history/${postedId}/retry`, { method: 'POST' });
         const data = await resp.json();
-        alert(data.message || data.detail || 'Done');
+        showStatus(btn, data.message || data.detail || 'Done', data.success ? 'success' : 'error');
         if (data.success) location.reload();
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function testAltText() {
-    const btn = event.target;
+async function testAltText(btn) {
     const originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Testing...';
     try {
         const resp = await fetch('/api/settings/alt-text/test', { method: 'POST' });
         const data = await resp.json();
-        alert(data.message || (data.success ? 'OK' : 'Failed'));
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
     }
 }
 
-async function giveUpPost(postedId) {
+async function giveUpPost(postedId, btn) {
     if (!confirm('Give up on this item? The feed will move past it and it will not be delivered.')) return;
     try {
         const resp = await fetch(`/api/history/${postedId}/give-up`, { method: 'POST' });
         const data = await resp.json();
-        alert(data.message || data.detail || 'Done');
+        showStatus(btn, data.message || data.detail || 'Done', data.success ? 'success' : 'error');
         if (data.success) location.reload();
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
-async function toggleEcho(echoId) {
+async function toggleEcho(echoId, btn) {
     try {
         const resp = await fetch(`/api/echoes/${echoId}/toggle`, { method: 'POST' });
         const data = await resp.json();
         if (data.success) {
             location.reload();
         } else {
-            alert(data.detail || data.error || 'Failed to toggle echo');
+            showStatus(btn, data.detail || data.error || 'Failed to toggle echo', 'error');
         }
     } catch (e) {
-        alert('Request failed: ' + e.message);
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
     }
 }
 
@@ -367,11 +402,11 @@ async function previewTemplate(btn) {
     const feedSelect = form.querySelector('select[name="feed_id"]');
     if (!templateField) return;
     if (!feedSelect) {
-        alert('Preview needs a feed selector on this form.');
+        showStatus(btn, 'Preview needs a feed selector on this form.', 'error');
         return;
     }
     if (!feedSelect.value) {
-        alert('Select a feed first, then preview.');
+        showStatus(btn, 'Select a feed first, then preview.', 'error');
         return;
     }
 

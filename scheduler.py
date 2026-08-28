@@ -891,8 +891,15 @@ def _send_mastodon(
             image_result = fetch_image(image_url)
             if image_result:
                 img_bytes, img_type = image_result
-                description = ""
-                if alt_text.is_enabled(user_id=echo["user_id"]):
+                # Feed-provided alt text wins (the author wrote it); AI
+                # generation is the fallback when the feed has none.
+                description = (item.get("image_alt") or "").strip()
+                if description:
+                    logger.info(
+                        "Echo %s: using feed-provided alt text for item %s (%d chars)",
+                        echo["id"], item["id"], len(description),
+                    )
+                elif alt_text.is_enabled(user_id=echo["user_id"]):
                     try:
                         description = alt_text.generate_alt_text(
                             img_bytes, img_type, user_id=echo["user_id"]
@@ -1171,7 +1178,14 @@ def _send_bluesky(
                 if image_result:
                     img_bytes, img_type = image_result
                     if img_type in BLUESKY_IMAGE_TYPES and len(img_bytes) <= MAX_BLOB_BYTES:
-                        if alt_text.is_enabled(user_id=echo["user_id"]):
+                        # Feed-provided alt text wins; AI is the fallback.
+                        alt_description = (item.get("image_alt") or "").strip()
+                        if alt_description:
+                            logger.info(
+                                "Echo %s: using feed-provided alt text for item %s (%d chars)",
+                                echo["id"], item["id"], len(alt_description),
+                            )
+                        elif alt_text.is_enabled(user_id=echo["user_id"]):
                             try:
                                 alt_description = (
                                     alt_text.generate_alt_text(
@@ -1369,8 +1383,10 @@ def _send_microblog(
         image_url = item.get("image_url", "")
         if image_url:
             photo_url = image_url
+            # Feed-provided alt text wins; AI is the fallback.
+            photo_alt = (item.get("image_alt") or "").strip()
             try:
-                if alt_text.is_enabled(user_id=echo["user_id"]):
+                if not photo_alt and alt_text.is_enabled(user_id=echo["user_id"]):
                     image_result = fetch_image(image_url)
                     if image_result:
                         img_bytes, img_type = image_result

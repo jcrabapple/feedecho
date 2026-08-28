@@ -148,6 +148,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ tags }}", "desc": "Raw tag list"},
         {"var": "{{ hashtags }}", "desc": "Feed tags as #hashtags"},
         {"var": "{{ image_url }}", "desc": "First image URL from the item"},
+        {"var": "{{ image_alt }}", "desc": "The image's alt text from the feed (may be empty)"},
         {"var": "{{ feed_name }}", "desc": "Name of the source feed"},
         {"var": "{{ item.title }}", "desc": "Any item field via the item dict"},
     ]

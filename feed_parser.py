@@ -414,6 +414,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "date": _parse_date_struct(entry),
             "tags": [tag.get("term", "") for tag in entry.get("tags", []) if tag.get("term")],
             "image_url": _extract_rss_image(entry),
+            "image_alt": _extract_rss_image_alt(entry),
             "raw": {k: v for k, v in entry.items()},
         }
         items.append(item)
@@ -448,6 +449,7 @@ def parse_json_feed(data: dict) -> dict:
             "date": _parse_iso_date(entry.get("date_published") or entry.get("date_modified")),
             "tags": entry.get("tags", []),
             "image_url": _extract_json_feed_image(entry),
+            "image_alt": _extract_json_feed_image_alt(entry),
             "raw": entry,
         }
         items.append(item)
@@ -562,18 +564,64 @@ def _extract_rss_image(entry: dict) -> str:
     return ""
 
 
+def _extract_rss_image_alt(entry: dict) -> str:
+    """Alt text for the image _extract_rss_image picked, or "".
+
+    Mirrors its priority order so the caption always belongs to the URL we
+    chose: Media RSS media:text on the same media object, enclosure alt, or
+    the alt attribute of the content <img> whose src was chosen.
+    """
+    for key in ("media_content", "media_thumbnail"):
+        media_list = entry.get(key, [])
+        if media_list and isinstance(media_list, list) and isinstance(media_list[0], dict):
+            if media_list[0].get("url", ""):
+                text = media_list[0].get("media_text", "")
+                if isinstance(text, list) and text:
+                    text = text[0].get("text", "") if isinstance(text[0], dict) else ""
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+                return ""
+
+    for enc in entry.get("enclosures", []):
+        if isinstance(enc, dict) and enc.get("type", "").startswith("image/") and enc.get("href"):
+            return enc.get("alt", "") or ""
+
+    html_content = ""
+    if entry.get("content"):
+        html_content = entry.get("content", [{}])[0].get("value", "")
+    if not html_content:
+        html_content = entry.get("summary", "")
+    if not html_content:
+        return ""
+    # The URL extractor takes the FIRST <img src>; only its own alt applies.
+    match = re.search(r"<img\b[^>]*>", html_content, re.IGNORECASE)
+    if not match:
+        return ""
+    tag = match.group(0)
+    src = re.search(r'\bsrc=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+    if not src:
+        return ""
+    alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
+    return alt.group(1).strip() if alt else ""
+
+
 def _extract_json_feed_image(entry: dict) -> str:
     """Extract first image URL from a JSON Feed entry.
 
     Priority: image > banner_image > first <img> in content_html.
+    JSON Feed 1.1 allows "image" as an object {url, caption} (or a string).
     Returns "" if no image found.
     """
-    image = entry.get("image", "")
-    if image:
+    image = entry.get("image")
+    if isinstance(image, dict) and image.get("url"):
+        return image["url"]
+    if isinstance(image, str) and image:
         return image
 
-    banner = entry.get("banner_image", "")
-    if banner:
+    banner = entry.get("banner_image")
+    if isinstance(banner, dict) and banner.get("url"):
+        return banner["url"]
+    if isinstance(banner, str) and banner:
         return banner
 
     html_content = entry.get("content_html", "")
@@ -582,6 +630,40 @@ def _extract_json_feed_image(entry: dict) -> str:
         if match:
             return match.group(1)
 
+    return ""
+
+
+def _extract_json_feed_image_alt(entry: dict) -> str:
+    """Alt text for the image _extract_json_feed_image picked, or "".
+
+    JSON Feed 1.1 allows "image" as an object {url, caption} (or a string);
+    caption is the official alt-text slot. Falls back to the content <img>
+    alt attribute when the URL came from content_html.
+    """
+    image = entry.get("image")
+    if isinstance(image, dict) and image.get("url"):
+        return (image.get("caption") or "").strip()
+    if isinstance(image, str) and image:
+        return ""
+
+    banner = entry.get("banner_image")
+    if isinstance(banner, dict) and banner.get("url"):
+        return (banner.get("caption") or "").strip()
+    if isinstance(banner, str) and banner:
+        return ""
+
+    html_content = entry.get("content_html", "")
+    if not html_content:
+        return ""
+    # Mirror the URL extractor: the FIRST <img> with a src is the chosen one,
+    # so only its own alt applies.
+    match = re.search(r"<img\b[^>]*>", html_content, re.IGNORECASE)
+    while match:
+        tag = match.group(0)
+        if re.search(r'\bsrc=["\']([^"\']+)["\']', tag, re.IGNORECASE):
+            alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
+            return alt.group(1).strip() if alt else ""
+        match = re.search(r"<img\b[^>]*>", html_content[match.end():], re.IGNORECASE)
     return ""
 
 

@@ -141,13 +141,6 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 5. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
 6. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
-### Which version am I running?
-
-The footer of every page shows the running version (`FeedEcho vX.Y.Z`), linked
-to the [releases page](https://github.com/jcrabapple/feedecho/releases) so you
-can see whether a newer one is out. It is only rendered for a logged-in
-operator, so an unauthenticated login page never advertises the version.
-
 ### Bluesky details
 
 - Accounts connect via **App Passwords**, which are scoped to creating posts (and other app activity) and can be revoked individually without changing your main password.
@@ -196,66 +189,21 @@ truncated before posting (500 chars Mastodon, 300 graphemes Bluesky;
 micro.blog has no hard cap); use `| truncate(N)` to control where the cut
 happens.
 
-## Code Breakdown
+## Architecture
 
-FeedEcho is ~8,000 lines of Python across a dozen modules. No framework magic, no ORMs, no build step. Here's what each piece does:
+FeedEcho is ~8,000 lines of Python across a dozen small modules — no ORM, no build step. The shape:
 
-### `app.py` — Web server and routes
+- `app.py` — FastAPI routes, auth middleware, OAuth callbacks
+- `database.py` — dual-dialect storage layer (SQLite WAL / Postgres) with idempotent migrations
+- `feed_parser.py` — feed fetching with SSRF validation, size caps, and normalized item shapes
+- `scheduler.py` — the dispatch engine: per-feed polling, atomic post claims, retries, drip/digest queues
+- `mastodon.py` / `bluesky.py` / `microblog.py` — one client module per destination
+- `oauth.py` — Mastodon OAuth 2.0 flow with signed state
+- `plans.py` / `invites.py` — hosted-mode plan limits and registration gating (dormant in self-hosted mode)
+- `template_engine.py` — sandboxed Jinja2 rendering
+- `email_sender.py` — SMTP dispatch
 
-The FastAPI application. Defines every HTTP route: dashboard, feed CRUD, account management, echo CRUD, post history, settings, and the OAuth callback endpoints. Renders Jinja2 templates server-side. Also starts/stops the background scheduler on app startup/shutdown. This is the only module that talks to the user's browser.
-
-### `database.py` — SQLite layer
-
-Creates and manages the schema: `accounts` (Mastodon connections), `feeds` (RSS sources), `echoes` (feed-to-destination mappings), `email_accounts`, `bluesky_accounts` (Bluesky handles, app passwords, DID/PDS, and cached session JWTs), `microblog_accounts` (micro.blog blogs and Micropub tokens), `settings` (key-value config like SMTP), `posted_items` (post history with status tracking), `oauth_apps`/`oauth_states` (cached OAuth credentials and signed state), `digest_items`/`drip_items` (delayed-delivery queues), `invite_codes` (hosted registration gate), and `users`. Runs in SQLite (WAL) or Postgres from one dual-dialect code path. Includes idempotent migrations (column additions, table rebuilds) so existing databases upgrade in place. The unique index on `posted_items(echo_id, item_id)` enforces the pending-row dedup pattern.
-
-### `feed_parser.py` — Feed fetching and normalization
-
-Fetches feed URLs via httpx with a 10 MB size cap (prevents OOM from hostile feeds). Parses RSS/Atom via feedparser and JSON Feed natively. Normalizes all feed formats into a common item shape: `id`, `title`, `link`, `summary`, `content`, `author`, `date`, `tags`. Strips HTML to plain text (Mastodon statuses are plain text). Synthesizes stable item IDs from content hashes when feeds lack GUIDs. The `get_new_items()` function implements cursor-based new-item detection: on first run it sets a baseline (no backlog posting), and if the cursor scrolled off the feed, it posts only the newest item to avoid spam.
-
-### `scheduler.py` — Background feed checker
-
-The core dispatch engine. Runs on APScheduler (every 2 minutes). For each due feed: fetch new items, find enabled echoes, render templates, dispatch to Mastodon, Bluesky, micro.blog, or email. Uses a **pending-row claim pattern** for idempotent posting: each (echo, item) pair is claimed by an atomic upsert guarded on the prior status (`pending`/`failed` + retry window) before dispatch, then `UPDATE`d to `success` or `failed` after. The unique index on (echo_id, item_id) makes the claim race-free. The cursor only advances past items where all echoes succeeded, so failed posts are retried on the next poll. All network I/O happens outside DB transactions to avoid lock contention.
-
-### `mastodon.py` — Mastodon API client
-
-Thin httpx wrapper around three Mastodon REST endpoints: `POST /api/v1/statuses` (post), `GET /api/v1/accounts/verify_credentials` (validate token), and the connection test helper. No state, no caching, no surprises.
-
-### `bluesky.py` — Bluesky (AT Protocol) client
-
-Handles the Bluesky side: handle normalization, DID/PDS discovery (`resolveHandle` + PLC directory, with SSRF validation on resolved endpoints), app-password sessions (`createSession` / `refreshSession`), blob uploads, and `createRecord` posts. Includes URL facet building with UTF-8 byte offsets, Unicode grapheme-aware truncation for the 300-grapheme limit, and `app.bsky.embed.images` embeds with alt text.
-
-### `microblog.py` — Micro.blog (Micropub) client
-
-Posts to micro.blog via the Micropub standard: `q=config` discovers every blog
-an app token can post to (one account row per blog), and posting is a
-form-encoded `h=entry` with the blog's uid as `mp-destination`. Feed images
-are passed by URL (`photo=` with `mp-photo-alt` for alt text) — micro.blog
-fetches and hosts them itself. Auth failures (401/403) fail permanently;
-other errors retry with backoff.
-
-### `oauth.py` — Mastodon OAuth 2.0 flow
-
-Implements the full OAuth dance: register an app on the target instance (`POST /api/v1/apps`), build the authorize URL with a CSRF state token, exchange the callback code for an access token (`POST /oauth/token`). Caches OAuth app credentials per instance in the `oauth_apps` table so re-registration isn't needed. The state parameter carries a random token plus the instance URL so the callback knows which instance to exchange with.
-
-### `template_engine.py` — Template rendering
-
-Full sandboxed Jinja2 rendering: conditionals, filters, and the complete item dict, with autoescaping. No eval, no code execution outside the sandbox. Tags are sanitized to alphanumeric for hashtag safety.
-
-### `email_sender.py` — SMTP email dispatch
-
-Sends rendered template content as plain-text email. Reads SMTP config (host, port, username, password, TLS mode) from the `settings` table. Supports both implicit TLS (port 465) and STARTTLS (port 587). Includes a connection test helper.
-
-### `templates/` — Jinja2 HTML templates
-
-Jinja2 templates for every page: `base.html` (layout + nav), `dashboard.html` (overview stats), `feeds.html`, `accounts.html`, `echoes.html`, `history.html` (post log), `settings.html` (SMTP config), `login.html`, `register.html`, `landing.html` (hosted front page), `howto.html`, `about.html`, `admin.html`, `terms.html`/`privacy.html` (hosted legal pages), and error/auth pages. All use Jinja2 autoescaping.
-
-### `static/` — CSS and JavaScript
-
-`style.css` (mobile-responsive, table-to-card at 640px breakpoint) and `app.js` (inline echo editing, account test buttons, feed preview). Vanilla JS, no frameworks, no build step.
-
-### `tests/` — 800+ pytest tests
-
-Test modules covering the database layer, feed parser (item detection, HTML stripping, SSRF URL pinning, truncation, date parsing), template engine (variable substitution, date formatting, hashtag generation), security features (SSRF protection, OAuth state signing), content warnings and image attachments, digest and drip delivery, retry/notification logic, plan limits and trial pausing, invite-code registration, and Mastodon, Bluesky, and micro.blog integration (auth, dispatch, truncation, account routes).
+Contributors: the tests are the best documentation — each module has a suite covering its behavior edge cases, and CI runs all of them plus a live Postgres job on every pull request.
 
 ## Security
 
@@ -263,12 +211,9 @@ FeedEcho handles OAuth tokens, Bluesky app passwords, and posts to your connecte
 
 ### SSRF protection
 
-Feed URLs are validated before fetching. The SSRF filter blocks:
-- Non-http(s) schemes (`file://`, `gopher://`, etc.)
-- Direct IP addresses in private ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, ::1, fc00::, fe80::)
-- Hostnames that resolve to private/internal IPs (DNS resolution is checked before the request is made)
+Feed URLs are validated before fetching, and every redirect hop is validated too. The SSRF filter blocks non-http(s) schemes, embedded credentials, and any address in private, loopback, link-local, or reserved ranges — including addresses that hostnames resolve to, with connections pinned to the validated address so DNS can't be flipped between check and fetch.
 
-This prevents a user from pointing FeedEcho at cloud metadata endpoints (`169.254.169.254`), internal services, or localhost.
+This prevents pointing FeedEcho at cloud metadata endpoints, internal services, or localhost.
 
 ### Web UI authentication
 
@@ -277,30 +222,27 @@ FeedEcho supports optional shared-secret authentication via the `FEEDCHO_AUTH_TO
 - **If set**: all requests must include the token as either a cookie (set by the login page at `/login`) or an `X-Auth-Token` header (for API/programmatic access). Unauthenticated browser requests are redirected to `/login`; API requests get 401.
 - **If unset**: auth is disabled (original behavior). The app is open to anyone who can reach the port.
 
-The OAuth callback endpoints (`/oauth/connect`, `/oauth/callback`) are exempt from auth so Mastodon's redirect flow works without a cookie. The HMAC-signed state token provides CSRF protection on those endpoints.
+Only the endpoints that require unauthenticated access (OAuth callback, health check, static assets) are exempt from auth — everything else requires the session or token.
 
 ### OAuth flow
 
-- The OAuth state parameter is **HMAC-signed** (`hmac.compare_digest`, SHA-256). Format: `<nonce>|<instance>|<signature>`. The signature covers the nonce and instance, preventing CSRF and tampering with the instance field. A forged state token without the secret is rejected.
+- The OAuth state parameter is **HMAC-signed and verified with a constant-time comparison**. The signature covers both the nonce and the instance, preventing CSRF and tampering with the instance field. A forged state token without the secret is rejected.
 - The callback URL is configurable via the `FEEDCHO_CALLBACK_URL` environment variable. If unset, it is derived from `FEEDCHO_BASE_URL` (`<base>/oauth/callback`), and only falls back to `https://feedecho.example.com/oauth/callback` when neither is set. Self-hosters should set one of the two.
 - Mastodon shows an application name on every post, linked to the `website` recorded when FeedEcho registered its OAuth app on your instance. That website is `FEEDCHO_APP_WEBSITE` if set, otherwise `FEEDCHO_BASE_URL`, otherwise the project repo. Both the website and the callback URL are stored alongside the cached client credentials in `oauth_apps`, and changing either re-registers the app on the next connect — Mastodon's API has no way to edit an existing registration, so a drifted callback URL would otherwise fail as a redirect mismatch. **Already-connected accounts keep the old link** — their access token is bound to the old app registration, so reconnect the account to update what appears on new posts.
 
 ### Secrets handling
 
-- **Mastodon OAuth tokens** are stored in the SQLite database (`accounts.access_token`). The database file is local to the server. There is no encryption at rest — if an attacker gains filesystem access, they can read the tokens.
-- **Bluesky app passwords** are stored in the SQLite database (`bluesky_accounts.app_password`), along with cached session JWTs. App passwords can only create posts (and other app-level actions) and are revoked individually in Bluesky settings — they never expose the account's main password. Same at-rest caveat as Mastodon tokens.
-- **Micro.blog app tokens** are stored in the `microblog_accounts` table in plaintext (`token` column). Tokens can be revoked at micro.blog (Account → Edit Apps) — FeedEcho marks delivery failed permanently once micro.blog rejects them. Same at-rest caveat as Mastodon tokens.
-- **SMTP passwords** are stored in the `settings` table in plaintext. They are **masked** (`********`) when sent to the browser on the settings and accounts pages. The save endpoint skips password updates when the mask placeholder is submitted, so the existing password is preserved.
-- **OAuth client secrets** (per-instance app credentials) are cached in the `oauth_apps` table in plaintext.
+- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, and OAuth client secrets** are stored in the local database, unencrypted at rest. If an attacker gains filesystem access to the server, they can read them. All of these credentials are scoped (app passwords and platform tokens can be revoked individually at the source platform without touching your main passwords).
+- **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
 - The `FEEDCHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
 
 ### Input handling
 
 - Feed content from external RSS/Atom/JSON feeds is treated as untrusted. HTML is stripped to plain text before posting to Mastodon. Feed item titles and URLs are never rendered as HTML in the UI without Jinja2 autoescaping.
-- Template variables are substituted via regex — there is no `eval()` or code execution path. A malformed template produces empty or garbled output, not a security hole.
+- Templates render in a sandboxed Jinja2 environment — no `eval()`, no code execution path. A malformed template produces a validation error at save time, not a security hole.
 - Feed fetches are capped at 10 MB to prevent memory exhaustion from hostile feeds.
-- The inline echo editor in `app.js` stores original row HTML in an in-memory Map rather than serializing it into a DOM attribute, avoiding an XSS vector that was present in an earlier version.
+- All rendered output is Jinja2-autoescaped; user-facing JS keeps untrusted markup out of the DOM.
 
 ### Network
 
@@ -316,14 +258,9 @@ The OAuth callback endpoints (`/oauth/connect`, `/oauth/callback`) are exempt fr
 | `FEEDCHO_APP_WEBSITE` | Website registered with the Mastodon OAuth app (the link on posts) | `FEEDCHO_BASE_URL`, else `https://github.com/jcrabapple/feedecho` |
 | `FEEDCHO_DB_PATH` | Path to SQLite database | `./feedecho.db` |
 
-### What FeedEcho does NOT do
+### Operator hardening notes
 
-- Does not encrypt secrets at rest (tokens and passwords are plaintext in SQLite)
-- Does not rate-limit its own feed polling (relies on APScheduler intervals)
-- Does not validate SSL certificates beyond httpx defaults
-- Does not sandbox feed parsing (feedparser runs in-process)
-
-If any of these are a concern for your deployment, wrap FeedEcho behind an authenticated reverse proxy and restrict filesystem access to the database file.
+For a public deployment, run FeedEcho behind an authenticated reverse proxy, restrict filesystem access to the server, keep the host patched, and back up the data directory. Secrets stored by the app are scoped platform credentials — revoke any of them at the source platform without affecting your main passwords.
 
 ## Deployment
 
@@ -384,29 +321,10 @@ self-hosted distribution.
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/ -v
+FEEDCHO_MODE=single python -m pytest tests/ -v
 ```
 
-## Project Structure
-
-```
-feedecho/
-├── app.py              # FastAPI app — routes, auth middleware, OAuth callbacks
-├── database.py         # SQLite/Postgres storage layer (dual-dialect)
-├── feed_parser.py      # Feed fetching, SSRF validation + IP pinning
-├── scheduler.py        # APScheduler background feed checker + dispatch
-├── mastodon.py         # Mastodon API client
-├── bluesky.py          # Bluesky (AT Protocol) client
-├── microblog.py        # Micro.blog Micropub client
-├── oauth.py            # Mastodon OAuth 2.0 flow (HMAC-signed state)
-├── plans.py            # Plan limits + trial state (hosted mode)
-├── invites.py          # Invite-code registration gate (hosted mode)
-├── template_engine.py  # Sandboxed Jinja2 rendering
-├── email_sender.py     # SMTP email dispatch
-├── templates/          # Jinja2 HTML templates
-├── static/             # CSS, JS, logo + hero images
-└── tests/              # pytest suites (single/multi mode + live Postgres)
-```
+CI additionally runs a multi-mode suite and a live Postgres dialect suite on every push.
 
 ## License
 

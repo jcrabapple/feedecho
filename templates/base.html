@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=15">
+    <link rel="stylesheet" href="/static/css/style.css?v=16">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -31,7 +31,7 @@
         {# Anonymous viewers get a sign-in funnel, not links to pages that
            bounce them straight back to /login. #}
         <a href="{{ '/' if authed else '/login' }}" class="nav-brand">
-            <span class="nav-icon" aria-hidden="true">📡</span> FeedEcho
+            <img src="/static/img/logo.svg" alt="" aria-hidden="true" class="nav-icon" width="22" height="22"> FeedEcho
         </a>
         <div class="nav-links">
             {% if authed %}

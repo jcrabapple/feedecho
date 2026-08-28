@@ -108,7 +108,13 @@ body {
     gap: 0.3rem;
     white-space: nowrap;
 }
-.nav-icon { font-size: 1.1rem; }
+.nav-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  vertical-align: -5px; /* optically center the tile against the nav text */
+  margin-right: 0.15rem;
+}
 .nav-links {
     display: flex;
     gap: 0.15rem;

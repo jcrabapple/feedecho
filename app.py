@@ -2656,9 +2656,14 @@ async def not_found_handler(request: Request, exc: HTTPException):
 
 @app.get("/favicon.svg", include_in_schema=False)
 async def favicon():
-    return Response(
-        content="""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='#2d5a9e'/><path d='M32 16 L48 32 L32 48 L16 32 Z' fill='#fff'/><circle cx='32' cy='32' r='6' fill='#2d5a9e'/></svg>""",
+    # Served from static/img/logo.svg via FileResponse so the file stays the
+    # single source of the brand mark (also mounted at /static/img/logo.svg).
+    from fastapi.responses import FileResponse
+
+    return FileResponse(
+        BASE_DIR / "static" / "img" / "logo.svg",
         media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 

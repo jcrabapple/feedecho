@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=21">
+    <link rel="stylesheet" href="/static/css/style.css?v=22">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -50,16 +50,30 @@
             <a href="/login" {% if request.url.path == '/login' %}aria-current="page" class="active"{% endif %}>Log in</a>
             <a href="/register" {% if request.url.path == '/register' %}aria-current="page" class="active"{% endif %}>Sign up</a>
             {% endif %}
-            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme" title="Switch theme">◐</button>
-            {% if MULTI and current_user_email %}
-            <div class="nav-account">
-                <span class="nav-email" title="{{ current_user_email }}">{{ current_user_email }}</span>
-                <form method="post" action="/logout">
-                    <button type="submit" class="nav-logout">Log out</button>
-                </form>
-            </div>
-            {% endif %}
         </div>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme" title="Switch theme">◐</button>
+        {% if MULTI and current_user_email %}
+        <div class="nav-account">
+            {# Desktop shows email + logout inline; mobile collapses both into a
+               zero-JS <details> menu. Exactly one copy is visible per
+               breakpoint, so AT and tab order see only one. #}
+            <span class="nav-email" title="{{ current_user_email }}">{{ current_user_email }}</span>
+            <form method="post" action="/logout">
+                <button type="submit" class="nav-logout">Log out</button>
+            </form>
+            <details class="nav-account-menu">
+                <summary aria-label="Account menu ({{ current_user_email }})" title="{{ current_user_email }}">
+                    <span class="nav-avatar" aria-hidden="true">{{ current_user_email[0] | upper }}</span>
+                </summary>
+                <div class="nav-account-panel">
+                    <span class="nav-email" title="{{ current_user_email }}">{{ current_user_email }}</span>
+                    <form method="post" action="/logout">
+                        <button type="submit" class="nav-logout">Log out</button>
+                    </form>
+                </div>
+            </details>
+        </div>
+        {% endif %}
     </nav>
     <main id="main">
         {% if posting_paused %}

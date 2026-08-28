@@ -450,12 +450,132 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
 }
 
 @media (max-width: 640px) {
-    /* Labels claim their own line and inputs go full-width beneath them.
-       The natural inline-form flex layout squeezes `flex: 1` inputs down to
-       whatever the label left over (a "Name" input rendered ~30px wide), so
-       contents were unreadable on phones. Wrapping labels (display:block,
-       full width) push the input to the next flex line; the 100% basis
-       below makes it fill the line. */
+    /* Two rows: [brand | theme | account] on row 1; tab strip wraps to row 2.
+       Sticky retained deliberately: feeds/history/echoes are long lists and
+       one-tap primary nav beats ~96px of vertical cost. */
+    .navbar {
+        flex-wrap: wrap;
+        row-gap: 0;
+        column-gap: 0.5rem;
+        align-items: center;
+        /* env() = 0px in normal browsers; matters because the app ships
+           viewport-fit=cover + standalone PWA meta, so the sticky header must
+           not underlap the status bar. */
+        padding:
+            calc(0.5rem + env(safe-area-inset-top, 0px))
+            max(0.75rem, env(safe-area-inset-right, 0px))
+            0.5rem
+            max(0.75rem, env(safe-area-inset-left, 0px));
+    }
+    .nav-brand   { order: 1; flex: 0 1 auto; min-width: 0; }
+    .theme-toggle { order: 2; flex: 0 0 auto; margin-left: auto; min-height: 44px; min-width: 44px; }
+    .nav-account  { order: 3; flex: 0 0 auto; margin-left: 0; padding-left: 0; border-left: 0; position: relative; }
+    .nav-links {
+        order: 4;
+        flex: 1 1 100%;
+        margin-left: 0;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+    .nav-links::-webkit-scrollbar { display: none; }
+    .nav-links a {
+        flex: 0 0 auto;
+        min-height: 44px;              /* touch target */
+        display: inline-flex;
+        align-items: center;
+        padding: 0.3rem 0.75rem;
+        font-size: 0.9rem;
+    }
+    .nav-links a:focus-visible,
+    .nav-brand:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: -2px;
+        border-radius: 6px;
+    }
+
+    /* Account: inline email/logout are desktop-only; on mobile they collapse
+       into a no-JS <details> menu. */
+    .nav-account > .nav-email,
+    .nav-account > form { display: none; }
+    .nav-account-menu { display: block; position: relative; z-index: 50; }
+    .nav-account-menu summary {
+        list-style: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.15rem;
+        min-width: 44px;               /* touch target */
+        min-height: 44px;
+        border-radius: 8px;
+    }
+    .nav-account-menu summary::-webkit-details-marker { display: none; }
+    .nav-account-menu summary:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+    }
+    .nav-account-menu summary::after {  /* disclosure cue, non-color-only */
+        content: "▾";
+        font-size: 0.7rem;
+        color: var(--text-muted);
+    }
+    .nav-account-menu[open] summary::after { content: "▴"; }
+    .nav-avatar {
+        flex: 0 0 28px;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--primary);
+        color: var(--primary-contrast);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+    .nav-account-panel {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        min-width: 210px;
+        max-width: min(80vw, 320px);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+        padding: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .nav-account-panel .nav-email {      /* full address, wraps - no ellipsis */
+        max-width: none;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        font-size: 0.85rem;
+    }
+    .nav-account-panel .nav-logout {
+        width: 100%;
+        min-height: 44px;               /* touch target */
+        padding: 0.5rem;
+    }
+}
+
+@media (min-width: 641px) {
+    .nav-account-menu { display: none; }  /* mobile menu is mobile-only */
+}
+
+@media (max-width: 640px) {
+    /* Form layout: labels claim their own line and inputs go full-width
+       beneath them. The natural inline-form flex layout squeezes `flex: 1`
+       inputs down to whatever the label left over (a "Name" input rendered
+       ~30px wide), so contents were unreadable on phones. Wrapping labels
+       (display:block, full width) push the input to the next flex line; the
+       100% basis below makes it fill the line. */
     .inline-form label {
         display: block;
         width: 100%;
@@ -680,8 +800,9 @@ code {
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
     }
+    /* Brand alone shrinks; the tab strip keeps its 44px targets and scrolls
+       horizontally instead of shrinking font/padding below touch size. */
     .nav-brand { font-size: 1rem; }
-    .nav-links a { font-size: 0.8rem; padding: 0.3rem 0.4rem; }
 }
 
 /* Auth/login page */

@@ -12,4 +12,4 @@ scan for version-shaped strings elsewhere in the tree), so a partial bump fails
 the suite instead of shipping a UI that lies about which release is running.
 """
 
-__version__ = "1.26.2"
+__version__ = "1.26.3"

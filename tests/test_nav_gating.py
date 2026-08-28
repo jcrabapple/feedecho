@@ -33,8 +33,10 @@ def _nav(page: str) -> str:
 def _nav_links(page: str) -> str:
     """Only the links div. The brand anchor also carries href="/login" for
     anonymous viewers, so a whole-nav assertion cannot tell the funnel link
-    from the logo."""
-    m = re.search(r'<div class="nav-links">.*?</div>\s*</nav>', page, re.S)
+    from the logo. The theme toggle and account area now sit after the div
+    (mobile two-row header), so the match must stop at the div's own close,
+    not at </nav>."""
+    m = re.search(r'<div class="nav-links">.*?</div>', page, re.S)
     return m.group(0) if m else ""
 
 

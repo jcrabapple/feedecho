@@ -84,6 +84,24 @@
         <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
         <span class="hint" style="margin: 0.2rem 0 0;">Jinja2 template. Use Preview to render it against this feed's latest items before saving.</span>
     </div>
+    <details class="template-vars" open>
+        <summary>Available template variables</summary>
+        <table class="vars-table">
+            {% for v in template_vars %}
+            <tr>
+                <td><code>{{ v.var }}</code></td>
+                <td>{{ v.desc }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        <div class="template-help">
+            <p>Templates are Jinja2, so you can use conditionals and filters:</p>
+            {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
+            <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
+            <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
+            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
+        </div>
+    </details>
     <div class="form-row">
         <label>Keyword filter
             <input type="text" name="filter_keywords" placeholder="e.g. spoiler, giveaway, nsfw">
@@ -130,24 +148,6 @@
             <span class="hint" style="margin: 0.2rem 0 0;">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
         </label>
     </div>
-    <details class="template-vars">
-        <summary>Available template variables</summary>
-        <table class="vars-table">
-            {% for v in template_vars %}
-            <tr>
-                <td><code>{{ v.var }}</code></td>
-                <td>{{ v.desc }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        <div class="template-help">
-            <p>Templates are Jinja2, so you can use conditionals and filters:</p>
-            {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
-            <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
-            <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
-            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
-        </div>
-    </details>
     <button type="submit">Create Echo</button>
 </form>
 

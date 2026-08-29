@@ -181,15 +181,20 @@
             data-enabled="{{ echo.enabled }}">
             <td data-label="Feed">{{ echo.feed_name }}</td>
             <td data-label="Destination">
-                {% if echo.destination_type == 'mastodon' %}
-                <span class="badge badge-success">Mastodon</span> <code>{{ echo.destination_name }}</code>
-                {% elif echo.destination_type == 'email' %}
-                <span class="badge badge-success">Email</span> {{ echo.destination_name }}
-                {% elif echo.destination_type == 'bluesky' %}
-                <span class="badge badge-info">Bluesky</span> <code>{{ echo.destination_name }}</code>
-                {% elif echo.destination_type == 'microblog' %}
-                <span class="badge badge-info">Micro.blog</span> <code>{{ echo.destination_name }}</code>
-                {% endif %}
+                <span class="dest-cell">
+                    <span class="dest-type">
+                        {% if echo.destination_type == 'mastodon' %}
+                        <span class="badge badge-success">Mastodon</span>
+                        {% elif echo.destination_type == 'email' %}
+                        <span class="badge badge-success">Email</span>
+                        {% elif echo.destination_type == 'bluesky' %}
+                        <span class="badge badge-info">Bluesky</span>
+                        {% elif echo.destination_type == 'microblog' %}
+                        <span class="badge badge-info">Micro.blog</span>
+                        {% endif %}
+                    </span>
+                    <code class="dest-name">{{ echo.destination_name }}</code>
+                </span>
                 {% if echo.filter_keywords %}
                 <br><span class="badge badge-warning" title="Filter keywords: {{ echo.filter_keywords | e }}">
                     {{ 'only' if echo.filter_mode == 'include' else 'not' }}: {{ echo.filter_keywords }}

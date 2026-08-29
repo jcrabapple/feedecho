@@ -353,6 +353,22 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         width: 100%;
         margin-bottom: 0.25rem;
     }
+    /* Destination cell: value column is a wrapped .dest-cell (badge + long
+       handle). Let the value claim the full line and wrap; keep badge-only
+       rows (IMG/CW/DIGEST/DRIP flags that follow a <br>) on their own lines
+       aligned right like every other value. */
+    .data-table td[data-label="Destination"] {
+        flex-wrap: wrap;
+    }
+    .data-table td[data-label="Destination"] .dest-cell {
+        flex: 1 1 auto;
+        min-width: 0;
+        justify-content: flex-end;
+        text-align: right;
+    }
+    .data-table td[data-label="Destination"] .dest-cell .dest-type {
+        flex: 0 0 auto;
+    }
 }
 
 /* Badges — semantic colors with translucent washes */
@@ -686,7 +702,32 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     font-size: 0.85rem;
 }
 .vars-table td { padding: 0.25rem 0.5rem; }
+.vars-table td:first-child {
+    /* The variable itself must stay on one row: 'Available template
+       variables' reads as a lookup table, and a wrapped `{{ title }}`
+       (reported on iOS Safari, where table cells shrink to content and
+       the code glyphs break mid-token) forces eyeball ping-pong between
+       two stacked fragments and the description. */
+    white-space: nowrap;
+}
 .vars-table code { color: var(--accent); }
+
+/* Echo destination cell: type badge + account handle. The handle is a code
+   element that can be a long Mastodon address (@user@instance.social), so it
+   must wrap on narrow screens instead of pushing siblings out of the card. */
+.dest-cell {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.5rem;
+    max-width: 100%;
+}
+.dest-name {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+    max-width: 100%;
+}
 
 /* Buttons */
 button, .btn-sm {

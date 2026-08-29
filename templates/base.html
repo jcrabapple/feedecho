@@ -11,18 +11,24 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=24">
+    <link rel="stylesheet" href="/static/css/style.css?v=25">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-    // Set theme before first paint to avoid flash
+    // Set theme before first paint to avoid flash. Three states stored in
+    // localStorage: 'light' / 'dark' / null (auto = follow the device).
+    // Auto must re-evaluate live: the device can flip themes between visits
+    // (or mid-session), and a stale data-theme is the "light/dark mode does
+    // not follow the device" bug reported on iOS.
     (function () {
         var stored = null;
         try { stored = localStorage.getItem('feedecho-theme'); } catch (e) {}
+        if (stored !== 'light' && stored !== 'dark') stored = null;
         var theme = stored || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
         document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-theme-mode', stored || 'auto');
     })();
     </script>
 </head>
@@ -52,6 +58,7 @@
             {% endif %}
         </div>
         <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme" title="Switch theme">◐</button>
+        <span class="sr-only" id="theme-mode-live" aria-live="polite"></span>
         {% if MULTI and current_user_email %}
         <div class="nav-account">
             {# Desktop shows email + logout inline; mobile collapses both into a
@@ -100,6 +107,6 @@
         {% endif %}
     </footer>
     {% endif %}
-    <script src="/static/js/app.js?v=20"></script>
+    <script src="/static/js/app.js?v=21"></script>
 </body>
 </html>

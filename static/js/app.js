@@ -523,43 +523,94 @@ function formatLocalTimes() {
     });
 }
 
-/* Theme toggle — persists to localStorage, falls back to system preference */
+/* Theme toggle — 3-state cycle: auto (follow device) → light → dark.
+   'auto' is the escape hatch from the old two-state toggle: once any click
+   wrote a stored value, the device preference was overridden forever with
+   no way back (reported: "light/dark mode does not follow the device"). */
 (function () {
     const btn = document.getElementById('theme-toggle');
     if (!btn) return;
 
-    function currentTheme() {
-        return document.documentElement.getAttribute('data-theme') || 'dark';
+    const LIVE = document.getElementById('theme-mode-live');
+    const mqLight = window.matchMedia('(prefers-color-scheme: light)');
+    const ORDER = ['auto', 'light', 'dark'];
+
+    function readStorage() {
+        try {
+            const stored = localStorage.getItem('feedecho-theme');
+            return (stored === 'light' || stored === 'dark') ? stored : 'auto';
+        } catch (e) {
+            return null; // storage unavailable: caller falls back to the closure copy
+        }
     }
 
-    function render(theme) {
-        btn.textContent = theme === 'light' ? '☀' : '☾';
-        // The accessible name states the action the click performs from the
-        // current theme, so "sun, pressed" ambiguity never reaches the user.
-        const label = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+    // Closure copy of the current mode. localStorage can throw on EVERY
+    // access (Safari private mode with cookies blocked): readStorage() then
+    // returns null and the click cycle would dead-end on 'light'. The click
+    // handler keeps this variable in sync and storedMode() prefers it.
+    let mode = readStorage() || 'auto';
+
+    function storedMode() {
+        return mode && ORDER.includes(mode) ? mode : 'auto';
+    }
+
+    function applyTheme(mode) {
+        // 'auto' resolves through the live media query each time so the
+        // rendered theme is always current, even mid-session OS switches.
+        const theme = mode === 'auto'
+            ? (mqLight.matches ? 'light' : 'dark')
+            : mode;
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-theme-mode', mode);
+        return theme;
+    }
+
+    function render(mode, announce) {
+        // Show what the NEXT click does; 'auto' is announced as such so the
+        // user can tell an OS-following state from a pinned one.
+        const next = ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length];
+        const label = next === 'auto' ? 'Switch to auto theme (follow device)'
+            : next === 'light' ? 'Switch to light theme' : 'Switch to dark theme';
         btn.setAttribute('aria-label', label);
         btn.setAttribute('title', label);
         btn.removeAttribute('aria-pressed');
+        // Glyph per mode: half-moon = auto (follows device), sun = pinned
+        // light, moon = pinned dark.
+        btn.textContent = mode === 'auto' ? '◐' : (mode === 'light' ? '☀' : '☾');
+        // Only user/system-initiated changes speak; the startup render must
+        // stay silent or every navigation announces the theme (aria-live
+        // regions announce on content CHANGE, and set on load counts).
+        if (announce && LIVE) {
+            LIVE.textContent = mode === 'auto'
+                ? 'Theme follows device settings'
+                : 'Theme set to ' + mode + ' manually';
+        }
     }
 
-    render(currentTheme());
+    applyTheme(storedMode());
+    render(mode, false);
 
     btn.addEventListener('click', function () {
-        const next = currentTheme() === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', next);
-        try { localStorage.setItem('feedecho-theme', next); } catch (e) {}
-        render(next);
+        const next = ORDER[(ORDER.indexOf(storedMode()) + 1) % ORDER.length];
+        try {
+            if (next === 'auto') localStorage.removeItem('feedecho-theme');
+            else localStorage.setItem('feedecho-theme', next);
+        } catch (e) {}
+        mode = next;
+        applyTheme(next);
+        render(next, true);
     });
 
-    // Follow system preference changes when the user hasn't chosen explicitly
-    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function (e) {
-        let stored = null;
-        try { stored = localStorage.getItem('feedecho-theme'); } catch (err) {}
-        if (stored) return;
-        const theme = e.matches ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', theme);
-        render(theme);
-    });
+    // While in auto, follow device changes live.
+    // Legacy WebKit (< iOS 14) only has the addListener form; the guard is
+    // cheap and Brian's report came from an iOS Safari.
+    const onSystemChange = function () {
+        if (storedMode() !== 'auto') return;
+        applyTheme('auto');
+        render('auto', true);
+    };
+    if (mqLight.addEventListener) mqLight.addEventListener('change', onSystemChange);
+    else if (mqLight.addListener) mqLight.addListener(onSystemChange);
 })();
 
 // app.js is a classic script at the end of <body>, so the DOM is parsed.

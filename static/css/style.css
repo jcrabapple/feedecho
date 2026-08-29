@@ -409,6 +409,39 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     outline-offset: 1px;
 }
 
+/* History filter bar (issue #16): the .inline-form shape, but its controls are
+   selects — .inline-form only styles inputs — plus a Clear link that reads as
+   secondary next to the submit button. */
+.filter-form select {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+    min-height: 44px;
+}
+.filter-form select:focus {
+    border-color: var(--primary);
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+.filter-form .filter-clear {
+    align-self: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.filter-form .filter-clear:hover { color: var(--text); }
+@media (max-width: 640px) {
+    /* Match the mobile input rule: each select claims its own full-width line
+       under its label instead of being squeezed onto the label's line. */
+    .filter-form select { flex: 1 1 100%; width: 100%; }
+    .filter-form button { flex: 0 0 auto; }
+}
+
 .echo-form {
     background: var(--surface);
     border: 1px solid var(--border);

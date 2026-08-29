@@ -3,6 +3,27 @@
 {% block content %}
 <h1>Post History</h1>
 
+{% if feed_options or destination_options or filtered %}
+<form method="get" action="/history" class="inline-form filter-form">
+    <label for="history-feed">Feed</label>
+    <select name="feed" id="history-feed">
+        <option value="">All feeds</option>
+        {% for option in feed_options %}
+        <option value="{{ option.id }}"{% if filters.feed == option.id | string %} selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+    </select>
+    <label for="history-account">Destination</label>
+    <select name="account" id="history-account">
+        <option value="">All destinations</option>
+        {% for option in destination_options %}
+        <option value="{{ option.value }}"{% if filters.account == option.value %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit">Filter</button>
+    {% if filtered %}<a class="filter-clear" href="/history">Clear</a>{% endif %}
+</form>
+{% endif %}
+
 {% if posts %}
 <div class="data-table-wrapper">
 <table class="data-table">
@@ -64,6 +85,6 @@
 </table>
 </div>
 {% else %}
-<p class="empty-state">No posts yet.</p>
+<p class="empty-state">{% if filtered %}No posts match this filter. <a href="/history">Show all</a>{% else %}No posts yet.{% endif %}</p>
 {% endif %}
 {% endblock %}

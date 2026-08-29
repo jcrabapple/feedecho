@@ -26,12 +26,12 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Single mode
         env:
-          FEEDCHO_MODE: single
+          FEEDECHO_MODE: single
         run: pytest -m "not pg and not multi"
       - name: Multi mode
         env:
-          FEEDCHO_MODE: multi
-          FEEDCHO_SESSION_SECRET: test-secret-at-least-32-characters-long
+          FEEDECHO_MODE: multi
+          FEEDECHO_SESSION_SECRET: test-secret-at-least-32-characters-long
         run: pytest -m multi
 
   docker:

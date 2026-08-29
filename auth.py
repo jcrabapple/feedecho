@@ -1,7 +1,7 @@
 """Multi-mode authentication: register, login, logout, and session setup.
 
 Single mode never registers these routes' behavior — every handler
-short-circuits with 404 unless FEEDCHO_MODE=multi. Sessions are stateless
+short-circuits with 404 unless FEEDECHO_MODE=multi. Sessions are stateless
 HMAC tokens from security.py; the shared-secret AuthMiddleware in app.py
 routes to this flow only when settings.MULTI is set.
 """
@@ -203,7 +203,7 @@ def _absolute_link(path: str) -> str:
     base = settings.BASE_URL.rstrip("/")
     if not base:
         logging.getLogger("feedecho").error(
-            "Cannot build %s link: FEEDCHO_BASE_URL is not set; email not sent", path
+            "Cannot build %s link: FEEDECHO_BASE_URL is not set; email not sent", path
         )
         return ""
     return f"{base}{path}"

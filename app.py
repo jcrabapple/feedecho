@@ -144,7 +144,7 @@ OAUTH_SESSION_COOKIE = "feedecho_oauth_session"
 OAUTH_SESSION_MAX_AGE = 10 * 60
 
 # ── Optional shared-secret auth ──────────────────────────────────────────────
-# If FEEDCHO_AUTH_TOKEN is set, all requests must include it as either:
+# If FEEDECHO_AUTH_TOKEN is set, all requests must include it as either:
 #   - Cookie: feedecho_auth=<token>   (set by the login page)
 #   - X-Auth-Token: <token>           (for API/programmatic access)
 # If the env var is unset, auth is disabled (original behavior).
@@ -224,7 +224,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 class AuthMiddleware(BaseHTTPMiddleware):
     """Shared-secret auth (single mode) or session auth (multi mode).
 
-    Single mode: FEEDCHO_AUTH_TOKEN unset → no-op; set → cookie/header
+    Single mode: FEEDECHO_AUTH_TOKEN unset → no-op; set → cookie/header
     token required. Multi mode: feedecho_session cookie required on all
     paths except the public set. Mode is read per request so tests can
     flip settings.MULTI without reloading the app.
@@ -604,7 +604,7 @@ async def lifespan(app: FastAPI):
 
 
 def _bootstrap_admin() -> None:
-    """Promote the user named by FEEDCHO_ADMIN_EMAIL (idempotent).
+    """Promote the user named by FEEDECHO_ADMIN_EMAIL (idempotent).
 
     The hosted deployment has no other bootstrap path: the first admin is
     promoted from the environment, then manages the rest from the admin
@@ -623,7 +623,7 @@ def _bootstrap_admin() -> None:
         ).fetchone()
         if row is None:
             logger.warning(
-                "FEEDCHO_ADMIN_EMAIL matches no registered user yet"
+                "FEEDECHO_ADMIN_EMAIL matches no registered user yet"
             )
             return
         if row["is_admin"]:
@@ -631,7 +631,7 @@ def _bootstrap_admin() -> None:
         db.execute(
             "UPDATE users SET is_admin = 1 WHERE id = ?", (row["id"],)
         )
-    logger.info("Promoted FEEDCHO_ADMIN_EMAIL user (id %s) to admin", row["id"])
+    logger.info("Promoted FEEDECHO_ADMIN_EMAIL user (id %s) to admin", row["id"])
 
 
 app.router.lifespan_context = lifespan
@@ -903,7 +903,7 @@ def resend_verification(request: Request):
             return render(
                 "error.html", request, status_code=500, code=500,
                 message="This deployment cannot send email links yet "
-                        "(FEEDCHO_BASE_URL is not configured).",
+                        "(FEEDECHO_BASE_URL is not configured).",
             )
         send_system_email(
             row["email"],
@@ -1474,39 +1474,144 @@ async def echoes_page(request: Request):
                   template_vars=available_variables())
 
 
-@app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request):
-    uid = current_user_id(request)
-    with get_db() as db:
-        posts = db.execute("""
-            SELECT pi.*, f.name as feed_name,
-                   CASE
+# Post history: one label per destination type, the instance/handle detail
+# behind it, and the joins that resolve both across the five destination
+# tables. Held as constants because /history renders them AND its filter
+# dropdowns are built from them — inlining the SQL twice let the page and its
+# filter options drift apart.
+_HISTORY_ACCOUNT_LABEL_SQL = """CASE
                      WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
                      WHEN e.destination_type = 'email' THEN ea.name
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
-                   END as account_name,
-                   CASE
+                   END"""
+
+_HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
                      WHEN e.destination_type = 'email' THEN ea.email
                      WHEN e.destination_type = 'bluesky' THEN b.pds
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
-                   END as instance
-            FROM posted_items pi
-            JOIN echoes e ON pi.echo_id = e.id
-            JOIN feeds f ON e.feed_id = f.id
+                   END"""
+
+_HISTORY_DESTINATION_JOINS_SQL = """
             LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
-            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
-            WHERE e.user_id = ?
+            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id"""
+
+
+def _filter_int(value: str) -> int | None:
+    """A query-string integer, or None when the value is not one.
+
+    ``str.isdigit()`` is not a safe pre-check: it is True for characters
+    ``int()`` rejects ("²", "①"), so gating on it 500s the page on
+    ``?feed=²`` — exactly the malformed input the filters promise to ignore.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_destination_filter(value: str) -> tuple[str | None, int | None]:
+    """Parse a ``"<type>:<id>"`` destination filter from the query string.
+
+    Anything malformed — unknown type, non-numeric id, empty value — is
+    dropped and the page renders unfiltered rather than 400ing: a stale
+    bookmark or a destination that has since been removed should still show
+    history, not an error.
+    """
+    dest_type, _, raw_id = (value or "").partition(":")
+    dest_id = _filter_int(raw_id)
+    if dest_type in DESTINATION_TABLES_BY_TYPE and dest_id is not None:
+        return dest_type, dest_id
+    return None, None
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request, feed: str = "", account: str = ""):
+    """Post history, newest first, optionally filtered by feed and destination.
+
+    Both filters are applied in SQL, before the LIMIT (issue #16). Narrowing
+    the already-truncated page client-side would only ever search the newest
+    100 rows across every feed — the exact case where a per-feed view is
+    wanted is the one it could not answer.
+
+    The dropdown options come from rows that actually exist in this user's
+    history, so a filter can never select an empty result, and they ignore the
+    active filter so choosing one does not remove the others.
+    """
+    uid = current_user_id(request)
+    feed_id = _filter_int(feed)
+    dest_type, dest_id = _parse_destination_filter(account)
+
+    where = ["e.user_id = ?"]
+    params: list = [uid]
+    if feed_id is not None:
+        where.append("e.feed_id = ?")
+        params.append(feed_id)
+    if dest_type is not None:
+        where.append("e.destination_type = ?")
+        where.append("e.destination_id = ?")
+        params.extend([dest_type, dest_id])
+
+    with get_db() as db:
+        posts = db.execute(f"""
+            SELECT pi.*, f.name as feed_name,
+                   {_HISTORY_ACCOUNT_LABEL_SQL} as account_name,
+                   {_HISTORY_ACCOUNT_INSTANCE_SQL} as instance
+            FROM posted_items pi
+            JOIN echoes e ON pi.echo_id = e.id
+            JOIN feeds f ON e.feed_id = f.id
+            {_HISTORY_DESTINATION_JOINS_SQL}
+            WHERE {" AND ".join(where)}
             ORDER BY pi.posted_at DESC
             LIMIT 100
+        """, tuple(params)).fetchall()
+        feed_options = db.execute("""
+            SELECT DISTINCT f.id as id, f.name as name
+            FROM posted_items pi
+            JOIN echoes e ON pi.echo_id = e.id
+            JOIN feeds f ON e.feed_id = f.id
+            WHERE e.user_id = ?
+            ORDER BY f.name
         """, (uid,)).fetchall()
-    return render("history.html", request, posts=posts)
+        destination_rows = db.execute(f"""
+            SELECT DISTINCT e.destination_type as destination_type,
+                   e.destination_id as destination_id,
+                   {_HISTORY_ACCOUNT_LABEL_SQL} as account_name
+            FROM posted_items pi
+            JOIN echoes e ON pi.echo_id = e.id
+            {_HISTORY_DESTINATION_JOINS_SQL}
+            WHERE e.user_id = ?
+            ORDER BY 3
+        """, (uid,)).fetchall()
+    # A destination that has been disconnected leaves history rows behind with
+    # nothing left to join to, so label those by type and id instead of
+    # dropping them — otherwise their rows become unfilterable.
+    destination_options = [
+        {
+            "value": f"{row['destination_type']}:{row['destination_id']}",
+            "label": row["account_name"]
+            or f"{row['destination_type']} #{row['destination_id']} (removed)",
+        }
+        for row in destination_rows
+    ]
+    return render(
+        "history.html",
+        request,
+        posts=posts,
+        feed_options=feed_options,
+        destination_options=destination_options,
+        filters={
+            "feed": str(feed_id) if feed_id is not None else "",
+            "account": f"{dest_type}:{dest_id}" if dest_type is not None else "",
+        },
+        filtered=feed_id is not None or dest_type is not None,
+    )
 
 
 @app.get("/howto", response_class=HTMLResponse)

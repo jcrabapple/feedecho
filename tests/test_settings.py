@@ -1,4 +1,4 @@
-"""Tests for the settings module and FEEDCHO_MODE flag."""
+"""Tests for the settings module and FEEDECHO_MODE flag."""
 
 import os
 import importlib
@@ -11,8 +11,11 @@ def _reload_settings():
 
 
 def _clean_env(monkeypatch):
+    # Both spellings: an ambient legacy FEEDCHO_* variable is still honoured
+    # by settings.env() (issue #15), so leaving one set would defeat every
+    # "unset means default" assertion below.
     for key in list(os.environ):
-        if key.startswith("FEEDCHO_"):
+        if key.startswith(("FEEDECHO_", "FEEDCHO_")):
             monkeypatch.delenv(key)
 
 
@@ -24,13 +27,13 @@ class TestModeFlag:
         assert s.MULTI is False
 
     def test_multi_mode_flag(self, monkeypatch):
-        monkeypatch.setenv("FEEDCHO_MODE", "multi")
+        monkeypatch.setenv("FEEDECHO_MODE", "multi")
         s = _reload_settings()
         assert s.MODE == "multi"
         assert s.MULTI is True
 
     def test_invalid_mode_raises(self, monkeypatch):
-        monkeypatch.setenv("FEEDCHO_MODE", "bogus")
+        monkeypatch.setenv("FEEDECHO_MODE", "bogus")
         import pytest
 
         with pytest.raises(ValueError):
@@ -47,12 +50,12 @@ class TestModeFlag:
 
 class TestEnvPassthrough:
     def test_db_path_env(self, monkeypatch):
-        monkeypatch.setenv("FEEDCHO_DB_PATH", "/tmp/custom-feedecho.db")
+        monkeypatch.setenv("FEEDECHO_DB_PATH", "/tmp/custom-feedecho.db")
         s = _reload_settings()
         assert str(s.DB_PATH) == "/tmp/custom-feedecho.db"
 
     def test_auth_token_env(self, monkeypatch):
-        monkeypatch.setenv("FEEDCHO_AUTH_TOKEN", "sekret")
+        monkeypatch.setenv("FEEDECHO_AUTH_TOKEN", "sekret")
         s = _reload_settings()
         assert s.AUTH_TOKEN == "sekret"
 
@@ -64,13 +67,13 @@ class TestEnvPassthrough:
 
     def test_backdated_enabled(self, monkeypatch):
         _clean_env(monkeypatch)
-        monkeypatch.setenv("FEEDCHO_ALLOW_BACKDATED_ENTRIES", "1")
+        monkeypatch.setenv("FEEDECHO_ALLOW_BACKDATED_ENTRIES", "1")
         s = _reload_settings()
         assert s.ALLOW_BACKDATED_ENTRIES is True
 
     def test_backdated_custom_days(self, monkeypatch):
         _clean_env(monkeypatch)
-        monkeypatch.setenv("FEEDCHO_MAX_BACKDATED_ENTRY_DAYS", "7")
+        monkeypatch.setenv("FEEDECHO_MAX_BACKDATED_ENTRY_DAYS", "7")
         s = _reload_settings()
         assert s.MAX_BACKDATED_ENTRY_DAYS == 7
 
@@ -94,7 +97,7 @@ class TestValidateConfig:
         self._set_multi(monkeypatch, secret="x" * 40)
         import pytest
 
-        with pytest.raises(RuntimeError, match="FEEDCHO_DATABASE_URL"):
+        with pytest.raises(RuntimeError, match="FEEDECHO_DATABASE_URL"):
             settings.validate_config()
 
     def test_multi_without_url_allowed_via_fallback_flag(self, monkeypatch):
@@ -105,7 +108,7 @@ class TestValidateConfig:
         self._set_multi(monkeypatch, url="postgresql://x/x")
         import pytest
 
-        with pytest.raises(RuntimeError, match="FEEDCHO_SESSION_SECRET"):
+        with pytest.raises(RuntimeError, match="FEEDECHO_SESSION_SECRET"):
             settings.validate_config()
 
     def test_multi_with_short_session_secret_raises(self, monkeypatch):

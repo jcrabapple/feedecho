@@ -1,6 +1,6 @@
 """Postgres dialect tests: exercise the real PG path.
 
-Gated on FEEDCHO_TEST_PG_URL (a postgres:// URL). Skipped locally and in
+Gated on FEEDECHO_TEST_PG_URL (a postgres:// URL). Skipped locally and in
 the single/multi CI jobs; runs in the dedicated PG CI job with a
 postgres:17-alpine service container.
 """
@@ -13,12 +13,12 @@ import pytest
 import database
 import settings
 
-TEST_PG_URL = os.environ.get("FEEDCHO_TEST_PG_URL", "")
+TEST_PG_URL = os.environ.get("FEEDECHO_TEST_PG_URL", "")
 
 pytestmark = pytest.mark.pg
 
 requires_pg = pytest.mark.skipif(
-    not TEST_PG_URL, reason="FEEDCHO_TEST_PG_URL not set; PG tests are CI-gated"
+    not TEST_PG_URL, reason="FEEDECHO_TEST_PG_URL not set; PG tests are CI-gated"
 )
 
 
@@ -450,6 +450,88 @@ class TestAppOnPostgres:
         )
         assert dash.status_code == 200
         assert "Queued" in dash.text
+
+    def test_history_filters_on_pg(self, pg_env, monkeypatch):
+        """The filter queries (issue #16) must hold on Postgres too.
+
+        They add SELECT DISTINCT plus ORDER BY on an output-column position
+        over the destination CASE expression — sqlite tolerates shapes PG
+        rejects, so the filtered page and both dropdowns are exercised here.
+        """
+        from fastapi.testclient import TestClient
+
+        import auth as auth_mod
+        import security
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash)"
+                " VALUES (9, 'pg@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (1, 'PG Alpha', 'https://example.com/alpha.xml', 9)"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (2, 'PG Beta', 'https://example.com/beta.xml', 9)"
+            )
+            db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token,"
+                " user_id) VALUES (1, 'Masto', 'alice', 'https://mastodon.example',"
+                " 'token', 9)"
+            )
+            db.execute(
+                "INSERT INTO bluesky_accounts (id, name, handle, app_password, pds,"
+                " user_id) VALUES (1, 'Bsky', 'alice.bsky.social', 'pw',"
+                " 'https://bsky.social', 9)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id,"
+                " template, user_id) VALUES (1, 1, 'mastodon', 1, '{{ title }}', 9)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id,"
+                " template, user_id) VALUES (2, 2, 'mastodon', 1, '{{ title }}', 9)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id,"
+                " template, user_id) VALUES (3, 1, 'bluesky', 1, '{{ title }}', 9)"
+            )
+            for echo_id, title in ((1, "PG Alpha Masto"), (2, "PG Beta Masto"), (3, "PG Alpha Bsky")):
+                db.execute(
+                    "INSERT INTO posted_items (echo_id, item_id, item_title, status)"
+                    f" VALUES ({echo_id}, 'pg-item-{echo_id}', '{title}', 'success')"
+                )
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(9, "pg@example.com"))
+            unfiltered = c.get("/history")
+            by_feed = c.get("/history?feed=1")
+            by_dest = c.get("/history?account=bluesky:1")
+            both = c.get("/history?feed=1&account=mastodon:1")
+            bogus = c.get("/history?feed=nope&account=nope:nope")
+        assert unfiltered.status_code == 200
+        # Both dropdowns populated from history rows.
+        assert "PG Alpha" in unfiltered.text and "PG Beta" in unfiltered.text
+        assert "@alice@mastodon.example" in unfiltered.text
+        assert "@alice.bsky.social" in unfiltered.text
+        assert by_feed.status_code == 200
+        assert "PG Alpha Masto" in by_feed.text
+        assert "PG Alpha Bsky" in by_feed.text
+        assert "PG Beta Masto" not in by_feed.text
+        assert by_dest.status_code == 200
+        assert "PG Alpha Bsky" in by_dest.text
+        assert "PG Alpha Masto" not in by_dest.text
+        assert both.status_code == 200
+        assert "PG Alpha Masto" in both.text
+        assert "PG Alpha Bsky" not in both.text
+        assert bogus.status_code == 200
+        assert "PG Beta Masto" in bogus.text
 
 
 @requires_pg

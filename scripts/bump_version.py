@@ -41,6 +41,11 @@ HISTORICAL = {
     "Dockerfile",
     "docker-entrypoint.sh",
     "tests/test_review_fixes.py",
+    # These name the release a past change shipped in ("misspelled through
+    # v1.31.0", issue #15) — a version here is a fact about history, not a
+    # target to rewrite.
+    "settings.py",
+    "tests/test_env_prefix.py",
 }
 
 

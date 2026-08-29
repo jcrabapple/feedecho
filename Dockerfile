@@ -19,7 +19,7 @@ COPY . .
 
 # SQLite lives on a volume so data survives container rebuilds
 VOLUME /app/data
-ENV FEEDCHO_DB_PATH=/app/data/feedecho.db
+ENV FEEDECHO_DB_PATH=/app/data/feedecho.db
 
 # The application runs as uid 10001, never as root: it parses untrusted remote
 # feed content all day. There is deliberately no USER directive — the

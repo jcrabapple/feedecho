@@ -18,7 +18,7 @@ Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/s
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
 - **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, and Matrix rooms
 - **Per-feed poll intervals** — each feed checked on its own schedule
-- **Post history** with success/failure tracking and error messages
+- **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
@@ -49,8 +49,8 @@ Pre-built multi-arch images (amd64 + arm64) are published to GHCR on every relea
 mkdir feedecho && cd feedecho
 
 cat > .env <<'EOF'
-FEEDCHO_AUTH_TOKEN=change-me-to-a-long-random-string
-FEEDCHO_CALLBACK_URL=http://localhost:8453/oauth/callback
+FEEDECHO_AUTH_TOKEN=change-me-to-a-long-random-string
+FEEDECHO_CALLBACK_URL=http://localhost:8453/oauth/callback
 EOF
 
 curl -O https://raw.githubusercontent.com/jcrabapple/feedecho/master/docker-compose.yml
@@ -66,14 +66,14 @@ cd feedecho
 
 # Set your access token (required) and public URL (for Mastodon OAuth)
 cat > .env <<'EOF'
-FEEDCHO_AUTH_TOKEN=change-me-to-a-long-random-string
-FEEDCHO_CALLBACK_URL=http://localhost:8453/oauth/callback
+FEEDECHO_AUTH_TOKEN=change-me-to-a-long-random-string
+FEEDECHO_CALLBACK_URL=http://localhost:8453/oauth/callback
 EOF
 
 docker compose up -d
 ```
 
-Open `http://localhost:8453` and log in with your `FEEDCHO_AUTH_TOKEN`.
+Open `http://localhost:8453` and log in with your `FEEDECHO_AUTH_TOKEN`.
 
 Data lives in the `feedecho-data` volume (`/app/data` in the container) — your feeds, accounts, and history survive `docker compose up -d --build` rebuilds.
 
@@ -84,8 +84,8 @@ docker build -t feedecho .
 docker run -d --name feedecho \
   -p 8453:8453 \
   -v feedecho-data:/app/data \
-  -e FEEDCHO_AUTH_TOKEN=change-me-to-a-long-random-string \
-  -e FEEDCHO_CALLBACK_URL=http://localhost:8453/oauth/callback \
+  -e FEEDECHO_AUTH_TOKEN=change-me-to-a-long-random-string \
+  -e FEEDECHO_CALLBACK_URL=http://localhost:8453/oauth/callback \
   feedecho
 ```
 
@@ -93,16 +93,24 @@ docker run -d --name feedecho \
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `FEEDCHO_AUTH_TOKEN` | yes (for any real deployment) | Shared-secret login for the web UI. If unset, auth is **disabled** — only safe on localhost. |
-| `FEEDCHO_CALLBACK_URL` | for Mastodon OAuth | Public callback URL, e.g. `https://feedecho.example.com/oauth/callback`. Must match the URL reachable by your browser. Derived from `FEEDCHO_BASE_URL` when unset. |
-| `FEEDCHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. |
-| `FEEDCHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDCHO_BASE_URL`, then to the project repo. |
-| `FEEDCHO_DB_PATH` | no | SQLite path (default `/app/data/feedecho.db` in Docker, `./feedecho.db` otherwise) |
-| `FEEDCHO_STATE_SECRET` | no | OAuth state signing secret (defaults to `FEEDCHO_AUTH_TOKEN`) |
-| `FEEDCHO_ALLOW_BACKDATED_ENTRIES` | no | Set to `1` to deliver feed items that appear positionally older than the cursor but whose publish date is within `FEEDCHO_MAX_BACKDATED_ENTRY_DAYS` of now. Off by default. |
-| `FEEDCHO_MAX_BACKDATED_ENTRY_DAYS` | no | How many days back to accept backdated entries (default `3`). Only consulted when `FEEDCHO_ALLOW_BACKDATED_ENTRIES=1`. |
+| `FEEDECHO_AUTH_TOKEN` | yes (for any real deployment) | Shared-secret login for the web UI. If unset, auth is **disabled** — only safe on localhost. |
+| `FEEDECHO_CALLBACK_URL` | for Mastodon OAuth | Public callback URL, e.g. `https://feedecho.example.com/oauth/callback`. Must match the URL reachable by your browser. Derived from `FEEDECHO_BASE_URL` when unset. |
+| `FEEDECHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. |
+| `FEEDECHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDECHO_BASE_URL`, then to the project repo. |
+| `FEEDECHO_DB_PATH` | no | SQLite path (default `/app/data/feedecho.db` in Docker, `./feedecho.db` otherwise) |
+| `FEEDECHO_STATE_SECRET` | no | OAuth state signing secret (defaults to `FEEDECHO_AUTH_TOKEN`) |
+| `FEEDECHO_ALLOW_BACKDATED_ENTRIES` | no | Set to `1` to deliver feed items that appear positionally older than the cursor but whose publish date is within `FEEDECHO_MAX_BACKDATED_ENTRY_DAYS` of now. Off by default. |
+| `FEEDECHO_MAX_BACKDATED_ENTRY_DAYS` | no | How many days back to accept backdated entries (default `3`). Only consulted when `FEEDECHO_ALLOW_BACKDATED_ENTRIES=1`. |
 
-Behind a reverse proxy (nginx, Caddy, Traefik), point the proxy at port `8453` and set `FEEDCHO_CALLBACK_URL` to the public HTTPS URL.
+Behind a reverse proxy (nginx, Caddy, Traefik), point the proxy at port `8453` and set `FEEDECHO_CALLBACK_URL` to the public HTTPS URL.
+
+#### Upgrading from `FEEDCHO_*`
+
+Every variable used to be spelled `FEEDCHO_` (one `E`) — a typo. The old names
+still work, so nothing breaks on upgrade: FeedEcho prefers the `FEEDECHO_` name
+when both are set, and logs a warning at startup naming each old name it fell
+back to. Rename them at your convenience; support for the old spelling will be
+dropped in a future release.
 
 ### From source
 
@@ -112,7 +120,7 @@ cd feedecho
 python -m venv .venv
 source .venv/bin/activate
 pip install fastapi "uvicorn[standard]" jinja2 python-multipart feedparser httpx apscheduler
-FEEDCHO_AUTH_TOKEN=your-token python -m uvicorn app:app --host 0.0.0.0 --port 8453
+FEEDECHO_AUTH_TOKEN=your-token python -m uvicorn app:app --host 0.0.0.0 --port 8453
 ```
 
 ### NixOS
@@ -234,7 +242,7 @@ This prevents pointing FeedEcho at cloud metadata endpoints, internal services, 
 
 ### Web UI authentication
 
-FeedEcho supports optional shared-secret authentication via the `FEEDCHO_AUTH_TOKEN` environment variable:
+FeedEcho supports optional shared-secret authentication via the `FEEDECHO_AUTH_TOKEN` environment variable:
 
 - **If set**: all requests must include the token as either a cookie (set by the login page at `/login`) or an `X-Auth-Token` header (for API/programmatic access). Unauthenticated browser requests are redirected to `/login`; API requests get 401.
 - **If unset**: auth is disabled (original behavior). The app is open to anyone who can reach the port.
@@ -244,15 +252,15 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 ### OAuth flow
 
 - The OAuth state parameter is **HMAC-signed and verified with a constant-time comparison**. The signature covers both the nonce and the instance, preventing CSRF and tampering with the instance field. A forged state token without the secret is rejected.
-- The callback URL is configurable via the `FEEDCHO_CALLBACK_URL` environment variable. If unset, it is derived from `FEEDCHO_BASE_URL` (`<base>/oauth/callback`), and only falls back to `https://feedecho.example.com/oauth/callback` when neither is set. Self-hosters should set one of the two.
-- Mastodon shows an application name on every post, linked to the `website` recorded when FeedEcho registered its OAuth app on your instance. That website is `FEEDCHO_APP_WEBSITE` if set, otherwise `FEEDCHO_BASE_URL`, otherwise the project repo. Both the website and the callback URL are stored alongside the cached client credentials in `oauth_apps`, and changing either re-registers the app on the next connect — Mastodon's API has no way to edit an existing registration, so a drifted callback URL would otherwise fail as a redirect mismatch. **Already-connected accounts keep the old link** — their access token is bound to the old app registration, so reconnect the account to update what appears on new posts.
+- The callback URL is configurable via the `FEEDECHO_CALLBACK_URL` environment variable. If unset, it is derived from `FEEDECHO_BASE_URL` (`<base>/oauth/callback`), and only falls back to `https://feedecho.example.com/oauth/callback` when neither is set. Self-hosters should set one of the two.
+- Mastodon shows an application name on every post, linked to the `website` recorded when FeedEcho registered its OAuth app on your instance. That website is `FEEDECHO_APP_WEBSITE` if set, otherwise `FEEDECHO_BASE_URL`, otherwise the project repo. Both the website and the callback URL are stored alongside the cached client credentials in `oauth_apps`, and changing either re-registers the app on the next connect — Mastodon's API has no way to edit an existing registration, so a drifted callback URL would otherwise fail as a redirect mismatch. **Already-connected accounts keep the old link** — their access token is bound to the old app registration, so reconnect the account to update what appears on new posts.
 
 ### Secrets handling
 
 - **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, and OAuth client secrets** are stored in the local database, unencrypted at rest. If an attacker gains filesystem access to the server, they can read them. All of these credentials are scoped (app passwords and platform tokens can be revoked individually at the source platform without touching your main passwords).
 - **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
-- The `FEEDCHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
+- The `FEEDECHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
 
 ### Input handling
 
@@ -264,16 +272,16 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 ### Network
 
 - All outbound HTTP uses httpx with a 30-second timeout. FeedEcho makes requests to: the feed URL (user-provided), the Mastodon instance API (user-provided), micro.blog's Micropub endpoints (via your token), your Matrix homeserver (user-provided), and the SMTP server (admin-configured). No telemetry, no phone-home, no analytics.
-- Even without `FEEDCHO_AUTH_TOKEN`, FeedEcho is designed to run behind a reverse proxy or tunnel (Cloudflare Tunnel, nginx, etc.) with access control at the network layer. The built-in auth is a lightweight fallback for when a reverse proxy isn't available.
+- Even without `FEEDECHO_AUTH_TOKEN`, FeedEcho is designed to run behind a reverse proxy or tunnel (Cloudflare Tunnel, nginx, etc.) with access control at the network layer. The built-in auth is a lightweight fallback for when a reverse proxy isn't available.
 
 ### Configuration
 
 | Environment variable | Purpose | Default |
 |---------------------|---------|---------|
-| `FEEDCHO_AUTH_TOKEN` | Shared-secret auth token (enables login page + API auth, also signs OAuth state) | Unset (auth disabled) |
-| `FEEDCHO_CALLBACK_URL` | Public URL for OAuth callback | `<FEEDCHO_BASE_URL>/oauth/callback`, else `https://feedecho.example.com/oauth/callback` |
-| `FEEDCHO_APP_WEBSITE` | Website registered with the Mastodon OAuth app (the link on posts) | `FEEDCHO_BASE_URL`, else `https://github.com/jcrabapple/feedecho` |
-| `FEEDCHO_DB_PATH` | Path to SQLite database | `./feedecho.db` |
+| `FEEDECHO_AUTH_TOKEN` | Shared-secret auth token (enables login page + API auth, also signs OAuth state) | Unset (auth disabled) |
+| `FEEDECHO_CALLBACK_URL` | Public URL for OAuth callback | `<FEEDECHO_BASE_URL>/oauth/callback`, else `https://feedecho.example.com/oauth/callback` |
+| `FEEDECHO_APP_WEBSITE` | Website registered with the Mastodon OAuth app (the link on posts) | `FEEDECHO_BASE_URL`, else `https://github.com/jcrabapple/feedecho` |
+| `FEEDECHO_DB_PATH` | Path to SQLite database | `./feedecho.db` |
 
 ### Operator hardening notes
 
@@ -319,11 +327,11 @@ ingress:
 EOF
 ```
 
-If using OAuth, set `FEEDCHO_CALLBACK_URL` to your public URL:
+If using OAuth, set `FEEDECHO_CALLBACK_URL` to your public URL:
 
 ```bash
-export FEEDCHO_CALLBACK_URL="https://feedecho.yourdomain.com/oauth/callback"
-export FEEDCHO_AUTH_TOKEN="your-secret-token"  # optional: enable web UI auth
+export FEEDECHO_CALLBACK_URL="https://feedecho.yourdomain.com/oauth/callback"
+export FEEDECHO_AUTH_TOKEN="your-secret-token"  # optional: enable web UI auth
 ```
 
 ## Hosted version
@@ -338,7 +346,7 @@ self-hosted distribution.
 
 ```bash
 source .venv/bin/activate
-FEEDCHO_MODE=single python -m pytest tests/ -v
+FEEDECHO_MODE=single python -m pytest tests/ -v
 ```
 
 CI additionally runs a multi-mode suite and a live Postgres dialect suite on every push.

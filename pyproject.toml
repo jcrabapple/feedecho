@@ -34,8 +34,8 @@ path = "_version.py"
 
 [tool.pytest.ini_options]
 markers = [
-    "multi: tests exercising multi-tenant mode (FEEDCHO_MODE=multi)",
-    "pg: tests requiring a live Postgres (FEEDCHO_TEST_PG_URL); skipped otherwise",
+    "multi: tests exercising multi-tenant mode (FEEDECHO_MODE=multi)",
+    "pg: tests requiring a live Postgres (FEEDECHO_TEST_PG_URL); skipped otherwise",
 ]
 
 [tool.hatch.build.targets.wheel]

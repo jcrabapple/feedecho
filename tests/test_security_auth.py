@@ -78,7 +78,7 @@ class TestSessionSecret:
         monkeypatch.setattr(settings, "MULTI", True)
         monkeypatch.setattr(settings, "SESSION_SECRET", "")
         monkeypatch.setattr(settings, "AUTH_TOKEN", None)
-        with pytest.raises(RuntimeError, match="FEEDCHO_SESSION_SECRET"):
+        with pytest.raises(RuntimeError, match="FEEDECHO_SESSION_SECRET"):
             security.session_secret()
 
     def test_multi_mode_gate_not_bypassed_by_auth_token(self, monkeypatch):
@@ -87,7 +87,7 @@ class TestSessionSecret:
         monkeypatch.setattr(settings, "MULTI", True)
         monkeypatch.setattr(settings, "SESSION_SECRET", "")
         monkeypatch.setattr(settings, "AUTH_TOKEN", "carried-over-token")
-        with pytest.raises(RuntimeError, match="FEEDCHO_SESSION_SECRET"):
+        with pytest.raises(RuntimeError, match="FEEDECHO_SESSION_SECRET"):
             security.session_secret()
 
     def test_multi_mode_with_secret(self, monkeypatch):

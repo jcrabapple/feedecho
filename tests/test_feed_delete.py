@@ -27,7 +27,7 @@ def client(temp_db, monkeypatch):
     import app as app_module
 
     # Shared-secret auth must not leak in from the ambient environment —
-    # otherwise a FEEDCHO_AUTH_TOKEN in the shell breaks every request here.
+    # otherwise a FEEDECHO_AUTH_TOKEN in the shell breaks every request here.
     monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
     return TestClient(app_module.app)
 

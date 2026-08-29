@@ -94,36 +94,36 @@ class TestAppWebsiteResolution:
         self, monkeypatch, restore_settings
     ):
         for key in list(os.environ):
-            if key.startswith("FEEDCHO_"):
+            if key.startswith("FEEDECHO_"):
                 monkeypatch.delenv(key)
         s = importlib.reload(settings)
         assert s.APP_WEBSITE == "https://github.com/jcrabapple/feedecho"
         assert "example.com" not in s.APP_WEBSITE
 
     def test_base_url_wins_over_repo_fallback(self, monkeypatch, restore_settings):
-        monkeypatch.setenv("FEEDCHO_BASE_URL", "https://echo.abhinavsarkar.net/")
-        monkeypatch.delenv("FEEDCHO_APP_WEBSITE", raising=False)
+        monkeypatch.setenv("FEEDECHO_BASE_URL", "https://echo.abhinavsarkar.net/")
+        monkeypatch.delenv("FEEDECHO_APP_WEBSITE", raising=False)
         s = importlib.reload(settings)
         assert s.APP_WEBSITE == "https://echo.abhinavsarkar.net"
 
     def test_explicit_override_wins_over_base_url(self, monkeypatch, restore_settings):
-        monkeypatch.setenv("FEEDCHO_BASE_URL", "https://echo.example.org")
-        monkeypatch.setenv("FEEDCHO_APP_WEBSITE", "https://abhinavsarkar.net/feedecho")
+        monkeypatch.setenv("FEEDECHO_BASE_URL", "https://echo.example.org")
+        monkeypatch.setenv("FEEDECHO_APP_WEBSITE", "https://abhinavsarkar.net/feedecho")
         s = importlib.reload(settings)
         assert s.APP_WEBSITE == "https://abhinavsarkar.net/feedecho"
 
     def test_callback_url_derives_from_base_url(self, monkeypatch, restore_settings):
-        monkeypatch.setenv("FEEDCHO_BASE_URL", "https://echo.abhinavsarkar.net/")
-        monkeypatch.delenv("FEEDCHO_CALLBACK_URL", raising=False)
+        monkeypatch.setenv("FEEDECHO_BASE_URL", "https://echo.abhinavsarkar.net/")
+        monkeypatch.delenv("FEEDECHO_CALLBACK_URL", raising=False)
         s = importlib.reload(settings)
         assert s.CALLBACK_URL == "https://echo.abhinavsarkar.net/oauth/callback"
 
     def test_whitespace_base_url_is_ignored(self, monkeypatch, restore_settings):
         """A whitespace-only base URL is truthy; it must not become the link."""
         for key in list(os.environ):
-            if key.startswith("FEEDCHO_"):
+            if key.startswith("FEEDECHO_"):
                 monkeypatch.delenv(key)
-        monkeypatch.setenv("FEEDCHO_BASE_URL", "   ")
+        monkeypatch.setenv("FEEDECHO_BASE_URL", "   ")
         s = importlib.reload(settings)
         assert s.APP_WEBSITE == "https://github.com/jcrabapple/feedecho"
         assert s.CALLBACK_URL == "https://feedecho.example.com/oauth/callback"

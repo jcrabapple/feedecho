@@ -14,13 +14,13 @@ services:
       # Access token for the web UI. Required: an empty value disables auth
       # entirely, so compose refuses to start rather than exposing the
       # instance because of a missing .env entry.
-      - FEEDCHO_AUTH_TOKEN=${FEEDCHO_AUTH_TOKEN:?set FEEDCHO_AUTH_TOKEN in .env (an empty value would leave the UI unauthenticated)}
+      - FEEDECHO_AUTH_TOKEN=${FEEDECHO_AUTH_TOKEN:?set FEEDECHO_AUTH_TOKEN in .env (an empty value would leave the UI unauthenticated)}
       # Public base URL — required for Mastodon OAuth callbacks
       # e.g. https://feedecho.example.com/oauth/callback
-      - FEEDCHO_CALLBACK_URL=${FEEDCHO_CALLBACK_URL:-http://localhost:8453/oauth/callback}
+      - FEEDECHO_CALLBACK_URL=${FEEDECHO_CALLBACK_URL:-http://localhost:8453/oauth/callback}
       # Link shown behind the "FeedEcho" application name on Mastodon posts.
       # Defaults to the project repo; set this to your own install's URL.
-      - FEEDCHO_APP_WEBSITE=${FEEDCHO_APP_WEBSITE:-}
+      - FEEDECHO_APP_WEBSITE=${FEEDECHO_APP_WEBSITE:-}
 
 volumes:
   feedecho-data:

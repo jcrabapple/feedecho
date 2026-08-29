@@ -110,10 +110,10 @@ in {
       wantedBy = [ "multi-user.target" ];
 
       environment = {
-        FEEDCHO_DB_PATH = "${cfg.dataDir}/feedecho.db";
-        FEEDCHO_CALLBACK_URL = cfg.callbackUrl;
+        FEEDECHO_DB_PATH = "${cfg.dataDir}/feedecho.db";
+        FEEDECHO_CALLBACK_URL = cfg.callbackUrl;
       } // lib.optionalAttrs (cfg.appWebsite != "") {
-        FEEDCHO_APP_WEBSITE = cfg.appWebsite;
+        FEEDECHO_APP_WEBSITE = cfg.appWebsite;
       };
 
       serviceConfig = {
@@ -180,7 +180,7 @@ in {
       # consolidated runtime env. Put both on PYTHONPATH so the "app"
       # import resolves.
       script = ''
-        export FEEDCHO_AUTH_TOKEN=$(cat "$CREDENTIALS_DIRECTORY/auth_token")
+        export FEEDECHO_AUTH_TOKEN=$(cat "$CREDENTIALS_DIRECTORY/auth_token")
         export PYTHONPATH="${pythonSitePackages}:$PYTHONPATH"
         exec ${uvicornBin} app:app --host 0.0.0.0 --port ${toString cfg.port}
       '';

@@ -102,14 +102,14 @@ def token_hash(token: str) -> str:
 def session_secret() -> bytes:
     """The master HMAC key for session cookies.
 
-    Multi mode requires FEEDCHO_SESSION_SECRET explicitly — the gate
-    fires even when FEEDCHO_AUTH_TOKEN is set, so a carried-over
+    Multi mode requires FEEDECHO_SESSION_SECRET explicitly — the gate
+    fires even when FEEDECHO_AUTH_TOKEN is set, so a carried-over
     single-mode env can never mint multi-tenant sessions. Single mode
-    falls back to FEEDCHO_AUTH_TOKEN (sessions are unused there).
+    falls back to FEEDECHO_AUTH_TOKEN (sessions are unused there).
     """
     if settings.MULTI and not settings.SESSION_SECRET:
         raise RuntimeError(
-            "FEEDCHO_SESSION_SECRET must be set when FEEDCHO_MODE=multi"
+            "FEEDECHO_SESSION_SECRET must be set when FEEDECHO_MODE=multi"
         )
     key = settings.SESSION_SECRET or (settings.AUTH_TOKEN or "")
     return key.encode()

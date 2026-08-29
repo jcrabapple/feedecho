@@ -96,13 +96,13 @@ class TestLogLevelEnv:
         root.handlers = handlers
 
     def test_level_respected(self, monkeypatch):
-        monkeypatch.setenv("FEEDCHO_LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("FEEDECHO_LOG_LEVEL", "DEBUG")
         logging_setup._configured = False
         logging_setup.setup_logging()
         assert logging.getLogger().level == logging.DEBUG
 
     def test_bad_level_falls_back_to_info(self, monkeypatch):
-        monkeypatch.setenv("FEEDCHO_LOG_LEVEL", "VERBOSE")
+        monkeypatch.setenv("FEEDECHO_LOG_LEVEL", "VERBOSE")
         logging_setup._configured = False
         logging_setup.setup_logging()
         assert logging.getLogger().level == logging.INFO

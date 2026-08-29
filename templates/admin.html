@@ -138,8 +138,8 @@
     <h2>Invite codes</h2>
     <p class="hint">
         {% if invites_required %}Registration currently <strong>requires</strong> an invite code
-        (FEEDCHO_INVITES_REQUIRED=1).{% else %}Registration is currently <strong>open</strong>
-        (set FEEDCHO_INVITES_REQUIRED=1 to require codes).{% endif %}
+        (FEEDECHO_INVITES_REQUIRED=1).{% else %}Registration is currently <strong>open</strong>
+        (set FEEDECHO_INVITES_REQUIRED=1 to require codes).{% endif %}
         Each code works once. Revoke unused codes at any time.
     </p>
     {% if request.query_params.get('invites_created') %}

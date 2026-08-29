@@ -103,7 +103,7 @@ class TestPgConnectionMissingDriver:
 class TestMultiModeStartup:
     def test_multi_mode_without_url_runs_on_sqlite(self, monkeypatch, tmp_path):
         """Multi mode without a DATABASE_URL falls back to SQLite ONLY when
-        FEEDCHO_ALLOW_SQLITE_FALLBACK=1 (local dev/test posture); the
+        FEEDECHO_ALLOW_SQLITE_FALLBACK=1 (local dev/test posture); the
         startup gate in settings.validate_config enforces this."""
         monkeypatch.setattr(settings, "MULTI", True)
         monkeypatch.setattr(settings, "DATABASE_URL", "")

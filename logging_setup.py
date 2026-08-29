@@ -11,13 +11,14 @@ logger (root's filters never see child-logger records) and handler filters
 miss test capture handlers, so a factory is the only mechanism that reaches
 every record on every path.
 
-Configure with FEEDCHO_LOG_LEVEL (default INFO). Single mode behavior is
+Configure with FEEDECHO_LOG_LEVEL (default INFO). Single mode behavior is
 unchanged apart from the richer log format.
 """
 
 import contextvars
 import logging
-import os
+
+import settings
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(request_id)s]: %(message)s"
 
@@ -46,7 +47,9 @@ def setup_logging() -> None:
     global _configured
     if _configured:
         return
-    level_name = os.environ.get("FEEDCHO_LOG_LEVEL", "INFO").upper()
+    # settings.env() so the deprecated FEEDCHO_LOG_LEVEL spelling still works
+    # (issue #15); the deprecation notice itself comes from validate_config().
+    level_name = settings.env("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, None)
     if not isinstance(level, int):
         level = logging.INFO

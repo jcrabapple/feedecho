@@ -439,7 +439,7 @@ def init_db_sqlite() -> None:
             )
         """)
         # Single-tenant placeholder: all data belongs to user 1 when the
-        # app runs without accounts (FEEDCHO_MODE=single).
+        # app runs without accounts (FEEDECHO_MODE=single).
         db.execute("INSERT OR IGNORE INTO users (id, email) VALUES (1, 'local')")
 
         # Owned tables carry user_id. Existing single-tenant databases

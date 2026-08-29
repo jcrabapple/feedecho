@@ -616,9 +616,9 @@ class TestOauthStateSecretPrecedence:
 
     def test_state_secret_beats_auth_token(self, monkeypatch, restore_oauth):
         self._reload(monkeypatch, {
-            "FEEDCHO_MODE": "single",
-            "FEEDCHO_AUTH_TOKEN": "auth-token-value",
-            "FEEDCHO_STATE_SECRET": "state-secret-value",
+            "FEEDECHO_MODE": "single",
+            "FEEDECHO_AUTH_TOKEN": "auth-token-value",
+            "FEEDECHO_STATE_SECRET": "state-secret-value",
         })
         import oauth
 
@@ -628,9 +628,9 @@ class TestOauthStateSecretPrecedence:
         self, monkeypatch, restore_oauth,
     ):
         self._reload(monkeypatch, {
-            "FEEDCHO_MODE": "single",
-            "FEEDCHO_AUTH_TOKEN": "auth-token-value",
-            "FEEDCHO_STATE_SECRET": None,
+            "FEEDECHO_MODE": "single",
+            "FEEDECHO_AUTH_TOKEN": "auth-token-value",
+            "FEEDECHO_STATE_SECRET": None,
         })
         import oauth
 

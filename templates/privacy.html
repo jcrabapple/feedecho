@@ -14,7 +14,7 @@
             <tr><td>Email address</td><td>Account identity, verification, password reset, and operational alerts about your feeds.</td></tr>
             <tr><td>Password</td><td>Stored only as a salted scrypt hash. Never in plain text.</td></tr>
             <tr><td>Feed URLs</td><td>The feeds you ask us to watch, and a cursor (last seen item) per feed so posts are not duplicated.</td></tr>
-            <tr><td>Destination credentials</td><td>Tokens, app passwords, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, email). Required to post on your behalf; nothing else is done with them.</td></tr>
+            <tr><td>Destination credentials</td><td>Tokens, app passwords, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, email). Required to post on your behalf; nothing else is done with them.</td></tr>
             <tr><td>Echo configuration</td><td>Your templates, filters, and delivery settings.</td></tr>
             <tr><td>Post history</td><td>Which feed items were delivered where, when, and with what outcome — needed for retries, duplicate prevention, and failure diagnosis.</td></tr>
             <tr><td>Server logs</td><td>Request paths, status codes, and timestamps for debugging and abuse prevention. Paths only — query strings (which could contain tokens) are never logged.</td></tr>
@@ -40,7 +40,7 @@
 <section>
     <h2>Who else sees data</h2>
     <ul>
-        <li><strong>Your connected platforms</strong> (Mastodon, Bluesky, micro.blog, your email provider) receive exactly the posts you configure — nothing else.</li>
+        <li><strong>Your connected platforms</strong> (Mastodon, Bluesky, micro.blog, your Matrix homeserver, your email provider) receive exactly the posts you configure — nothing else.</li>
         <li><strong>Email delivery</strong> for verification and password-reset mail goes through a transactional email provider; it processes the message (and your address as recipient) to deliver it.</li>
         <li><strong>Uptime monitoring</strong> periodically requests the public health endpoint from outside the server; it does not involve your account data.</li>
         <li>Nothing else, unless required by law.</li>
@@ -61,7 +61,7 @@
     <h2>Your controls</h2>
     <ul>
         <li>Delete individual feeds, connected accounts, or echoes from the dashboard at any time.</li>
-        <li>Revoke any destination token at its source platform (Mastodon, Bluesky, micro.blog settings) — we stop being able to post immediately.</li>
+        <li>Revoke any destination token at its source platform (Mastodon, Bluesky, micro.blog, or Matrix settings) — we stop being able to post immediately.</li>
         <li>Export your data: the dashboard shows your feeds, echoes, and full delivery history; anything else, ask the operator.</li>
         <li>Delete your account entirely: email <a href="mailto:support@feedecho.net">support@feedecho.net</a> from your account's address and it will be removed, including configuration and history, within a reasonable period.</li>
     </ul>

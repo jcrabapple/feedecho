@@ -62,6 +62,8 @@ class TestPostgresInit:
             "accounts",
             "email_accounts",
             "bluesky_accounts",
+            "microblog_accounts",
+            "matrix_accounts",
             "settings",
             "users",
             "posted_items",

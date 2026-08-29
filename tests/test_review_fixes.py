@@ -249,6 +249,14 @@ class TestNoBlockingCallsOnAsyncHandlers:
         "list_destinations",
         "post_status",
         "upload_media",
+        "discover_base_url",
+        "whoami",
+        "resolve_room",
+        "joined_rooms",
+        "send_event",
+        "send_message",
+        "send_image",
+        "matrix_connect",
     }
 
     def test_no_async_route_performs_blocking_io(self):

@@ -51,6 +51,15 @@ from microblog import (
     list_destinations as microblog_list_destinations,
     test_connection as test_microblog_connection,
 )
+from matrix import (
+    MatrixAuthError,
+    MatrixError,
+    MatrixPermissionError,
+    connect as matrix_connect,
+    normalize_homeserver as matrix_normalize_homeserver,
+    normalize_room as matrix_normalize_room,
+    test_connection as test_matrix_connection,
+)
 from scheduler import start_scheduler, stop_scheduler, check_feed
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
@@ -117,6 +126,19 @@ def _safe_url(value) -> str:
 jinja.filters["iso_utc"] = _iso_utc
 jinja.filters["utc_text"] = _utc_text
 jinja.filters["safe_url"] = _safe_url
+
+# Every table that holds one connected destination (one stored credential and
+# one outbound posting path). Plan caps and usage counts sum across ALL of
+# them, so a new destination type must be added here or it silently escapes
+# the quota. Keyed by the echoes.destination_type value it belongs to.
+DESTINATION_TABLES_BY_TYPE = {
+    "mastodon": "accounts",
+    "email": "email_accounts",
+    "bluesky": "bluesky_accounts",
+    "microblog": "microblog_accounts",
+    "matrix": "matrix_accounts",
+}
+DESTINATION_TABLES = tuple(DESTINATION_TABLES_BY_TYPE.values())
 
 OAUTH_SESSION_COOKIE = "feedecho_oauth_session"
 OAUTH_SESSION_MAX_AGE = 10 * 60
@@ -474,7 +496,7 @@ def _trial_context(request: Request) -> dict:
                 db.execute(
                     f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
                 ).fetchone()["c"]
-                for t in ("accounts", "email_accounts", "bluesky_accounts", "microblog_accounts")
+                for t in DESTINATION_TABLES
             )
         ctx["trial_usage"] = {
             "feeds": feeds_used,
@@ -520,7 +542,7 @@ def _check_destination_cap(db, uid: int) -> None:
         db.execute(
             f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
-        for t in ("accounts", "email_accounts", "bluesky_accounts", "microblog_accounts")
+        for t in DESTINATION_TABLES
     )
     plans.check_destination_allowance(total, _user_plan(db, uid))
 
@@ -674,7 +696,7 @@ def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
 
 
 def _get_all_accounts(user_id: int = 1):
-    """Fetch Mastodon, email, Bluesky, and micro.blog accounts for one user."""
+    """Fetch Mastodon, email, Bluesky, micro.blog, and Matrix accounts for one user."""
     with get_db() as db:
         mastodon = db.execute(
             "SELECT id, name, username, instance, created_at FROM accounts"
@@ -696,13 +718,25 @@ def _get_all_accounts(user_id: int = 1):
             " WHERE user_id = ? ORDER BY name",
             (user_id,),
         ).fetchall()
-    return mastodon, email, bluesky, microblog
+        matrix_rows = db.execute(
+            "SELECT id, name, homeserver, room_id, room_alias, matrix_user_id,"
+            " created_at FROM matrix_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        ).fetchall()
+    return mastodon, email, bluesky, microblog, matrix_rows
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
     """Render the accounts page with an error banner."""
     uid = current_user_id(request)
-    mastodon_accounts, email_accounts, bluesky_accounts, microblog_accounts = _get_all_accounts(uid)
+    (
+        mastodon_accounts,
+        email_accounts,
+        bluesky_accounts,
+        microblog_accounts,
+        matrix_accounts,
+    ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     return render(
         "accounts.html",
@@ -711,6 +745,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         email_accounts=email_accounts,
         bluesky_accounts=bluesky_accounts,
         microblog_accounts=microblog_accounts,
+        matrix_accounts=matrix_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
         error=message,
@@ -739,6 +774,9 @@ async def dashboard(request: Request):
         microblog_accounts = db.execute(
             "SELECT COUNT(*) as c FROM microblog_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
+        matrix_accounts = db.execute(
+            "SELECT COUNT(*) as c FROM matrix_accounts WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
         feeds = db.execute(
             "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
             (uid,),
@@ -750,6 +788,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
+                     WHEN e.destination_type = 'matrix' THEN mx.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -757,6 +796,7 @@ async def dashboard(request: Request):
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
+            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -767,12 +807,14 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
+                     WHEN e.destination_type = 'matrix' THEN mx.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
                      WHEN e.destination_type = 'email' THEN ea.email
                      WHEN e.destination_type = 'bluesky' THEN b.pds
                      WHEN e.destination_type = 'microblog' THEN mb.uid
+                     WHEN e.destination_type = 'matrix' THEN mx.homeserver
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -781,12 +823,19 @@ async def dashboard(request: Request):
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
+            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
         """, (uid,)).fetchall()
         stats = {
-            "accounts": mastodon_accounts + email_accounts + bluesky_accounts + microblog_accounts,
+            "accounts": (
+                mastodon_accounts
+                + email_accounts
+                + bluesky_accounts
+                + microblog_accounts
+                + matrix_accounts
+            ),
             "feeds": len(feeds),
             "echoes": len(echoes),
             "active_echoes": sum(1 for e in echoes if e["enabled"]),
@@ -923,7 +972,9 @@ def _admin_usage(db) -> list:
             (SELECT COUNT(*) FROM bluesky_accounts b
               WHERE b.user_id = u.id) +
             (SELECT COUNT(*) FROM microblog_accounts m
-              WHERE m.user_id = u.id) AS destinations,
+              WHERE m.user_id = u.id) +
+            (SELECT COUNT(*) FROM matrix_accounts mx
+              WHERE mx.user_id = u.id) AS destinations,
             (SELECT COUNT(*) FROM posted_items pi
               JOIN echoes e2 ON pi.echo_id = e2.id
               WHERE e2.user_id = u.id AND pi.status = 'success'
@@ -1347,7 +1398,13 @@ async def feeds_page(request: Request):
 @app.get("/accounts", response_class=HTMLResponse)
 async def accounts_page(request: Request):
     uid = current_user_id(request)
-    mastodon_accounts, email_accounts, bluesky_accounts, microblog_accounts = _get_all_accounts(uid)
+    (
+        mastodon_accounts,
+        email_accounts,
+        bluesky_accounts,
+        microblog_accounts,
+        matrix_accounts,
+    ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
     return render("accounts.html", request,
@@ -1355,6 +1412,7 @@ async def accounts_page(request: Request):
                   email_accounts=email_accounts,
                   bluesky_accounts=bluesky_accounts,
                   microblog_accounts=microblog_accounts,
+                  matrix_accounts=matrix_accounts,
                   smtp_configured=smtp_configured,
                   smtp_settings=smtp_settings)
 
@@ -1370,6 +1428,7 @@ async def echoes_page(request: Request):
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
+                     WHEN e.destination_type = 'matrix' THEN mx.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -1377,6 +1436,7 @@ async def echoes_page(request: Request):
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
+            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -1400,11 +1460,17 @@ async def echoes_page(request: Request):
             "SELECT id, name, uid FROM microblog_accounts WHERE user_id = ? ORDER BY name",
             (uid,),
         ).fetchall()
+        matrix_accounts = db.execute(
+            "SELECT id, name, room_id, room_alias FROM matrix_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
                   bluesky_accounts=bluesky_accounts,
                   microblog_accounts=microblog_accounts,
+                  matrix_accounts=matrix_accounts,
                   template_vars=available_variables())
 
 
@@ -1419,12 +1485,14 @@ async def history_page(request: Request):
                      WHEN e.destination_type = 'email' THEN ea.name
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
+                     WHEN e.destination_type = 'matrix' THEN mx.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
                      WHEN e.destination_type = 'email' THEN ea.email
                      WHEN e.destination_type = 'bluesky' THEN b.pds
                      WHEN e.destination_type = 'microblog' THEN mb.uid
+                     WHEN e.destination_type = 'matrix' THEN mx.homeserver
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -1433,6 +1501,7 @@ async def history_page(request: Request):
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
+            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 100
@@ -1786,7 +1855,7 @@ def add_microblog_account(
             db.execute(
                 f"SELECT COUNT(*) AS c FROM {t} WHERE user_id = ?", (uid,)
             ).fetchone()["c"]
-            for t in ("accounts", "email_accounts", "bluesky_accounts", "microblog_accounts")
+            for t in DESTINATION_TABLES
         )
         plan = _user_plan(db, uid)
         cap = plans.limit_for(plan, "max_destinations")
@@ -1852,6 +1921,131 @@ def delete_microblog_account(request: Request, account_id: int):
             (account_id, uid),
         )
     return RedirectResponse(url="/accounts?status=microblog_deleted", status_code=303)
+
+
+# ── API: Matrix Accounts ────────────────────────────────────────────────────
+
+@app.post("/api/matrix-accounts")
+def add_matrix_account(
+    request: Request,
+    homeserver: str = Form(...),
+    access_token: str = Form(...),
+    room: str = Form(...),
+    name: str = Form(""),
+):
+    """Verify a Matrix token + room and store one account row for that room.
+
+    Synchronous route (threadpool-offloaded): well-known discovery, whoami,
+    room resolution, and the membership check are all blocking HTTPS calls.
+    """
+    access_token = access_token.strip()
+    if not access_token:
+        return _render_accounts_error(request, "Enter a Matrix access token.")
+
+    try:
+        homeserver = matrix_normalize_homeserver(homeserver)
+        room_input = matrix_normalize_room(room)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+
+    try:
+        info = matrix_connect(homeserver, access_token, room_input)
+    except MatrixAuthError as e:
+        return _render_accounts_error(request, str(e))
+    except MatrixPermissionError as e:
+        return _render_accounts_error(request, str(e))
+    except SSRFError as e:
+        return _render_accounts_error(request, f"Blocked homeserver URL: {e}")
+    except MatrixError as e:
+        logger.warning("Matrix connect failed for %s: %s", homeserver, e)
+        return _render_accounts_error(request, str(e))
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+    except Exception:
+        logger.exception("Matrix account verification failed for %s", homeserver)
+        return _render_accounts_error(
+            request, "Could not verify the Matrix account. Try again."
+        )
+
+    # Default display name is what the user recognises the room by: the alias
+    # they typed, else the room ID.
+    display_name = name.strip()[:100] or info["room_alias"] or info["room_id"]
+
+    with get_db() as db:
+        uid = current_user_id(request)
+        # Cap counts NEW rows only: reconnecting the same room (to rotate the
+        # token) updates in place and must not be blocked at the cap.
+        existing = db.execute(
+            "SELECT id FROM matrix_accounts"
+            " WHERE user_id = ? AND homeserver = ? AND room_id = ?",
+            (uid, homeserver, info["room_id"]),
+        ).fetchone()
+        if not existing:
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
+        db.execute(
+            """
+            INSERT INTO matrix_accounts (
+                name, homeserver, base_url, access_token, matrix_user_id,
+                room_id, room_alias, user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, homeserver, room_id) DO UPDATE SET
+                name = excluded.name,
+                base_url = excluded.base_url,
+                access_token = excluded.access_token,
+                matrix_user_id = excluded.matrix_user_id,
+                room_alias = excluded.room_alias
+            """,
+            (
+                display_name,
+                homeserver,
+                info["base_url"],
+                access_token,
+                info["user_id"],
+                info["room_id"],
+                info["room_alias"],
+                uid,
+            ),
+        )
+    return RedirectResponse(url="/accounts?status=matrix_connected", status_code=303)
+
+
+@app.post("/api/matrix-accounts/{account_id}/test")
+def test_matrix_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM matrix_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not account:
+        raise HTTPException(status_code=404, detail="Matrix account not found")
+    # Prefer the stored resolved base URL; fall back to the typed homeserver
+    # for rows written before discovery ran (or when well-known was down).
+    base = account["base_url"] or account["homeserver"]
+    success, message = test_matrix_connection(
+        base, account["access_token"], account["room_id"]
+    )
+    return {"success": success, "message": message}
+
+
+@app.post("/api/matrix-accounts/{account_id}/delete")
+def delete_matrix_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    if _dependent_echo_count(uid, "matrix", account_id):
+        return _render_accounts_error(
+            request,
+            "This Matrix room is used by echoes. Delete or reassign those echoes first.",
+        )
+    with get_db() as db:
+        db.execute(
+            "DELETE FROM matrix_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
+    return RedirectResponse(url="/accounts?status=matrix_deleted", status_code=303)
 
 
 # ── API: Settings ───────────────────────────────────────────────────────────
@@ -2257,7 +2451,7 @@ async def give_up_post(request: Request, posted_id: int):
 # ── API: Echoes ─────────────────────────────────────────────────────────────
 
 VALID_VISIBILITY = {"public", "unlisted", "private", "direct"}
-VALID_DEST_TYPES = {"mastodon", "email", "bluesky", "microblog"}
+VALID_DEST_TYPES = set(DESTINATION_TABLES_BY_TYPE)
 VALID_FILTER_MODES = {"exclude", "include"}
 
 
@@ -2305,6 +2499,7 @@ async def add_echo(
     email_account_id: int = Form(None),
     bluesky_account_id: int = Form(None),
     microblog_account_id: int = Form(None),
+    matrix_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -2348,10 +2543,14 @@ async def add_echo(
         destination_id = bluesky_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="bluesky_account_id required for bluesky destination")
-    else:
+    elif destination_type == "microblog":
         destination_id = microblog_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="microblog_account_id required for microblog destination")
+    else:
+        destination_id = matrix_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="matrix_account_id required for matrix destination")
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -2366,12 +2565,7 @@ async def add_echo(
         # No destination cap here: connecting accounts is capped at
         # connect time (_check_destination_cap); editing an existing echo
         # only ever references destinations that already exist.
-        dest_table = {
-            "mastodon": "accounts",
-            "email": "email_accounts",
-            "bluesky": "bluesky_accounts",
-            "microblog": "microblog_accounts",
-        }[destination_type]
+        dest_table = DESTINATION_TABLES_BY_TYPE[destination_type]
         dest = db.execute(
             f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
             (destination_id, uid),
@@ -2419,6 +2613,7 @@ async def edit_echo(
     email_account_id: int = Form(None),
     bluesky_account_id: int = Form(None),
     microblog_account_id: int = Form(None),
+    matrix_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -2459,10 +2654,14 @@ async def edit_echo(
         destination_id = bluesky_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="bluesky_account_id required for bluesky destination")
-    else:
+    elif destination_type == "microblog":
         destination_id = microblog_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="microblog_account_id required for microblog destination")
+    else:
+        destination_id = matrix_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="matrix_account_id required for matrix destination")
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -2484,12 +2683,7 @@ async def edit_echo(
         # No destination cap here: connecting accounts is capped at
         # connect time (_check_destination_cap); editing an existing echo
         # only ever references destinations that already exist.
-        dest_table = {
-            "mastodon": "accounts",
-            "email": "email_accounts",
-            "bluesky": "bluesky_accounts",
-            "microblog": "microblog_accounts",
-        }[destination_type]
+        dest_table = DESTINATION_TABLES_BY_TYPE[destination_type]
         dest = db.execute(
             f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
             (destination_id, uid),

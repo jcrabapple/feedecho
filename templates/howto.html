@@ -2,7 +2,7 @@
 {% block title %}How To — FeedEcho{% endblock %}
 {% block content %}
 <h1>How To</h1>
-<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, or email. Everything is built from three pieces: feeds, accounts, and echoes.</p>
+<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, or email. Everything is built from three pieces: feeds, accounts, and echoes.</p>
 
 <section>
     <h2>1. Add a feed</h2>
@@ -18,7 +18,7 @@
 
 <section>
     <h2>2. Add an account</h2>
-    <p>An account is a destination FeedEcho can post to. Four kinds are supported.</p>
+    <p>An account is a destination FeedEcho can post to. Five kinds are supported.</p>
     <h3>Mastodon</h3>
     <ol class="howto-steps">
         <li>Open <a href="/accounts">Accounts</a>.</li>
@@ -36,6 +36,13 @@
         <li>Create an app token at <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a> (Account → Edit Apps → Add Token).</li>
         <li>Under <strong>Connect Micro.blog</strong>, paste the token. FeedEcho finds every blog the token can post to and connects each one.</li>
         <li>Use the <strong>Test</strong> button to confirm the token before relying on it.</li>
+    </ol>
+    <h3>Matrix</h3>
+    <ol class="howto-steps">
+        <li>Decide which Matrix account posts the items (a dedicated bot account is tidier than your own) and make sure it is in the target room — FeedEcho posts as that account and never joins rooms itself.</li>
+        <li>Copy that account's <strong>access token</strong>. In Element: Settings → Help &amp; About → Access Token.</li>
+        <li>Under <strong>Connect Matrix</strong>, enter the homeserver (for example <code>https://matrix.org</code>), the token, and the room ID or alias (<code>#feeds:example.org</code>). Connect one room per submission; the same token can be reused for other rooms.</li>
+        <li>Use the <strong>Test</strong> button to confirm the token and room membership before relying on it.</li>
     </ol>
     <h3>Email</h3>
     <ol class="howto-steps">

@@ -44,6 +44,18 @@ from microblog import (
     MicroblogError,
     create_post as microblog_create_post,
 )
+from matrix import (
+    MATRIX_IMAGE_TYPES,
+    MAX_UPLOAD_BYTES as MATRIX_MAX_UPLOAD_BYTES,
+    MatrixAuthError,
+    MatrixError,
+    MatrixPermissionError,
+    permalink as matrix_permalink,
+    send_image as matrix_send_image,
+    send_message as matrix_send_message,
+    transaction_id as matrix_transaction_id,
+    upload_media as matrix_upload_media,
+)
 from notify import (
     max_attempts,
     next_retry_delay,
@@ -759,6 +771,16 @@ def _render_and_dispatch(
 
     if echo["destination_type"] == "microblog":
         return _send_microblog(
+            echo,
+            item,
+            content,
+            echo["destination_id"],
+            posted_id,
+            claim_token,
+        )
+
+    if echo["destination_type"] == "matrix":
+        return _send_matrix(
             echo,
             item,
             content,
@@ -1487,6 +1509,211 @@ def _send_microblog(
     if ok:
         record_success(echo["id"])
     return ok
+
+
+def _send_matrix(
+    echo,
+    item: dict,
+    content: str,
+    account_id: int,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Dispatch one rendered item into a Matrix room.
+
+    The text event is the delivery: it decides success/failure. An attached
+    image is a SECOND event (Matrix has no combined text+image message), so it
+    is sent after the text and any image failure only logs — the item is
+    already delivered and re-running the text would duplicate it.
+
+    Transaction IDs are derived from the echo + item ID, so a retry of a send
+    whose response was lost is de-duplicated by the homeserver instead of
+    posting the item twice.
+    """
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM matrix_accounts WHERE id = ? AND user_id = ?",
+            (account_id, echo["user_id"]),
+        ).fetchone()
+
+    if not account:
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Matrix account {account_id} not found",
+            permanent=True,
+        )
+
+    base_url = account["base_url"] or account["homeserver"]
+    access_token = account["access_token"]
+    room_id = account["room_id"]
+
+    # Image work happens BEFORE the text event so its slow I/O (fetch, alt
+    # text, upload) does not sit between the text send and the claim's final
+    # state. Any failure degrades to text-only, as on the other destinations.
+    try:
+        attach_image = bool(echo["attach_image"])
+    except (KeyError, IndexError):
+        attach_image = False
+
+    mxc_uri = ""
+    image_body = ""
+    image_type = ""
+    image_size = 0
+    if attach_image:
+        image_url = item.get("image_url", "")
+        if image_url:
+            try:
+                image_result = fetch_image(image_url)
+                if image_result:
+                    img_bytes, img_type = image_result
+                    if (
+                        img_type in MATRIX_IMAGE_TYPES
+                        and len(img_bytes) <= MATRIX_MAX_UPLOAD_BYTES
+                    ):
+                        # Feed-provided alt text wins; AI is the fallback.
+                        alt_description = (item.get("image_alt") or "").strip()
+                        if not alt_description and alt_text.is_enabled(
+                            user_id=echo["user_id"]
+                        ):
+                            try:
+                                alt_description = (
+                                    alt_text.generate_alt_text(
+                                        img_bytes, img_type, user_id=echo["user_id"]
+                                    )
+                                    or ""
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Echo %s: alt text generation failed for item %s",
+                                    echo["id"],
+                                    item["id"],
+                                    exc_info=True,
+                                )
+                        mxc_uri = matrix_upload_media(
+                            base_url,
+                            access_token,
+                            img_bytes,
+                            img_type,
+                            filename=_matrix_image_filename(img_type),
+                        )
+                        image_body = alt_description or _matrix_image_filename(img_type)
+                        image_type = img_type
+                        image_size = len(img_bytes)
+                    else:
+                        logger.info(
+                            "Echo %s: image unsupported for Matrix (type=%s, size=%d), posting text-only",
+                            echo["id"],
+                            img_type,
+                            len(img_bytes),
+                        )
+                else:
+                    logger.info(
+                        "Echo %s: image fetch failed for item %s, posting text-only",
+                        echo["id"],
+                        item["id"],
+                    )
+            except Exception:
+                logger.warning(
+                    "Echo %s: Matrix image pipeline failed for item %s, posting text-only",
+                    echo["id"],
+                    item["id"],
+                    exc_info=True,
+                )
+                mxc_uri = ""
+
+    # Re-validate claim ownership immediately before the post: the image
+    # pipeline above is slow network I/O, so the lease can lapse and another
+    # worker reclaim the row. Same pattern as the other senders.
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before Matrix dispatch; skipping item %s",
+            echo["id"],
+            item["id"],
+        )
+        return False
+
+    try:
+        event_id = matrix_send_message(
+            base_url,
+            access_token,
+            room_id,
+            content,
+            matrix_transaction_id(echo["id"], item["id"]),
+        )
+    except MatrixAuthError as e:
+        # Token rejected: retries cannot help until the user reconnects.
+        logger.error("Echo %s: Matrix token rejected: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Matrix token rejected: {e}",
+            permanent=True,
+        )
+    except MatrixPermissionError as e:
+        # Kicked from the room, or no permission to post in it: also permanent
+        # until the user fixes it on the Matrix side.
+        logger.error("Echo %s: Matrix refused the post: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Matrix refused the post: {e}",
+            permanent=True,
+        )
+    except MatrixError as e:
+        logger.exception("Echo %s: Matrix post failed", echo["id"])
+        return _fail_post(posted_id, claim_token, echo["id"], f"Matrix delivery failed: {e}")
+    except Exception:
+        logger.exception("Echo %s: Matrix post failed unexpectedly", echo["id"])
+        return _fail_post(posted_id, claim_token, echo["id"], "Matrix delivery failed")
+
+    if mxc_uri:
+        # The text already landed; a failed image must not fail the item.
+        try:
+            matrix_send_image(
+                base_url,
+                access_token,
+                room_id,
+                mxc_uri,
+                image_body,
+                image_type,
+                image_size,
+                matrix_transaction_id(echo["id"], item["id"], suffix="img"),
+            )
+        except Exception:
+            logger.warning(
+                "Echo %s: Matrix image event failed for item %s (text was delivered)",
+                echo["id"],
+                item["id"],
+                exc_info=True,
+            )
+
+    ok = _update_post(
+        posted_id,
+        claim_token,
+        "success",
+        post_url=matrix_permalink(room_id, event_id),
+    )
+    if ok:
+        record_success(echo["id"])
+    return ok
+
+
+def _matrix_image_filename(content_type: str) -> str:
+    """A filename for the media upload, derived from the image type.
+
+    Matrix clients show this when an image has no description, and some use
+    the extension to decide how to render it.
+    """
+    ext = (content_type or "").rsplit("/", 1)[-1].lower()
+    if ext == "jpeg":
+        ext = "jpg"
+    if not ext.isalnum():
+        ext = "img"
+    return f"feed-image.{ext}"
 
 
 def _queue_for_digest(

@@ -81,6 +81,20 @@ async function testMicroblogAccount(accountId, btn) {
     }
 }
 
+async function testMatrixAccount(accountId, btn) {
+    try {
+        const resp = await fetch(`/api/matrix-accounts/${accountId}/test`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
+            return;
+        }
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    }
+}
+
 async function testFeed(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/test`, { method: 'POST' });
@@ -278,11 +292,13 @@ function editEcho(echoId) {
     const emailOpts = document.getElementById('email-options').innerHTML.trim();
     const blueskyOpts = document.getElementById('bluesky-options').innerHTML.trim();
     const microblogOpts = document.getElementById('microblog-options').innerHTML.trim();
+    const matrixOpts = document.getElementById('matrix-options').innerHTML.trim();
 
     const mastoStyle = destType === 'mastodon' ? '' : 'display:none';
     const emailStyle = destType === 'email' ? '' : 'display:none';
     const blueskyStyle = destType === 'bluesky' ? '' : 'display:none';
     const microblogStyle = destType === 'microblog' ? '' : 'display:none';
+    const matrixStyle = destType === 'matrix' ? '' : 'display:none';
 
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form">
@@ -296,6 +312,7 @@ function editEcho(echoId) {
                         ${emailOpts ? '<option value="email"' + (destType === 'email' ? ' selected' : '') + '>Email Address</option>' : ''}
                         ${blueskyOpts ? '<option value="bluesky"' + (destType === 'bluesky' ? ' selected' : '') + '>Bluesky Account</option>' : ''}
                         ${microblogOpts ? '<option value="microblog"' + (destType === 'microblog' ? ' selected' : '') + '>Micro.blog Blog</option>' : ''}
+                        ${matrixOpts ? '<option value="matrix"' + (destType === 'matrix' ? ' selected' : '') + '>Matrix Room</option>' : ''}
                     </select>
                 </label>
             </div>
@@ -325,6 +342,11 @@ function editEcho(echoId) {
             <div class="form-row" id="edit-microblog-fields-${echoId}" style="${microblogStyle}">
                 <label>Micro.blog Blog
                     <select name="microblog_account_id">${microblogOpts}</select>
+                </label>
+            </div>
+            <div class="form-row" id="edit-matrix-fields-${echoId}" style="${matrixStyle}">
+                <label>Matrix Room
+                    <select name="matrix_account_id">${matrixOpts}</select>
                 </label>
             </div>
             <div class="form-row">
@@ -390,6 +412,8 @@ function editEcho(echoId) {
     if (blueskySelect) blueskySelect.value = destId;
     const microblogSelect = row.querySelector('select[name="microblog_account_id"]');
     if (microblogSelect) microblogSelect.value = destId;
+    const matrixSelect = row.querySelector('select[name="matrix_account_id"]');
+    if (matrixSelect) matrixSelect.value = destId;
 
     // Sync conditional rows to the echo's current delivery mode: without this
     // a digest echo opens showing both "batch into one email" and "Max posts
@@ -407,6 +431,7 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-email-fields-${echoId}`).style.display = destType === 'email' ? '' : 'none';
     document.getElementById(`edit-bluesky-fields-${echoId}`).style.display = destType === 'bluesky' ? '' : 'none';
     document.getElementById(`edit-microblog-fields-${echoId}`).style.display = destType === 'microblog' ? '' : 'none';
+    document.getElementById(`edit-matrix-fields-${echoId}`).style.display = destType === 'matrix' ? '' : 'none';
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
     const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);

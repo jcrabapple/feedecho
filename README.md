@@ -4,7 +4,7 @@
   <p><em>Your feeds, echoed everywhere.</em></p>
 </div>
 
-Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, and email using configurable templates.
+Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, and email using configurable templates.
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
@@ -14,20 +14,21 @@ Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/s
 - **Mastodon OAuth** — connect accounts with one click, no manual token creation
 - **Bluesky support** — connect accounts with an App Password; posts get auto-detected link facets, 300-grapheme truncation, and image embeds with alt text
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
+- **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
-- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, and micro.blog blogs
+- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, and Matrix rooms
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Post history** with success/failure tracking and error messages
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
-- **Image attachments** — automatically upload the feed item's first image (Mastodon and Bluesky upload as media; micro.blog fetches it by URL)
+- **Image attachments** — automatically upload the feed item's first image (Mastodon, Bluesky, and Matrix upload as media; micro.blog fetches it by URL)
 - **AI alt text** — optionally generate image descriptions via an OpenAI-compatible vision API
 - **Digest mode** — batch email deliveries into hourly digests instead of one email per item
 - **Mobile-responsive** — tables convert to cards, forms stack, 44px touch targets
 - **Idempotent posting** — failed posts are retried, duplicates are prevented
 - **Auto-initialization** — feeds set their baseline on first fetch, no manual init needed
-- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, and micro.blog
+- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, and Matrix
 
 ## Tech Stack
 
@@ -143,9 +144,10 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 1. **Add a Mastodon account** — Go to `/accounts`, enter your instance URL, click "Connect Account". OAuth handles the rest.
 2. **Add a Bluesky account** — Create an App Password in Bluesky (Settings → Privacy & Security → App Passwords), then enter your handle and the app password on `/accounts`. FeedEcho verifies the credentials, resolves your PDS, and caches a session.
 3. **Add a micro.blog blog** — Create an app token at [micro.blog/account/apps](https://micro.blog/account/apps), then paste it under Connect Micro.blog on `/accounts`. FeedEcho discovers every blog the token can post to and connects each one.
-4. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
-5. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
-6. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
+4. **Add a Matrix room** — Copy the access token of the account that should post (Element: Settings → Help & About → Access Token), then enter the homeserver, token, and room ID or alias under Connect Matrix on `/accounts`. That account must already be in the room.
+5. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
+6. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
+7. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
 ### Bluesky details
 
@@ -154,6 +156,15 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - Posts are truncated to **300 graphemes** (Unicode-aware) and URLs in the text get proper link facets, so links are clickable everywhere.
 - Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed; alt text uses your AI vision config when enabled. Images are capped at 1 MB and jpeg/png/webp/gif (Bluesky's limits).
 - Content warnings and visibility settings are Mastodon-only and are ignored for Bluesky posts.
+
+### Matrix details
+
+- Authentication is an **access token** for the account that posts. FeedEcho never logs in with a password and never joins rooms: the account must already be a member of the target room, which keeps a stolen token from silently spreading into new rooms.
+- `/.well-known/matrix/client` delegation is followed at connect time, so a server name that delegates its client API (`example.com` → `matrix.example.com`) works; the resolved base URL is stored per account.
+- Room aliases are resolved to canonical room IDs at connect time, because aliases can be repointed at another room later.
+- Messages are sent as `m.room.message` / `m.text` with an `org.matrix.custom.html` body so links are clickable in every client, and the transaction ID is derived from the echo and feed item — a retry after a lost response is de-duplicated by the homeserver instead of double-posting.
+- Attached images are uploaded to the homeserver's media repo and sent as a second `m.image` event with alt text in `body` (Matrix has no combined text+image message). An image failure never fails the item: the text has already been delivered.
+- Post history links to the message via `matrix.to`. Content warnings and visibility settings are Mastodon-only and are ignored for Matrix.
 
 ## Template Variables
 
@@ -238,7 +249,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 
 ### Secrets handling
 
-- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, and OAuth client secrets** are stored in the local database, unencrypted at rest. If an attacker gains filesystem access to the server, they can read them. All of these credentials are scoped (app passwords and platform tokens can be revoked individually at the source platform without touching your main passwords).
+- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, and OAuth client secrets** are stored in the local database, unencrypted at rest. If an attacker gains filesystem access to the server, they can read them. All of these credentials are scoped (app passwords and platform tokens can be revoked individually at the source platform without touching your main passwords).
 - **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
 - The `FEEDCHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
@@ -252,7 +263,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 
 ### Network
 
-- All outbound HTTP uses httpx with a 30-second timeout. FeedEcho makes requests to: the feed URL (user-provided), the Mastodon instance API (user-provided), micro.blog's Micropub endpoints (via your token), and the SMTP server (admin-configured). No telemetry, no phone-home, no analytics.
+- All outbound HTTP uses httpx with a 30-second timeout. FeedEcho makes requests to: the feed URL (user-provided), the Mastodon instance API (user-provided), micro.blog's Micropub endpoints (via your token), your Matrix homeserver (user-provided), and the SMTP server (admin-configured). No telemetry, no phone-home, no analytics.
 - Even without `FEEDCHO_AUTH_TOKEN`, FeedEcho is designed to run behind a reverse proxy or tunnel (Cloudflare Tunnel, nginx, etc.) with access control at the network layer. The built-in auth is a lightweight fallback for when a reverse proxy isn't available.
 
 ### Configuration

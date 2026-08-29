@@ -403,6 +403,25 @@ def init_db_sqlite() -> None:
             )
         """)
 
+        # One row per room: the same token usually posts to several rooms, and
+        # an echo targets exactly one room. base_url is the resolved client API
+        # base (well-known delegation), homeserver the value the user typed.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS matrix_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                homeserver TEXT NOT NULL,
+                base_url TEXT NOT NULL DEFAULT '',
+                access_token TEXT NOT NULL,
+                matrix_user_id TEXT DEFAULT '',
+                room_id TEXT NOT NULL,
+                room_alias TEXT DEFAULT '',
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, homeserver, room_id)
+            )
+        """)
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -425,7 +444,7 @@ def init_db_sqlite() -> None:
 
         # Owned tables carry user_id. Existing single-tenant databases
         # backfill to user 1 via the column default.
-        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts"):
+        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts"):
             _add_column_if_missing(
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
@@ -835,6 +854,22 @@ def init_db_postgres() -> None:
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, uid)
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS matrix_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                homeserver TEXT NOT NULL,
+                base_url TEXT NOT NULL DEFAULT '',
+                access_token TEXT NOT NULL,
+                matrix_user_id TEXT DEFAULT '',
+                room_id TEXT NOT NULL,
+                room_alias TEXT DEFAULT '',
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, homeserver, room_id)
             )
         """)
 

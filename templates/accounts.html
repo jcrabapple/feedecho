@@ -31,6 +31,14 @@
 <div class="alert alert-success" role="status">Micro.blog blog deleted.</div>
 {% endif %}
 
+{% if request.query_params.get('status') == 'matrix_connected' %}
+<div class="alert alert-success" role="status">Matrix room connected successfully.</div>
+{% endif %}
+
+{% if request.query_params.get('status') == 'matrix_deleted' %}
+<div class="alert alert-success" role="status">Matrix room deleted.</div>
+{% endif %}
+
 <section class="oauth-section">
     <h2>Connect Mastodon via OAuth</h2>
     <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
@@ -91,6 +99,22 @@
         <label for="microblog-token">Micro.blog app token</label>
         <input type="password" name="token" id="microblog-token" placeholder="Micro.blog app token" required autocomplete="off">
         <button type="submit">Connect Blogs</button>
+    </form>
+</section>
+
+<section>
+    <h2>Connect Matrix</h2>
+    <p class="hint">Post feed items into a Matrix room. Log the account you want to post as into any client, copy its <strong>access token</strong> (Element: Settings → Help &amp; About → Access Token), and give the room's ID or alias. That account must already be in the room — FeedEcho posts as it, it never joins rooms for you. Connect one room per form submission.</p>
+    <form method="post" action="/api/matrix-accounts" class="inline-form">
+        <label for="matrix-homeserver">Homeserver</label>
+        <input type="text" name="homeserver" id="matrix-homeserver" placeholder="https://matrix.org" required>
+        <label for="matrix-token">Access token</label>
+        <input type="password" name="access_token" id="matrix-token" placeholder="Access token" required autocomplete="off">
+        <label for="matrix-room">Room ID or alias</label>
+        <input type="text" name="room" id="matrix-room" placeholder="#feeds:example.org" required>
+        <label for="matrix-name">Display name (optional)</label>
+        <input type="text" name="name" id="matrix-name" placeholder="Feeds room">
+        <button type="submit">Connect Room</button>
     </form>
 </section>
 
@@ -219,8 +243,41 @@
 </div>
 {% endif %}
 
-{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts %}
-<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, or add an email address above.</p>
+{% if matrix_accounts %}
+<h2>Matrix Rooms</h2>
+<div class="data-table-wrapper">
+<table class="data-table">
+    <thead>
+        <tr>
+            <th scope="col">Room</th>
+            <th scope="col">Posts as</th>
+            <th scope="col">Homeserver</th>
+            <th scope="col">Added</th>
+            <th scope="col">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for account in matrix_accounts %}
+        <tr>
+            <td data-label="Room">{{ account.name }}<br><small><code>{{ account.room_id }}</code></small></td>
+            <td data-label="Posts as"><code>{{ account.matrix_user_id or '—' }}</code></td>
+            <td data-label="Homeserver">{{ account.homeserver }}</td>
+            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+            <td data-label="Actions" class="action-cell">
+                <button class="btn-sm" onclick="withBusy(this, (btn) => testMatrixAccount({{ account.id }}, btn))">Test</button>
+                <form method="post" action="/api/matrix-accounts/{{ account.id }}/delete" class="inline">
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this room? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts %}
+<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, or add an email address above.</p>
 {% endif %}
 
 <script>

@@ -207,6 +207,13 @@ class TestAdminPage:
         assert demote_form and "confirm(" in demote_form.group(0)
         revoke_form = re.search(r'<form[^>]*action="/admin/invites/revoke"[^>]*>', page)
         assert revoke_form and "confirm(" in revoke_form.group(0)
+        # privilege/billing actions confirm too (impeccable critique P3)
+        promote_form = re.search(r'<form[^>]*action="/admin/users/\{\{ u\.id \}\}/promote"[^>]*>', page)
+        assert promote_form and "confirm(" in promote_form.group(0)
+        plan_form = re.search(r'<form[^>]*action="/admin/users/\{\{ u\.id \}\}/plan"[^>]*>', page)
+        assert plan_form and "confirm(" in plan_form.group(0)
+        extend_form = re.search(r'<form[^>]*action="/admin/users/\{\{ u\.id \}\}/extend-trial"[^>]*>', page)
+        assert extend_form and "confirm(" in extend_form.group(0)
         # reversible actions stay one-click
         unsuspend_form = re.search(r'<form[^>]*action="/admin/users/\{\{ u\.id \}\}/unsuspend"[^>]*>', page)
         assert unsuspend_form and "confirm(" not in unsuspend_form.group(0)

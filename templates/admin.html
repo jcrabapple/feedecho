@@ -75,11 +75,13 @@
                         <button type="submit" class="btn-sm btn-danger">Remove admin</button>
                     </form>
                     {% else %}
-                    <form method="post" action="/admin/users/{{ u.id }}/promote" class="inline-form">
+                    <form method="post" action="/admin/users/{{ u.id }}/promote" class="inline-form"
+                          onsubmit="return confirm('Make {{ u.email }} an admin? They gain full operator access, including user and invite management.')">
                         <button type="submit" class="btn-sm">Make admin</button>
                     </form>
                     {% endif %}
-                    <form method="post" action="/admin/users/{{ u.id }}/plan" class="inline-form">
+                    <form method="post" action="/admin/users/{{ u.id }}/plan" class="inline-form"
+                          onsubmit="return confirm('Set plan for {{ u.email }} to ' + this.plan.value + '? This changes their access and billing.')">
                         <label class="sr-only" for="plan-{{ u.id }}">Plan</label>
                         <select name="plan" id="plan-{{ u.id }}" class="btn-sm">
                             {% for p in plan_names %}
@@ -89,7 +91,8 @@
                         <button type="submit" class="btn-sm">Set plan</button>
                     </form>
                     {% if u.plan == 'trial' %}
-                    <form method="post" action="/admin/users/{{ u.id }}/extend-trial" class="inline-form">
+                    <form method="post" action="/admin/users/{{ u.id }}/extend-trial" class="inline-form"
+                          onsubmit="return confirm('Extend {{ u.email }}'s trial by ' + this.days.value + ' day(s)?')">
                         <label class="sr-only" for="extend-{{ u.id }}">Days</label>
                         <input type="number" name="days" id="extend-{{ u.id }}" min="1" max="365" value="14" style="width: 4.5rem;">
                         <button type="submit" class="btn-sm">Extend trial</button>

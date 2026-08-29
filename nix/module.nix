@@ -37,6 +37,29 @@ let
       "${cfg.package.python.pkgs.uvicorn}/bin/uvicorn"
     else
       "${pkgs.python3.pkgs.uvicorn}/bin/uvicorn";
+
+  # extraSettings values as FeedEcho reads them: strings pass through,
+  # true becomes "1" (the app's on-value for every boolean setting),
+  # integers are stringified. false means "leave it unset", so those keys
+  # are filtered out entirely — the variable is really absent from the
+  # service environment rather than set to an empty string.
+  coerceEnvValue = v:
+    if builtins.isBool v then (if v then "1" else "")
+    else if builtins.isInt v then toString v
+    else v;
+  extraEnv = lib.mapAttrs (_: coerceEnvValue)
+    (lib.filterAttrs (_: v: v != false) cfg.extraSettings);
+
+  # Environment variables a dedicated option already manages. A collision in
+  # extraSettings is a configuration mistake (the dedicated option always
+  # wins — and FEEDECHO_AUTH_TOKEN is exported from the auth token file in
+  # the service script, so extraSettings can never override it anyway).
+  managedEnvKeys = [
+    "FEEDECHO_DB_PATH"
+    "FEEDECHO_CALLBACK_URL"
+    "FEEDECHO_APP_WEBSITE"
+    "FEEDECHO_AUTH_TOKEN"
+  ];
 in {
   options.services.feedecho = {
     enable = lib.mkEnableOption "FeedEcho RSS feed cross-poster";
@@ -80,6 +103,28 @@ in {
       '';
     };
 
+    extraSettings = lib.mkOption {
+      type = with lib.types; attrsOf (oneOf [ str int bool ]);
+      default = { };
+      example = {
+        FEEDECHO_ALLOW_BACKDATED_ENTRIES = true;
+        FEEDECHO_MAX_BACKDATED_ENTRY_DAYS = 7;
+        FEEDECHO_LOG_LEVEL = "DEBUG";
+      };
+      description = ''
+        Extra FeedEcho settings passed through as environment variables, for
+        every setting without a dedicated option (see the "Environment
+        variables" table in the repository README). Keys are used verbatim as
+        variable names — use the canonical `FEEDECHO_` prefix (the legacy
+        `FEEDCHO_` spelling still works but is deprecated). Values are coerced
+        the way FeedEcho reads them: booleans become `1` when true and leave
+        the variable unset when false, integers are stringified. A key that a
+        dedicated option also manages (`dataDir`, `callbackUrl`, `appWebsite`,
+        `authTokenFile`) is dropped — the dedicated option wins and a warning
+        is printed at evaluation time.
+      '';
+    };
+
     dataDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/feedecho";
@@ -109,12 +154,23 @@ in {
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 
-      environment = {
-        FEEDECHO_DB_PATH = "${cfg.dataDir}/feedecho.db";
-        FEEDECHO_CALLBACK_URL = cfg.callbackUrl;
-      } // lib.optionalAttrs (cfg.appWebsite != "") {
-        FEEDECHO_APP_WEBSITE = cfg.appWebsite;
-      };
+      environment =
+        let
+          colliding = builtins.filter (n: builtins.hasAttr n extraEnv) managedEnvKeys;
+        in
+        lib.warnIf
+          (colliding != [ ])
+          ("services.feedecho.extraSettings sets environment variable(s) that a "
+            + "dedicated option manages — ignoring: "
+            + lib.concatStringsSep ", " colliding)
+          ((builtins.removeAttrs extraEnv managedEnvKeys) // {
+            # Managed keys are stripped from extraSettings above, so a
+            # dedicated option always wins when both set the same variable.
+            FEEDECHO_DB_PATH = "${cfg.dataDir}/feedecho.db";
+            FEEDECHO_CALLBACK_URL = cfg.callbackUrl;
+          } // lib.optionalAttrs (cfg.appWebsite != "") {
+            FEEDECHO_APP_WEBSITE = cfg.appWebsite;
+          });
 
       serviceConfig = {
         User = "feedecho";

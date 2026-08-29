@@ -179,6 +179,13 @@ class TestNoStrayLegacySpelling:
             "tests/test_env_prefix.py",
             "tests/test_settings.py",
             "README.md",
+            # Docs that tell Nix users the deprecated spelling exists (the
+            # module passes extraSettings keys through verbatim, so its docs
+            # must name the legacy prefix). Neither file reads it — this
+            # exemption covers documentation strings only; if module.nix ever
+            # starts reading FEEDCHO_ directly, this entry must be revisited.
+            "nix/README.md",
+            "nix/module.nix",
         }
         offenders = []
         for rel in tracked:

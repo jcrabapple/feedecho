@@ -104,8 +104,29 @@ Use `sops-nix` or `agenix` to manage the secret file declaratively.
 | `services.feedecho.package` | flake-built or `callPackage` | FeedEcho package |
 | `services.feedecho.authTokenFile` | (required) | Path to file containing auth token |
 | `services.feedecho.callbackUrl` | `http://localhost:8453/oauth/callback` | Public OAuth callback URL |
+| `services.feedecho.appWebsite` | (falls back to the project repo) | Website linked behind the Mastodon application name |
+| `services.feedecho.extraSettings` | `{ }` | Extra env vars for settings without a dedicated option |
 | `services.feedecho.dataDir` | `/var/lib/feedecho` | SQLite database directory |
 | `services.feedecho.openFirewall` | `false` | Open firewall for the port |
+
+### Settings without a dedicated option
+
+Any FeedEcho setting that has no dedicated module option is set through
+`extraSettings`, an attribute set merged into the service environment. See the
+"Environment variables" table in the repository README for the full list.
+
+```nix
+services.feedecho.extraSettings = {
+  FEEDECHO_ALLOW_BACKDATED_ENTRIES = true; # booleans: true -> "1", false -> unset
+  FEEDECHO_MAX_BACKDATED_ENTRY_DAYS = 7;   # integers are stringified
+  FEEDECHO_LOG_LEVEL = "DEBUG";
+};
+```
+
+Use the canonical `FEEDECHO_` prefix (the legacy `FEEDCHO_` spelling still
+works but is deprecated). Setting a variable that a dedicated option manages
+(`dataDir`, `callbackUrl`, `appWebsite`, `authTokenFile`) has no effect — the
+dedicated option wins and a warning is printed at evaluation time.
 
 ## Notes
 

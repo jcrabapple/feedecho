@@ -56,6 +56,24 @@ class TestEnvPassthrough:
         s = _reload_settings()
         assert s.AUTH_TOKEN == "sekret"
 
+    def test_backdated_defaults_off(self, monkeypatch):
+        _clean_env(monkeypatch)
+        s = _reload_settings()
+        assert s.ALLOW_BACKDATED_ENTRIES is False
+        assert s.MAX_BACKDATED_ENTRY_DAYS == 3
+
+    def test_backdated_enabled(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("FEEDCHO_ALLOW_BACKDATED_ENTRIES", "1")
+        s = _reload_settings()
+        assert s.ALLOW_BACKDATED_ENTRIES is True
+
+    def test_backdated_custom_days(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("FEEDCHO_MAX_BACKDATED_ENTRY_DAYS", "7")
+        s = _reload_settings()
+        assert s.MAX_BACKDATED_ENTRY_DAYS == 7
+
 
 class TestValidateConfig:
     def _set_multi(self, monkeypatch, **kwargs):

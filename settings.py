@@ -140,6 +140,26 @@ TRIAL_GRACE_NOTE = os.environ.get("FEEDCHO_TRIAL_GRACE_NOTE", "")
 INVITES_REQUIRED = os.environ.get("FEEDCHO_INVITES_REQUIRED", "") == "1"
 
 
+# ── Backdated entries ─────────────────────────────────────────────────────────
+#
+# When True, feed items that appear positionally OLDER than the cursor (so the
+# position-based scan skips them) but carry a publish date within
+# MAX_BACKDATED_ENTRY_DAYS of now are still delivered. Off by default so
+# existing behaviour is unchanged; self-hosters who backdate posts can opt in.
+ALLOW_BACKDATED_ENTRIES = (
+    os.environ.get("FEEDCHO_ALLOW_BACKDATED_ENTRIES", "") == "1"
+)
+try:
+    MAX_BACKDATED_ENTRY_DAYS = int(
+        os.environ.get("FEEDCHO_MAX_BACKDATED_ENTRY_DAYS", "3")
+    )
+except ValueError:
+    logging.getLogger("feedecho").warning(
+        "FEEDCHO_MAX_BACKDATED_ENTRY_DAYS is not a valid integer; using default of 3"
+    )
+    MAX_BACKDATED_ENTRY_DAYS = 3
+
+
 def validate_config() -> None:
     """Fail fast on misconfigured multi mode. Called from app startup.
 

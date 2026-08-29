@@ -15,7 +15,13 @@ import settings
 import plans
 from database import get_db, timestamp_str
 from email_sender import send_email
-from feed_parser import fetch_feed, fetch_image, get_new_items, truncate
+from feed_parser import (
+    fetch_feed,
+    fetch_image,
+    get_new_items,
+    get_backdated_items,
+    truncate,
+)
 from filters import is_filtered
 from mastodon import post_status, upload_media
 from bluesky import (
@@ -257,12 +263,13 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
         return
 
     new_items = get_new_items(items, last_seen_id)
-    if not new_items:
+    if not new_items and not settings.ALLOW_BACKDATED_ENTRIES:
         _update_last_fetched(feed_id, lease_token)
         return
 
     cursor_id = last_seen_id
 
+    # Positionally-new items: delivered oldest-first, advancing the cursor.
     for item in new_items:
         if not _renew_feed_lease(feed_id, lease_token):
             logger.warning(
@@ -289,6 +296,30 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
             break
 
         cursor_id = item["id"]
+
+    # Backdated items: delivered without moving the cursor. Each echo's
+    # _claim_post upsert deduplicates against already-posted rows, so items
+    # that were already delivered (positionally or in a prior backdated pass)
+    # are silently skipped. A delivery failure here does NOT stop the cursor
+    # — the cursor was never at risk of advancing past these items.
+    if settings.ALLOW_BACKDATED_ENTRIES:
+        backdated = get_backdated_items(
+            items,
+            last_seen_id,
+            max_days=settings.MAX_BACKDATED_ENTRY_DAYS,
+            limit=20,
+        )
+        for item in backdated:
+            if not _renew_feed_lease(feed_id, lease_token):
+                logger.warning(
+                    "Feed %s (%s): lease was lost during backdated delivery",
+                    feed_id,
+                    feed_name,
+                )
+                return
+
+            for echo in echoes:
+                process_echo(echo, item, feed_name=feed_name)
 
     if cursor_id != last_seen_id:
         if not _update_cursor(feed_id, lease_token, cursor_id):

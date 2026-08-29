@@ -14,7 +14,7 @@ import socket
 import threading
 import httpx
 import feedparser
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
 
@@ -489,6 +489,125 @@ def get_new_items(items: list[dict], last_seen_id: str | None) -> list[dict]:
     # Items come newest-first in most feeds. Reverse so oldest-new-item posts first.
     new_items.reverse()
     return new_items
+
+
+def get_backdated_items(
+    items: list[dict],
+    last_seen_id: str | None,
+    max_days: int,
+    now: datetime | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Return items past the cursor whose publish date is within *max_days*.
+
+    These are entries that appear positionally OLDER than ``last_seen_id`` (so
+    :func:`get_new_items` skips them) but carry a publish date inside the
+    allowed window — e.g. a blog that backdated a post after FeedEcho already
+    saw a newer one.
+
+    Only items **after** the cursor in the feed list are considered. Items
+    before the cursor (positionally newer) are returned by
+    :func:`get_new_items` and must never be returned here.
+
+    Deduplication is handled downstream by ``_claim_post``'s
+    ``ON CONFLICT(echo_id, item_id)`` upsert, so already-posted items are safe
+    to return here — they will be silently skipped at delivery time.
+
+    A small forward tolerance (up to 1 day ahead of *now*) absorbs publish-date
+    clock skew between the feed server and this host; anything further in the
+    future is treated as a broken feed and excluded.
+
+    Returns oldest-first (matching ``get_new_items`` ordering within the
+    backdated subset) so a caller posting chronologically within this set
+    gets the right order. Positional items from ``get_new_items`` are all
+    newer than the cursor; backdated items are all older — the two sets
+    are not interleaved, so concatenating them is not chronologically
+    monotonic.
+    """
+    if last_seen_id is None or not items or max_days <= 0:
+        return []
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    # Locate the cursor; everything *after* it in the list is positionally
+    # older and a candidate for backdated delivery.
+    cursor_idx = None
+    for i, item in enumerate(items):
+        if item.get("id") == last_seen_id:
+            cursor_idx = i
+            break
+
+    if cursor_idx is None:
+        # Cursor scrolled off the feed. get_new_items returns items[:1] (the
+        # newest) to prevent backlog spam; the backdated scan must not
+        # double-handle that item, so start past it.
+        cursor_idx = 0  # skip items[0]
+
+    after_cursor = items[cursor_idx + 1:]
+
+    cutoff = now - timedelta(days=max_days)
+    future_tolerance = now + timedelta(days=1)
+
+    backdated: list[dict] = []
+    for item in after_cursor:
+        date_str = item.get("date")
+        if not date_str:
+            continue
+        dt = _parse_item_date(date_str)
+        if dt is None:
+            continue
+        if dt < cutoff or dt > future_tolerance:
+            continue
+        backdated.append(item)
+
+    if not backdated:
+        return []
+
+    # Take the newest *limit* items within the window, then reverse to
+    # oldest-first so the caller posts chronologically.
+    backdated.sort(key=lambda it: _parse_item_date(it["date"]), reverse=True)
+    backdated = backdated[:limit]
+    backdated.reverse()
+    return backdated
+
+
+def _parse_item_date(date_str) -> datetime | None:
+    """Parse an item date string (ISO 8601 or RFC 822) to an aware UTC datetime.
+
+    Returns None on unparseable or non-string input. Naive datetimes (no tz
+    suffix) are assumed to be UTC — feed timestamps are almost always
+    server-local and assuming UTC is safer than treating them as local wall
+    time.
+    """
+    if not isinstance(date_str, str):
+        return None
+
+    # ISO 8601 (JSON Feed, most modern RSS/Atom).
+    try:
+        if date_str.endswith("Z"):
+            date_str = date_str[:-1] + "+00:00"
+        dt = datetime.fromisoformat(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        pass
+
+    # RFC 822 (legacy RSS pubDate).
+    try:
+        from email.utils import parsedate_to_datetime
+
+        dt = parsedate_to_datetime(date_str)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError, OverflowError):
+        pass
+
+    return None
 
 
 def clean_text(text: str) -> str:

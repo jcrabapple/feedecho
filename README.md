@@ -98,6 +98,8 @@ docker run -d --name feedecho \
 | `FEEDCHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDCHO_BASE_URL`, then to the project repo. |
 | `FEEDCHO_DB_PATH` | no | SQLite path (default `/app/data/feedecho.db` in Docker, `./feedecho.db` otherwise) |
 | `FEEDCHO_STATE_SECRET` | no | OAuth state signing secret (defaults to `FEEDCHO_AUTH_TOKEN`) |
+| `FEEDCHO_ALLOW_BACKDATED_ENTRIES` | no | Set to `1` to deliver feed items that appear positionally older than the cursor but whose publish date is within `FEEDCHO_MAX_BACKDATED_ENTRY_DAYS` of now. Off by default. |
+| `FEEDCHO_MAX_BACKDATED_ENTRY_DAYS` | no | How many days back to accept backdated entries (default `3`). Only consulted when `FEEDCHO_ALLOW_BACKDATED_ENTRIES=1`. |
 
 Behind a reverse proxy (nginx, Caddy, Traefik), point the proxy at port `8453` and set `FEEDCHO_CALLBACK_URL` to the public HTTPS URL.
 

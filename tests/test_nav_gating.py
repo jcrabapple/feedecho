@@ -117,6 +117,25 @@ class TestSingleMode:
         assert resp.status_code == 302
         assert resp.headers["location"] == "/login"
 
+    def test_unknown_path_is_a_real_404_not_a_login_redirect(self, single_env, monkeypatch):
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "sekret")
+        with TestClient(app) as c:
+            resp = c.get("/no-such-page-xyz", headers={"accept": "text/html"},
+                         follow_redirects=False)
+        assert resp.status_code == 404
+        assert "location" not in resp.headers
+        assert "Page not found" in resp.text
+
+    def test_unknown_path_is_a_real_404_for_the_operator_too(self, single_env, monkeypatch):
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "sekret")
+        with TestClient(app) as c:
+            c.cookies.set(auth.AUTH_COOKIE_NAME, "sekret")
+            resp = c.get("/no-such-page-xyz", headers={"accept": "text/html"},
+                         follow_redirects=False)
+        assert resp.status_code == 404
+        assert "Page not found" in resp.text
+        assert 'href="/"' in resp.text  # operator chrome: back to dashboard
+
 
 # ── multi mode ───────────────────────────────────────────────────────────────
 
@@ -169,6 +188,22 @@ class TestMultiMode:
                 assert 'href="/register"' in links, path
                 # Anonymous brand points at / (the hosted landing page).
                 assert 'href="/" class="nav-brand"' in nav, path
+
+    def test_anonymous_unknown_path_is_a_real_404(self, multi_env):
+        with TestClient(app) as c:
+            resp = c.get("/no-such-page-xyz", headers={"accept": "text/html"},
+                         follow_redirects=False)
+        assert resp.status_code == 404
+        assert "location" not in resp.headers
+        assert "Page not found" in resp.text
+
+    def test_signed_in_unknown_path_is_a_real_404(self, multi_env):
+        with TestClient(app) as c:
+            _as(c, TENANT_ID, "tenant@example.com")
+            resp = c.get("/no-such-page-xyz", headers={"accept": "text/html"},
+                         follow_redirects=False)
+        assert resp.status_code == 404
+        assert "Page not found" in resp.text
 
     @pytest.mark.parametrize("path", ["/forgot-password", "/reset-password"])
     def test_excluded_public_paths_stay_anonymous(self, multi_env, path):

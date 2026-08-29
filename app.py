@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Match
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -275,6 +276,29 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await self._single(request, call_next)
 
     @staticmethod
+    def _path_is_routed(request: Request) -> bool:
+        """Whether any registered route matches this request's path/method.
+
+        Unknown paths must reach the router so the 404 handler renders the
+        real not-found page. Without this, an unauthenticated browser request
+        to a nonexistent URL was silently redirected to /login, so a visitor
+        following a bad link could not tell "page doesn't exist" from
+        "session expired" (impeccable critique 2026-08-29, P1a).
+        """
+        scope = request.scope
+        for route in request.app.routes:
+            matches = getattr(route, "matches", None)
+            if matches is None:
+                continue
+            try:
+                # starlette Route.matches returns a (Match, path_params) tuple.
+                if matches(scope)[0] == Match.FULL:
+                    return True
+            except Exception:  # defensive: never break auth over a route table quirk
+                continue
+        return False
+
+    @staticmethod
     def _token_matches(request: Request) -> bool:
         """Whether this request carries the shared secret.
 
@@ -317,6 +341,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or path.startswith(tuple(_AUTH_EXEMPT_PREFIXES))
             or path == "/login"
         ):
+            return await call_next(request)
+
+        # Unknown paths get the real 404 page instead of a login redirect.
+        if not self._path_is_routed(request):
             return await call_next(request)
 
         # Redirect browser requests to login, 401 for API/JSON
@@ -370,6 +398,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if uid is not None:
             request.state.user_id = uid
             request.state.authed = True
+            return await call_next(request)
+
+        # Unknown paths get the real 404 page instead of a login redirect.
+        if not self._path_is_routed(request):
             return await call_next(request)
 
         accept = request.headers.get("accept", "")

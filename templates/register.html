@@ -30,6 +30,7 @@
                 <input type="text" name="invite_code" id="register-invite" placeholder="Invite code" required
                        value="{{ invite_code or '' }}" autocomplete="off" class="auth-input"
                        spellcheck="false">
+                <p class="hint">FeedEcho is in an invite-only beta. Need a code? Email <a href="mailto:support@feedecho.net">support@feedecho.net</a> and we'll send you one.</p>
             </div>
             {% endif %}
             <button type="submit" class="btn">Sign up</button>

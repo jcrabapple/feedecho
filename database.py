@@ -439,6 +439,22 @@ def init_db_sqlite() -> None:
             )
         """)
 
+        # One row per generic webhook endpoint: url is the target, headers a
+        # JSON object of custom HTTP headers (credentials live there — never
+        # rendered back). UNIQUE(user_id, url) makes reconnecting the same
+        # endpoint an in-place update instead of a duplicate row.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS webhook_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                headers TEXT NOT NULL DEFAULT '{}',
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, url)
+            )
+        """)
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -461,7 +477,7 @@ def init_db_sqlite() -> None:
 
         # Owned tables carry user_id. Existing single-tenant databases
         # backfill to user 1 via the column default.
-        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts"):
+        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts", "webhook_accounts"):
             _add_column_if_missing(
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
@@ -744,6 +760,18 @@ def init_db_postgres() -> None:
                 stripe_customer_id TEXT DEFAULT '',
                 stripe_subscription_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS webhook_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                headers TEXT NOT NULL DEFAULT '{}',
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, url)
             )
         """)
 

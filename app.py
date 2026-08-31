@@ -69,6 +69,15 @@ from discord import (
     normalize_webhook_url as discord_normalize_webhook_url,
     test_connection as test_discord_connection,
 )
+from webhook import (
+    MAX_HEADERS_TEXT,
+    WebhookError,
+    dump_headers,
+    load_headers,
+    normalize_webhook_url as webhook_normalize_url,
+    parse_headers as webhook_parse_headers,
+    test_connection as test_webhook_connection,
+)
 from scheduler import start_scheduler, stop_scheduler, check_feed
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
@@ -147,6 +156,7 @@ DESTINATION_TABLES_BY_TYPE = {
     "microblog": "microblog_accounts",
     "matrix": "matrix_accounts",
     "discord": "discord_accounts",
+    "webhook": "webhook_accounts",
 }
 DESTINATION_TABLES = tuple(DESTINATION_TABLES_BY_TYPE.values())
 
@@ -736,9 +746,41 @@ def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
     )
 
 
+def _webhook_url_display(url: str) -> str:
+    """Origin only: scheme + host (+ port), nothing else.
+
+    Webhook URLs carry secrets in more places than the query string — Slack
+    puts the token in the PATH (/services/T.../B.../xxxx) — so the whole URL
+    beyond the origin is treated as sensitive and never rendered.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url or "")
+    host = parts.hostname or ""
+    if parts.port:
+        return f"{parts.scheme}://{host}:{parts.port}"
+    return f"{parts.scheme}://{host}"
+
+
+def _mask_webhook_urls(rows, type_col: str = "destination_type", url_col: str = "instance"):
+    """Return rows as dicts with webhook URLs stripped of query/fragment.
+
+    Webhook URLs may embed a secret query token; the history/dashboard
+    instance column must never render it. Non-webhook rows pass through
+    unchanged (dictified for uniform template access).
+    """
+    out = []
+    for row in rows:
+        as_dict = dict(row)
+        if as_dict.get(type_col) == "webhook":
+            as_dict[url_col] = _webhook_url_display(as_dict.get(url_col, ""))
+        out.append(as_dict)
+    return out
+
+
 def _get_all_accounts(user_id: int = 1):
-    """Fetch Mastodon, email, Bluesky, micro.blog, Matrix, and Discord
-    accounts for one user."""
+    """Fetch Mastodon, email, Bluesky, micro.blog, Matrix, Discord, and
+    webhook accounts for one user."""
     with get_db() as db:
         mastodon = db.execute(
             "SELECT id, name, username, instance, created_at FROM accounts"
@@ -772,7 +814,25 @@ def _get_all_accounts(user_id: int = 1):
             " WHERE user_id = ? ORDER BY name",
             (user_id,),
         ).fetchall()
-    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows
+        # Webhook rows: URL shown without query/fragment (secret tokens live
+        # there) and headers shown by NAME only — values are credentials.
+        webhook_rows = []
+        for row in db.execute(
+            "SELECT id, name, url, headers, created_at FROM webhook_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        ).fetchall():
+            header_names = ", ".join(load_headers(row["headers"]).keys())
+            webhook_rows.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "url_display": _webhook_url_display(row["url"]),
+                    "header_names": header_names,
+                    "created_at": row["created_at"],
+                }
+            )
+    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
@@ -785,6 +845,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         microblog_accounts,
         matrix_accounts,
         discord_accounts,
+        webhook_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     return render(
@@ -796,6 +857,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         microblog_accounts=microblog_accounts,
         matrix_accounts=matrix_accounts,
         discord_accounts=discord_accounts,
+        webhook_accounts=webhook_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
         error=message,
@@ -830,6 +892,9 @@ async def dashboard(request: Request):
         discord_accounts = db.execute(
             "SELECT COUNT(*) as c FROM discord_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
+        webhook_accounts = db.execute(
+            "SELECT COUNT(*) as c FROM webhook_accounts WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
         feeds = db.execute(
             "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
             (uid,),
@@ -843,6 +908,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'webhook' THEN wh.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -852,11 +918,12 @@ async def dashboard(request: Request):
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
         recent_posts = db.execute("""
-            SELECT pi.*, f.name as feed_name,
+            SELECT pi.*, f.name as feed_name, e.destination_type as destination_type,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
                      WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
@@ -864,6 +931,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'webhook' THEN wh.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
@@ -872,6 +940,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
                      WHEN e.destination_type = 'discord' THEN dc.channel_id
+                     WHEN e.destination_type = 'webhook' THEN wh.url
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -882,10 +951,13 @@ async def dashboard(request: Request):
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
         """, (uid,)).fetchall()
+        # Webhook URLs can carry a secret query token: mask before render.
+        recent_posts = _mask_webhook_urls(recent_posts)
         stats = {
             "accounts": (
                 mastodon_accounts
@@ -894,6 +966,7 @@ async def dashboard(request: Request):
                 + microblog_accounts
                 + matrix_accounts
                 + discord_accounts
+                + webhook_accounts
             ),
             "feeds": len(feeds),
             "echoes": len(echoes),
@@ -1035,7 +1108,9 @@ def _admin_usage(db) -> list:
             (SELECT COUNT(*) FROM matrix_accounts mx
               WHERE mx.user_id = u.id) +
             (SELECT COUNT(*) FROM discord_accounts dc
-              WHERE dc.user_id = u.id) AS destinations,
+              WHERE dc.user_id = u.id) +
+            (SELECT COUNT(*) FROM webhook_accounts wh
+              WHERE wh.user_id = u.id) AS destinations,
             (SELECT COUNT(*) FROM posted_items pi
               JOIN echoes e2 ON pi.echo_id = e2.id
               WHERE e2.user_id = u.id AND pi.status = 'success'
@@ -1466,6 +1541,7 @@ async def accounts_page(request: Request):
         microblog_accounts,
         matrix_accounts,
         discord_accounts,
+        webhook_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
@@ -1476,6 +1552,7 @@ async def accounts_page(request: Request):
                   microblog_accounts=microblog_accounts,
                   matrix_accounts=matrix_accounts,
                   discord_accounts=discord_accounts,
+                  webhook_accounts=webhook_accounts,
                   smtp_configured=smtp_configured,
                   smtp_settings=smtp_settings)
 
@@ -1493,6 +1570,7 @@ async def echoes_page(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'webhook' THEN wh.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -1502,6 +1580,7 @@ async def echoes_page(request: Request):
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -1535,6 +1614,11 @@ async def echoes_page(request: Request):
             " WHERE user_id = ? ORDER BY name",
             (uid,),
         ).fetchall()
+        webhook_accounts = db.execute(
+            "SELECT id, name FROM webhook_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
@@ -1542,6 +1626,7 @@ async def echoes_page(request: Request):
                   microblog_accounts=microblog_accounts,
                   matrix_accounts=matrix_accounts,
                   discord_accounts=discord_accounts,
+                  webhook_accounts=webhook_accounts,
                   template_vars=available_variables())
 
 
@@ -1557,6 +1642,7 @@ _HISTORY_ACCOUNT_LABEL_SQL = """CASE
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'webhook' THEN wh.name
                    END"""
 
 _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
@@ -1566,6 +1652,7 @@ _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
                      WHEN e.destination_type = 'discord' THEN dc.channel_id
+                     WHEN e.destination_type = 'webhook' THEN wh.url
                    END"""
 
 _HISTORY_DESTINATION_JOINS_SQL = """
@@ -1574,7 +1661,8 @@ _HISTORY_DESTINATION_JOINS_SQL = """
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
-            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id"""
+            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id"""
 
 
 def _filter_int(value: str) -> int | None:
@@ -1634,7 +1722,7 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
 
     with get_db() as db:
         posts = db.execute(f"""
-            SELECT pi.*, f.name as feed_name,
+            SELECT pi.*, f.name as feed_name, e.destination_type as destination_type,
                    {_HISTORY_ACCOUNT_LABEL_SQL} as account_name,
                    {_HISTORY_ACCOUNT_INSTANCE_SQL} as instance
             FROM posted_items pi
@@ -1645,6 +1733,8 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
             ORDER BY pi.posted_at DESC
             LIMIT 100
         """, tuple(params)).fetchall()
+        # Webhook URLs can carry a secret query token: mask before render.
+        posts = _mask_webhook_urls(posts)
         feed_options = db.execute("""
             SELECT DISTINCT f.id as id, f.name as name
             FROM posted_items pi
@@ -2323,6 +2413,100 @@ def delete_discord_account(request: Request, account_id: int):
     return RedirectResponse(url="/accounts?status=discord_deleted", status_code=303)
 
 
+# ── API: Webhook Accounts ───────────────────────────────────────────────────
+
+@app.post("/api/webhook-accounts")
+def add_webhook_account(
+    request: Request,
+    url: str = Form(...),
+    name: str = Form(""),
+    headers_text: str = Form(""),
+):
+    """Validate a generic webhook endpoint and store one account row for it.
+
+    Synchronous route: URL validation runs the SSRF guard (multi mode), and
+    nothing is POSTed at connect time — the Test button sends the real test
+    delivery. Reconnecting the same URL updates the stored row (name and
+    headers refresh) instead of duplicating it.
+    """
+    url = url.strip()
+    if not url:
+        return _render_accounts_error(request, "Enter the webhook URL.")
+
+    try:
+        url = webhook_normalize_url(url)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+    if len(headers_text) > MAX_HEADERS_TEXT:
+        return _render_accounts_error(request, "Headers are too long.")
+    try:
+        headers = webhook_parse_headers(headers_text)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+
+    display_name = name.strip()[:100] or "Webhook"
+
+    with get_db() as db:
+        uid = current_user_id(request)
+        # Cap counts NEW rows only: reconnecting the same endpoint (to rotate
+        # a token) updates in place and must not be blocked at the cap.
+        existing = db.execute(
+            "SELECT id FROM webhook_accounts"
+            " WHERE user_id = ? AND url = ?",
+            (uid, url),
+        ).fetchone()
+        if not existing:
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
+        db.execute(
+            """
+            INSERT INTO webhook_accounts (name, url, headers, user_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, url) DO UPDATE SET
+                name = excluded.name,
+                headers = excluded.headers
+            """,
+            (display_name, url, dump_headers(headers), uid),
+        )
+    return RedirectResponse(url="/accounts?status=webhook_connected", status_code=303)
+
+
+@app.post("/api/webhook-accounts/{account_id}/test")
+def test_webhook_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM webhook_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not account:
+        raise HTTPException(status_code=404, detail="Webhook account not found")
+    # Sends a real test delivery to the endpoint with the account's headers —
+    # a generic webhook has no read-only check.
+    success, message = test_webhook_connection(
+        account["url"], load_headers(account["headers"])
+    )
+    return {"success": success, "message": message}
+
+
+@app.post("/api/webhook-accounts/{account_id}/delete")
+def delete_webhook_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    if _dependent_echo_count(uid, "webhook", account_id):
+        return _render_accounts_error(
+            request,
+            "This webhook is used by echoes. Delete or reassign those echoes first.",
+        )
+    with get_db() as db:
+        db.execute(
+            "DELETE FROM webhook_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
+    return RedirectResponse(url="/accounts?status=webhook_deleted", status_code=303)
+
+
 # ── API: Settings ───────────────────────────────────────────────────────────
 
 @app.post("/api/settings/smtp")
@@ -2776,6 +2960,7 @@ async def add_echo(
     microblog_account_id: int = Form(None),
     matrix_account_id: int = Form(None),
     discord_account_id: int = Form(None),
+    webhook_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -2831,9 +3016,13 @@ async def add_echo(
         destination_id = discord_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="discord_account_id required for discord destination")
+    elif destination_type == "webhook":
+        destination_id = webhook_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="webhook_account_id required for webhook destination")
     else:
         # Unreachable (VALID_DEST_TYPES is checked above), kept explicit so a
-        # future destination type cannot silently fall through to Discord.
+        # future destination type cannot silently fall through.
         raise HTTPException(status_code=400, detail="Invalid destination type")
 
     is_enabled = 1 if enabled else 0
@@ -2899,6 +3088,7 @@ async def edit_echo(
     microblog_account_id: int = Form(None),
     matrix_account_id: int = Form(None),
     discord_account_id: int = Form(None),
+    webhook_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -2951,9 +3141,13 @@ async def edit_echo(
         destination_id = discord_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="discord_account_id required for discord destination")
+    elif destination_type == "webhook":
+        destination_id = webhook_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="webhook_account_id required for webhook destination")
     else:
         # Unreachable (VALID_DEST_TYPES is checked above), kept explicit so a
-        # future destination type cannot silently fall through to Discord.
+        # future destination type cannot silently fall through.
         raise HTTPException(status_code=400, detail="Invalid destination type")
 
     is_enabled = 1 if enabled else 0

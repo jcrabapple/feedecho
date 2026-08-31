@@ -47,6 +47,14 @@
 <div class="alert alert-success" role="status">Discord webhook deleted.</div>
 {% endif %}
 
+{% if request.query_params.get('status') == 'webhook_connected' %}
+<div class="alert alert-success" role="status">Webhook connected successfully.</div>
+{% endif %}
+
+{% if request.query_params.get('status') == 'webhook_deleted' %}
+<div class="alert alert-success" role="status">Webhook deleted.</div>
+{% endif %}
+
 <section class="oauth-section">
     <h2>Connect Mastodon via OAuth</h2>
     <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
@@ -134,6 +142,20 @@
         <input type="password" name="webhook_url" id="discord-webhook-url" placeholder="https://discord.com/api/webhooks/…" required autocomplete="off">
         <label for="discord-name">Display name (optional)</label>
         <input type="text" name="name" id="discord-name" placeholder="Announcements channel">
+        <button type="submit">Connect Discord Webhook</button>
+    </form>
+</section>
+
+<section>
+    <h2>Connect Webhook</h2>
+    <p class="hint">Post feed items as JSON to any HTTP endpoint. Works with Slack and Mattermost incoming webhooks, ntfy and Gotify notifications, Zapier or n8n, or anything you run yourself. Each item arrives as one JSON object: <code>text</code> (your template output) plus <code>title</code>, <code>link</code>, <code>summary</code>, <code>content</code>, <code>author</code>, <code>published</code>, <code>tags</code>, <code>image_url</code>, <code>image_alt</code>, <code>id</code>, and <code>feed_name</code>. Custom headers are optional and go in one per line, like <code>Authorization: Bearer your-token</code> — header values are stored like credentials and are never shown again.</p>
+    <form method="post" action="/api/webhook-accounts" class="inline-form">
+        <label for="webhook-url">Webhook URL</label>
+        <input type="password" name="url" id="webhook-url" placeholder="https://hooks.example.com/feedecho" required autocomplete="off">
+        <label for="webhook-name">Display name (optional)</label>
+        <input type="text" name="name" id="webhook-name" placeholder="n8n workflow">
+        <label for="webhook-headers">Headers (optional)</label>
+        <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer your-token&#10;X-Custom-Header: value"></textarea>
         <button type="submit">Connect Webhook</button>
     </form>
 </section>
@@ -327,8 +349,41 @@
 </div>
 {% endif %}
 
-{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts %}
-<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, or add an email address above.</p>
+{% if webhook_accounts %}
+<h2>Webhooks</h2>
+<div class="data-table-wrapper">
+<table class="data-table">
+    <thead>
+        <tr>
+            <th scope="col">Name</th>
+            <th scope="col">URL</th>
+            <th scope="col">Headers</th>
+            <th scope="col">Added</th>
+            <th scope="col">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for account in webhook_accounts %}
+        <tr>
+            <td data-label="Name">{{ account.name }}</td>
+            <td data-label="URL"><code>{{ account.url_display }}</code></td>
+            <td data-label="Headers">{% if account.header_names %}<small>{{ account.header_names }}</small>{% else %}—{% endif %}</td>
+            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+            <td data-label="Actions" class="action-cell">
+                <button class="btn-sm" onclick="withBusy(this, (btn) => testWebhookAccount({{ account.id }}, btn))">Test</button>
+                <form method="post" action="/api/webhook-accounts/{{ account.id }}/delete" class="inline">
+                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts and not webhook_accounts %}
+<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, generic webhook, or add an email address above.</p>
 {% endif %}
 
 <script>

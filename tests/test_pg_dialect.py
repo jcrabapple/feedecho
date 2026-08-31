@@ -65,6 +65,7 @@ class TestPostgresInit:
             "microblog_accounts",
             "matrix_accounts",
             "discord_accounts",
+            "webhook_accounts",
             "settings",
             "users",
             "posted_items",

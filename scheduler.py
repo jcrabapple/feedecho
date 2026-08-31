@@ -64,6 +64,15 @@ from discord import (
     build_embed as discord_build_embed,
     send_webhook as discord_send_webhook,
 )
+from webhook import (
+    WebhookAuthError,
+    WebhookError,
+    WebhookNotFoundError,
+    WebhookRejectedError,
+    build_payload as webhook_build_payload,
+    load_headers,
+    send_webhook as webhook_send_webhook,
+)
 from notify import (
     max_attempts,
     next_retry_delay,
@@ -802,6 +811,17 @@ def _render_and_dispatch(
             echo,
             item,
             content,
+            echo["destination_id"],
+            posted_id,
+            claim_token,
+        )
+
+    if echo["destination_type"] == "webhook":
+        return _send_webhook(
+            echo,
+            item,
+            content,
+            feed_name,
             echo["destination_id"],
             posted_id,
             claim_token,
@@ -1820,6 +1840,83 @@ def _send_discord(
 
     # Discord replies 204 with no message id (and a jump link would need the
     # guild id, which webhooks do not expose), so there is no post_url.
+    ok = _update_post(posted_id, claim_token, "success", post_url="")
+    if ok:
+        record_success(echo["id"])
+    return ok
+
+
+def _send_webhook(
+    echo,
+    item: dict,
+    content: str,
+    feed_name: str,
+    account_id: int,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Dispatch one rendered item to a generic webhook endpoint.
+
+    The payload is one flat JSON object: ``text`` (the rendered template)
+    plus every parsed item field, so receivers can map whatever shape they
+    need. Auth failures (401/403), vanished endpoints (404/410), and rejected
+    payloads (400/422) are permanent until the user fixes the account; rate
+    limits and 5xx ride the transient retry pipeline.
+
+    There is no per-message URL for a generic webhook, so post_url is "".
+    """
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM webhook_accounts WHERE id = ? AND user_id = ?",
+            (account_id, echo["user_id"]),
+        ).fetchone()
+
+    if not account:
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Webhook account {account_id} not found",
+            permanent=True,
+        )
+
+    payload = webhook_build_payload(item, content, feed_name=feed_name)
+    headers = load_headers(account["headers"])
+
+    # Same contract as the other senders: re-validate the claim immediately
+    # before the irreversible step.
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before webhook dispatch; skipping item %s",
+            echo["id"],
+            item["id"],
+        )
+        return False
+
+    try:
+        webhook_send_webhook(account["url"], headers, payload)
+    except (WebhookAuthError, WebhookNotFoundError, WebhookRejectedError) as e:
+        # Wrong credentials, a deleted endpoint, or a rejected payload shape
+        # cannot heal on retry: permanent until the user reconnects.
+        logger.error("Echo %s: webhook delivery refused: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Webhook delivery refused: {e}",
+            permanent=True,
+        )
+    except WebhookError as e:
+        logger.exception("Echo %s: webhook post failed", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"Webhook delivery failed: {e}"
+        )
+    except Exception:
+        logger.exception("Echo %s: webhook post failed unexpectedly", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], "Webhook delivery failed"
+        )
+
     ok = _update_post(posted_id, claim_token, "success", post_url="")
     if ok:
         record_success(echo["id"])

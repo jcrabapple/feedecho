@@ -109,6 +109,20 @@ async function testDiscordAccount(accountId, btn) {
     }
 }
 
+async function testWebhookAccount(accountId, btn) {
+    try {
+        const resp = await fetch(`/api/webhook-accounts/${accountId}/test`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
+            return;
+        }
+        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    }
+}
+
 async function testFeed(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/test`, { method: 'POST' });

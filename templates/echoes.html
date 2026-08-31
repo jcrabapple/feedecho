@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Echoes</h1>
 
-<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, or email) using a template.</p>
+<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, a generic webhook, or email) using a template.</p>
 
 <form method="post" action="/api/echoes" class="echo-form">
     <div class="form-row">
@@ -34,6 +34,9 @@
                 {% if discord_accounts %}
                 <option value="discord">Discord Channel</option>
                 {% endif %}
+                {% if webhook_accounts %}
+                <option value="webhook">Webhook</option>
+                {% endif %}
             </select>
         </label>
     </div>
@@ -41,7 +44,7 @@
    first in the same if-chain below. Its field row must start visible and the
    rest hidden server-side: hiding only via the inline script flashes the
    Mastodon row on every load and leaves it wrong with JS disabled. #}
-{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ''))))) %}
+{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('webhook' if webhook_accounts else '')))))) %}
 {% macro dest_hidden(dest) %}{% if dest != first_dest %} style="display: none;"{% endif %}{% endmacro %}
 <div class="form-row" id="mastodon-fields"{{ dest_hidden('mastodon') }}>
     <label>Mastodon Account
@@ -127,7 +130,7 @@
         </label>
         <label>Attach image
             <input type="checkbox" name="attach_image" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's first image. Mastodon, Bluesky, and Matrix upload it as media; micro.blog fetches it by URL; Discord shows it in the post's embed.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's first image. Mastodon, Bluesky, and Matrix upload it as media; micro.blog fetches it by URL; Discord shows it in the post's embed. Webhook deliveries always include image_url in the payload.</span>
         </label>
     </div>
     <div class="form-row" id="microblog-fields"{{ dest_hidden('microblog') }}>
@@ -152,6 +155,15 @@
         <label>Discord Channel
             <select name="discord_account_id">
                 {% for account in discord_accounts %}
+                <option value="{{ account.id }}">{{ account.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    <div class="form-row" id="webhook-fields"{{ dest_hidden('webhook') }}>
+        <label>Webhook
+            <select name="webhook_account_id">
+                {% for account in webhook_accounts %}
                 <option value="{{ account.id }}">{{ account.name }}</option>
                 {% endfor %}
             </select>
@@ -219,6 +231,8 @@
                         <span class="badge badge-info">Matrix</span>
                         {% elif echo.destination_type == 'discord' %}
                         <span class="badge badge-info">Discord</span>
+                        {% elif echo.destination_type == 'webhook' %}
+                        <span class="badge badge-info">Webhook</span>
                         {% endif %}
                     </span>
                     <code class="dest-name">{{ echo.destination_name }}</code>
@@ -241,7 +255,7 @@
                 <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
                 {% endif %}
             </td>
-            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord') else echo.visibility }}</td>
+            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord', 'webhook') else echo.visibility }}</td>
             <td data-label="Status">
                 {% if echo.enabled %}
                 <span class="badge badge-success">Enabled</span>
@@ -295,6 +309,10 @@
     {% for a in discord_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
 
+<script id="webhook-options" type="text/html">
+    {% for a in webhook_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+</script>
+
 <script>
 function toggleDestFields() {
     const destType = document.getElementById('destination-type').value;
@@ -304,6 +322,7 @@ function toggleDestFields() {
     document.getElementById('microblog-fields').style.display = destType === 'microblog' ? '' : 'none';
     document.getElementById('matrix-fields').style.display = destType === 'matrix' ? '' : 'none';
     document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
+    document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
     const digestFields = document.getElementById('digest-fields');
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
     const dripFields = document.getElementById('drip-fields');

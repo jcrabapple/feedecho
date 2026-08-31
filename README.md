@@ -4,7 +4,7 @@
   <p><em>Your feeds, echoed everywhere.</em></p>
 </div>
 
-Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, and email using configurable templates.
+Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, generic webhooks, and email using configurable templates.
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
@@ -16,8 +16,9 @@ Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/s
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
 - **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
+- **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, or anything you run yourself
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
-- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, and Discord channels
+- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, and webhook endpoints
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
@@ -29,7 +30,7 @@ Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/s
 - **Mobile-responsive** — tables convert to cards, forms stack, 44px touch targets
 - **Idempotent posting** — failed posts are retried, duplicates are prevented
 - **Auto-initialization** — feeds set their baseline on first fetch, no manual init needed
-- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, Matrix, and Discord
+- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, Matrix, Discord, and webhooks
 
 ## Tech Stack
 
@@ -155,9 +156,10 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 3. **Add a micro.blog blog** — Create an app token at [micro.blog/account/apps](https://micro.blog/account/apps), then paste it under Connect Micro.blog on `/accounts`. FeedEcho discovers every blog the token can post to and connects each one.
 4. **Add a Matrix room** — Copy the access token of the account that should post (Element: Settings → Help & About → Access Token), then enter the homeserver, token, and room ID or alias under Connect Matrix on `/accounts`. That account must already be in the room.
 5. **Add a Discord channel** — In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it under Connect Discord on `/accounts`.
-6. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
-7. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
-8. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
+6. **Add a webhook** — Under Connect Webhook on `/accounts`, enter any HTTP endpoint and optional custom headers (one per line, `Authorization: Bearer ...`). Each item arrives as one JSON object.
+7. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
+8. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
+9. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
 ### Bluesky details
 
@@ -183,6 +185,14 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - Posts send the rendered template as the message content (truncated to Discord's 2000-character limit). When image attachments are on and the item has one, a single embed carries the title, link, and image — Discord fetches the embed image itself, so an unusable image simply renders the post without the picture.
 - Webhooks reply with no message ID and no guild link, so post history has no per-message URL for Discord. Content warnings and visibility settings are Mastodon-only and are ignored for Discord.
 - Deleted or revoked webhooks fail permanently until reconnected; Discord's 30-messages-per-minute rate limit is treated as a transient error and rides the normal retry pipeline.
+
+### Webhook details
+
+- Each item is POSTed as one flat JSON object: `text` (your template output), `id`, `title`, `link`, `summary`, `content`, `author`, `published`, `tags`, `image_url`, `image_alt`, and `feed_name`. Receivers map whatever shape they need; FeedEcho never downloads the image, the consumer fetches `image_url` itself if it wants it.
+- Custom headers are optional and entered one per line (`Authorization: Bearer ...`). Header values are stored like credentials — never rendered back in the UI and never written to logs or error history.
+- Connect stores the endpoint without posting to it. The Test button sends a real test delivery — a generic webhook has no read-only check.
+- Self-hosted mode allows http and LAN/loopback targets (post to ntfy on your own network). The hosted service requires https and validates every URL against the SSRF guard, then sends through the pinned-IP transport, so a URL can never reach private addresses from our servers — and your header credentials never go out in cleartext.
+- Redirects are never followed. Auth failures (401/403), vanished endpoints (404/410), and rejected payloads (400/422) fail permanently until you reconnect; rate limits and 5xx ride the retry pipeline. No per-message URL in post history, and visibility/content-warning settings don't apply.
 
 ## Template Variables
 

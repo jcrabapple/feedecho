@@ -6,3 +6,6 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# Local critique tooling artifacts
+.impeccable/

@@ -53,6 +53,14 @@ class TestReaderPageSingle:
             resp = c.get("/reader?view=all")
         assert "Item A" in resp.text and "Item B" in resp.text
 
+    def test_reader_uses_unified_action_buttons(self, single_env):
+        with TestClient(app) as c:
+            resp = c.get("/reader", params={"view": "all"})
+        text = resp.text
+        assert "action-btn" in text
+        assert "aria-pressed" in text
+        assert "☆" in text or "★" in text
+
     def test_reader_hides_read_disabled_feeds(self, single_env):
         with database.get_db() as db:
             db.execute(

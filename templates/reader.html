@@ -62,14 +62,17 @@
             {% endif %}
             <div class="reader-item-actions">
               {% if item.link | safe_url %}
-              <a class="btn-sm" href="{{ item.link | safe_url }}" target="_blank" rel="noopener">Open original ↗</a>
+              <a class="action-btn action-btn--primary" href="{{ item.link | safe_url }}" target="_blank" rel="noopener">Open original ↗</a>
               {% endif %}
-              <button class="btn-sm" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
-              <button class="btn-sm" onclick="readerToggleStar({{ item.id }}, this)">{% if item.starred %}Unstar{% else %}Star{% endif %}</button>
-              <a class="btn-sm" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo…</a>
+              <button class="action-btn" type="button" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
+              <button class="action-btn action-btn--star{% if item.starred %} is-starred{% endif %}" type="button"
+                      onclick="readerToggleStar({{ item.id }}, this)" aria-pressed="{{ 'true' if item.starred else 'false' }}">
+                <span class="action-btn__star" aria-hidden="true">{{ '★' if item.starred else '☆' }}</span> Star
+              </button>
+              <a class="action-btn" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo</a>
               {% if shout_destinations %}
               <details class="reader-shout">
-                <summary class="btn-sm">Shout…</summary>
+                <summary class="action-btn">Shout…</summary>
                 <form class="reader-shout-form" onsubmit="readerShout({{ item.id }}, this); return false">
                   <label>Destination
                     <select name="destination" required>

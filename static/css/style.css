@@ -1247,7 +1247,7 @@ details.account-section > summary:focus-visible {
 .reader-item-meta { color: var(--text-muted); font-size: 0.82rem; }
 .reader-item-body { padding: 0 1rem 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
 .reader-item-content { color: var(--text); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.reader-item-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.reader-item-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 @media (max-width: 720px) { .reader { grid-template-columns: 1fr; } }
 
 /* Shout (reader one-time post) */
@@ -1262,3 +1262,32 @@ details.account-section > summary:focus-visible {
 .reader-search input[type="search"] { flex: 1; min-width: 0; padding: 0.45rem 0.85rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 0.9rem; }
 .reader-search input[type="search"]:focus { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
 .reader-search-clear { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
+
+/* Reader article action row — one normalized class for <a>/<button>/<summary> */
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    padding: 0.35rem 0.6rem;
+    min-height: 36px;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1;
+    color: var(--text);
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    text-decoration: none;
+    cursor: pointer;
+    box-sizing: border-box;
+    list-style: none;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.action-btn::-webkit-details-marker { display: none; }
+.action-btn:hover { background: var(--surface); border-color: var(--text-muted); }
+.action-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.action-btn--primary { background: var(--primary-wash); border-color: var(--primary); color: var(--primary); }
+.action-btn--primary:hover { filter: brightness(0.96); }
+.action-btn__star { color: var(--text-muted); }
+.action-btn--star.is-starred { border-color: var(--accent); }
+.action-btn--star.is-starred .action-btn__star { color: var(--accent); }

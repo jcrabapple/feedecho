@@ -1,7 +1,7 @@
 """Feed parser — fetch and parse RSS, Atom, and JSON feeds.
 
 Returns normalized feed items with: id, title, link, summary, content,
-author, date, and raw data for template access.
+content_link, author, date, and raw data for template access.
 """
 
 import re
@@ -15,7 +15,7 @@ import threading
 import httpx
 import feedparser
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 
 USER_AGENT = "feedecho/1.0 (+https://github.com/yourusername/feedecho)"
@@ -404,12 +404,17 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
 
     items = []
     for entry in parsed.get("entries", []):
+        # Content HTML is read once and reused: {{ content }} is the
+        # stripped text, {{ content_link }} is the first outbound link
+        # inside it (recovered before strip_html drops the href).
+        content_html = entry.get("content", [{}])[0].get("value", "") if entry.get("content") else ""
         item = {
             "id": _get_item_id(entry),
             "title": clean_text(entry.get("title", "")),
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
-            "content": strip_html(entry.get("content", [{}])[0].get("value", "")) if entry.get("content") else clean_text(entry.get("summary", "")),
+            "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
+            "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
             "date": _parse_date_struct(entry),
             "tags": [tag.get("term", "") for tag in entry.get("tags", []) if tag.get("term")],
@@ -439,12 +444,14 @@ def parse_json_feed(data: dict) -> dict:
         elif entry.get("author") and isinstance(entry.get("author"), dict):
             author_name = entry["author"].get("name", "")
 
+        content_html = entry.get("content_html") or ""
         item = {
             "id": _get_json_item_id(entry),
             "title": entry.get("title", ""),
             "link": entry.get("url", ""),
             "summary": entry.get("summary", ""),
             "content": strip_html(entry.get("content_html") or entry.get("content_text", "")),
+            "content_link": _extract_first_link(content_html, base_url=entry.get("url", "")),
             "author": author_name,
             "date": _parse_iso_date(entry.get("date_published") or entry.get("date_modified")),
             "tags": entry.get("tags", []),
@@ -646,6 +653,36 @@ def truncate(text: str, max_len: int = 500) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len - 1].rstrip() + "…"
+
+
+def _extract_first_link(html_str: str, base_url: str = "") -> str:
+    """First outbound <a href> inside the content HTML, resolved to absolute.
+
+    Link-blogs (pika.page, Micro.blog, etc.) wrap the headline in an <a>
+    pointing at the external article. ``strip_html()`` drops that href while
+    keeping the anchor text, so ``{{ content }}`` loses the link even though
+    the headline survives. This recovers it for ``{{ content_link }}``.
+
+    Returns the absolute URL, or "" when the content has no link. Relative
+    hrefs are resolved against ``base_url`` (the item's own link).
+    """
+    if not html_str:
+        return ""
+    # Negative lookbehind on the href name so attribute suffixes like
+    # `data-href` / `x-href` are not mistaken for a real `href`.
+    match = re.search(r'<a\b[^>]*?(?<![\w-])href\s*=\s*["\']([^"\']+)["\']', html_str, re.IGNORECASE)
+    if not match:
+        return ""
+    href = html.unescape(match.group(1)).strip()
+    if not href:
+        return ""
+    if "://" in href:
+        return href
+    if href.startswith("//"):
+        return "https:" + href
+    if base_url:
+        return urljoin(base_url, href)
+    return href
 
 
 def _extract_rss_image(entry: dict) -> str:

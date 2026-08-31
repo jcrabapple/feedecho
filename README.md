@@ -188,7 +188,7 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 
 ### Webhook details
 
-- Each item is POSTed as one flat JSON object: `text` (your template output), `id`, `title`, `link`, `summary`, `content`, `author`, `published`, `tags`, `image_url`, `image_alt`, and `feed_name`. Receivers map whatever shape they need; FeedEcho never downloads the image, the consumer fetches `image_url` itself if it wants it.
+- Each item is POSTed as one flat JSON object: `text` (your template output), `id`, `title`, `link`, `summary`, `content`, `content_link`, `author`, `published`, `tags`, `image_url`, `image_alt`, and `feed_name`. Receivers map whatever shape they need; FeedEcho never downloads the image, the consumer fetches `image_url` itself if it wants it.
 - Custom headers are optional and entered one per line (`Authorization: Bearer ...`). Header values are stored like credentials — never rendered back in the UI and never written to logs or error history.
 - Connect stores the endpoint without posting to it. The Test button sends a real test delivery — a generic webhook has no read-only check.
 - Self-hosted mode allows http and LAN/loopback targets (post to ntfy on your own network). The hosted service requires https and validates every URL against the SSRF guard, then sends through the pinned-IP transport, so a URL can never reach private addresses from our servers — and your header credentials never go out in cleartext.

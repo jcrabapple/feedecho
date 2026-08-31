@@ -13,7 +13,7 @@ Payload: one flat JSON object per item.
       "text": "<the rendered echo template>",
       "id": "<feed item id>",
       "title": "...", "link": "...", "summary": "...", "content": "...",
-      "author": "...", "published": "...", "tags": [...],
+      "content_link": "...", "author": "...", "published": "...", "tags": [...],
       "image_url": "...", "image_alt": "...", "feed_name": "..."
     }
 
@@ -213,6 +213,7 @@ def build_payload(item: dict, text: str, feed_name: str = "") -> dict:
         "link": item.get("link", "") or "",
         "summary": item.get("summary", "") or "",
         "content": item.get("content", "") or "",
+        "content_link": item.get("content_link", "") or "",
         "author": item.get("author", "") or "",
         "published": item.get("date", "") or "",
         "tags": tags,
@@ -331,6 +332,7 @@ def test_connection(url: str, headers: dict[str, str]) -> tuple[bool, str]:
                 "link": "",
                 "summary": "",
                 "content": "",
+                "content_link": "",
                 "author": "",
                 "published": "",
                 "tags": [],

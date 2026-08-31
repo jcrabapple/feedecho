@@ -68,3 +68,50 @@ class TestReaderPlanGating:
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         with TestClient(app) as c:
             assert c.get("/reader").status_code == 200
+
+class TestReaderEnabled:
+    def test_reader_enabled_by_plan(self):
+        import plans
+
+        assert plans.reader_enabled("paid") is True
+        assert plans.reader_enabled("trial") is False
+        assert plans.reader_enabled("beta") is False
+        assert plans.reader_enabled("unknown-plan") is False
+
+
+
+class TestReaderImportEntitlement:
+    def test_trial_import_clamps_read_enabled(self, multi_env):
+        import import_export
+
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://e.com/f", "read_enabled": 1}],
+            "accounts": {section: [] for section in import_export.ACCOUNT_TYPES},
+            "echoes": [],
+        }
+        with database.get_db() as db:
+            import_export.import_data(db, 11, payload)  # user 11 = trial
+            row = db.execute(
+                "SELECT read_enabled FROM feeds WHERE url = ?", ("https://e.com/f",)
+            ).fetchone()
+        assert row["read_enabled"] == 0
+
+    def test_paid_import_keeps_read_enabled(self, multi_env):
+        import import_export
+
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://e.com/f", "read_enabled": 1}],
+            "accounts": {section: [] for section in import_export.ACCOUNT_TYPES},
+            "echoes": [],
+        }
+        with database.get_db() as db:
+            import_export.import_data(db, 12, payload)  # user 12 = paid
+            row = db.execute(
+                "SELECT read_enabled FROM feeds WHERE url = ?", ("https://e.com/f",)
+            ).fetchone()
+        assert row["read_enabled"] == 1
+

@@ -582,6 +582,16 @@ def _user_plan(db, uid: int) -> str:
     return (row["plan"] if row else None) or "trial"
 
 
+def _require_reader(db, uid: int) -> None:
+    """402 in multi mode when the plan does not include the RSS reader.
+
+    Single mode never raises (no plan gating). Every reader route must call
+    this so a future route cannot forget the entitlement check.
+    """
+    if settings.MULTI and not plans.reader_enabled(_user_plan(db, uid)):
+        raise HTTPException(status_code=402, detail="The RSS reader requires a paid plan")
+
+
 def _check_destination_cap(db, uid: int) -> None:
     """Raise PlanError when one more connected account exceeds the plan.
 
@@ -1819,8 +1829,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
     feed_id = _filter_int(feed)
     view = view if view in ("all", "unread", "starred") else "unread"
     with get_db() as db:
-        if settings.MULTI and not plans.reader_enabled(_user_plan(db, uid)):
-            raise HTTPException(status_code=402, detail="The RSS reader requires a paid plan")
+        _require_reader(db, uid)
         feeds = db.execute(
             """
             SELECT f.*,
@@ -3171,8 +3180,7 @@ def reader_shout(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as db:
-        if settings.MULTI and not plans.reader_enabled(_user_plan(db, uid)):
-            raise HTTPException(status_code=402, detail="The RSS reader requires a paid plan")
+        _require_reader(db, uid)
         row = db.execute(
             "SELECT i.*, f.name AS feed_name FROM feed_items i"
             " JOIN feeds f ON i.feed_id = f.id"

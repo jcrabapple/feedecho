@@ -364,6 +364,11 @@ def import_data(db, uid: int, payload: dict) -> dict:
             sum(len(v) for v in new_account_keys.values()),
         )
 
+    # The reader is a paid capability in multi mode, so a feed's read_enabled
+    # flag must not be imported by a plan that doesn't include it (single mode
+    # is always allowed). Same clamp-on-import philosophy as poll/drip below.
+    reader_allowed = not settings.MULTI or plans.reader_enabled(_user_plan(db, uid))
+
     # ── Insert feeds ────────────────────────────────────────────────────────
     for url in new_feed_urls:
         feed = first_feed[url]
@@ -378,7 +383,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 poll,
                 feed.get("last_item_id"),
                 1 if feed.get("paused") else 0,
-                1 if feed.get("read_enabled") else 0,
+                1 if (feed.get("read_enabled") and reader_allowed) else 0,
                 uid,
             ),
         ).fetchone()

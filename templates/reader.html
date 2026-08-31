@@ -12,19 +12,16 @@
       <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}">
         <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}">
           <span class="reader-feed-name">{{ f.name }}</span>
-          <span class="reader-feed-stats">
-            {% if f.unread %}<span class="badge badge-info">{{ f.unread }} unread</span>{% endif %}
-            {% if f.echo_count %}<span class="badge badge-muted">{{ f.echo_count }} echo{{ 's' if f.echo_count != 1 else '' }}</span>{% endif %}
+          <span class="reader-feed-meta">
+            {% if f.echo_count %}<span class="reader-feed-echo" title="{{ f.echo_count }} active echo{{ 's' if f.echo_count != 1 else '' }}">⇢</span>{% endif %}
+            {% if f.unread %}<span class="reader-feed-unread">{{ f.unread }}</span>{% endif %}
           </span>
         </a>
-        <button class="btn-sm reader-feed-toggle" onclick="readerToggleFeed({{ f.id }}, this)">
-          {% if f.read_enabled %}Reading: on{% else %}Reading: off{% endif %}
-        </button>
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <p class="empty-state"><a href="/feeds">Add a feed</a> to start reading.</p>
+    <p class="empty-state">No feeds have reading enabled. <a href="/feeds">Turn on reading</a> for a feed to see it here.</p>
     {% endif %}
   </aside>
 

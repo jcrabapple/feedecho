@@ -23,7 +23,7 @@ def env(monkeypatch, tmp_path):
             " VALUES (?, ?, ?, ?)",
             ("main", "user", "https://mastodon.social", "tok"),
         )
-        db.execute("INSERT INTO feeds (name, url) VALUES (?, ?)", ("F", "https://example.com/feed"))
+        db.execute("INSERT INTO feeds (name, url, read_enabled) VALUES (?, ?, 1)", ("F", "https://example.com/feed"))
         db.execute("INSERT INTO feed_items (feed_id, item_id, title) VALUES (1, 'a', 'Item A')")
     return settings
 

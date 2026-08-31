@@ -1839,13 +1839,13 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
                      WHERE e.feed_id = f.id AND e.deleted_at IS NULL
                        AND e.enabled = 1) AS echo_count
               FROM feeds f
-             WHERE f.deleted_at IS NULL AND f.user_id = ?
+             WHERE f.deleted_at IS NULL AND f.user_id = ? AND f.read_enabled = 1
              ORDER BY f.name
             """,
             (uid,),
         ).fetchall()
 
-        where = ["f.user_id = ?"]
+        where = ["f.user_id = ?", "f.read_enabled = 1"]
         params: list = [uid]
         if feed_id is not None:
             where.append("i.feed_id = ?")

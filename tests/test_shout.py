@@ -24,7 +24,7 @@ def single_env(monkeypatch, tmp_path):
             " VALUES (?, ?, ?, ?)",
             ("main", "user", "https://mastodon.social", "tok"),
         )
-        db.execute("INSERT INTO feeds (name, url) VALUES (?, ?)", ("F", "https://example.com/feed"))
+        db.execute("INSERT INTO feeds (name, url, read_enabled) VALUES (?, ?, 1)", ("F", "https://example.com/feed"))
         db.execute(
             "INSERT INTO feed_items (feed_id, item_id, title, link, summary, content, author, published_at)"
             " VALUES (1, 'a', 'Hello', 'https://example.com/a', 'sum', 'body', 'Auth', '2026-08-31 12:00:00')"

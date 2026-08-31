@@ -54,6 +54,11 @@
                 <button class="btn-sm" onclick="withBusy(this, (btn) => initFeed({{ feed.id }}, btn))" title="Set the feed's current latest item as the starting point so only newer items get posted">Initialize</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => fetchNow({{ feed.id }}, btn))" title="Check the feed for new items right now">Fetch</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => pauseFeed({{ feed.id }}, btn))">{{ 'Resume' if feed.paused else 'Pause' }}</button>
+                <button class="btn-sm" onclick="readerToggleFeed({{ feed.id }}, this)"
+                        title="Reading is {{ 'on' if feed.read_enabled else 'off' }} — click to toggle"
+                        aria-pressed="{{ 'true' if feed.read_enabled else 'false' }}">
+                  {% if feed.read_enabled %}📖 Reading on{% else %}📕 Reading off{% endif %}
+                </button>
                 <form method="post" action="/api/feeds/{{ feed.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this feed? Echoes and post history are preserved.')">Delete</button>
                 </form>

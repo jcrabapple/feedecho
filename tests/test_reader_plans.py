@@ -23,7 +23,7 @@ def multi_env(monkeypatch, tmp_path):
     with database.get_db() as db:
         db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'trial')", (11, "trial@example.com"))
         db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'paid')", (12, "paid@example.com"))
-        db.execute("INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)", ("F", "u", 12))
+        db.execute("INSERT INTO feeds (name, url, read_enabled, user_id) VALUES (?, ?, 1, ?)", ("F", "u", 12))
         db.execute("INSERT INTO feed_items (feed_id, item_id, title) VALUES (1, 'a', 'Item A')")
     return settings
 

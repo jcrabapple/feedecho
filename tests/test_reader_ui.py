@@ -53,6 +53,20 @@ class TestReaderPageSingle:
             resp = c.get("/reader?view=all")
         assert "Item A" in resp.text and "Item B" in resp.text
 
+    def test_reader_hides_read_disabled_feeds(self, single_env):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled) VALUES (?, ?, 0)",
+                ("Hidden", "https://example.com/hidden"),
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title) VALUES (2, 'h', 'Hidden Item')"
+            )
+        with TestClient(app) as c:
+            resp = c.get("/reader?view=all")
+        assert "Hidden Item" not in resp.text
+        assert "Hidden" not in resp.text
+
     def test_toggle_read(self, single_env):
         with TestClient(app) as c:
             assert c.post("/api/reader/1/read").json()["is_read"] is True

@@ -714,12 +714,15 @@ async function readerToggleStar(itemId, btn) {
 }
 
 async function readerToggleFeed(feedId, btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
     try {
         const resp = await fetch(`/api/feeds/${feedId}/reader-toggle`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
         reloadPreservingScroll();
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
 }
 
 async function readerMarkAllRead(btn) {

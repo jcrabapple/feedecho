@@ -10,6 +10,7 @@ event loop, where one 30-second feed fetch stalls every other request in the
 process. ``tests/test_review_fixes.py`` enforces this.
 """
 
+import json
 import os
 import re
 import logging
@@ -19,7 +20,7 @@ import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Match
@@ -34,6 +35,7 @@ import security
 from feed_parser import fetch_feed, SSRFError, validate_outbound_url
 import plans
 import invites
+import import_export
 from plans import PlanError
 from mastodon import test_connection, post_status, verify_credentials
 from bluesky import (
@@ -1808,8 +1810,9 @@ async def privacy_page(request: Request):
     return render("privacy.html", request)
 
 
-@app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
+def _render_settings(request: Request, **extra) -> HTMLResponse:
+    """Build the settings page context and render it (used by the GET page
+    and by the import handler's error/success render)."""
     uid = current_user_id(request)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
@@ -1839,7 +1842,79 @@ async def settings_page(request: Request):
                   smtp_configured=smtp_configured,
                   retry_notify=retry_notify,
                   alt_text_settings=alt_text_settings,
-                  alt_text_configured=alt_text_configured)
+                  alt_text_configured=alt_text_configured,
+                  **extra)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return _render_settings(request)
+
+
+# ── API: Import / Export ─────────────────────────────────────────────────────
+
+@app.get("/api/export")
+def export_all(request: Request):
+    """Download the user's feeds, accounts and echoes as a JSON document.
+
+    Contains credentials — auth-gated like every other route; the caller must
+    store the file accordingly.
+    """
+    uid = current_user_id(request)
+    with get_db() as db:
+        payload = import_export.build_export(db, uid)
+    data = json.dumps(payload, indent=2, ensure_ascii=False)
+    filename = "feedecho-export-" + datetime.now(timezone.utc).strftime("%Y%m%d") + ".json"
+    return Response(
+        content=data,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/import")
+async def import_all(request: Request, file: UploadFile = File(...)):
+    """Import feeds, accounts and echoes from an export document.
+
+    Quota overruns (multi mode) and malformed documents render the settings
+    page with an error banner; a valid import renders a success banner with the
+    counts. Nothing is written on error — the import runs in one transaction.
+    """
+    uid = current_user_id(request)
+    raw = await file.read()
+    if len(raw) > 5_000_000:
+        return _render_settings(
+            request, import_error="Import file is too large (5 MB maximum)."
+        )
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return _render_settings(request, import_error="That file is not valid JSON.")
+    with get_db() as db:
+        try:
+            summary = import_export.import_data(db, uid, payload)
+        except import_export.ExportError as exc:
+            return _render_settings(request, import_error=str(exc))
+    parts = [
+        f"Imported {summary['added_feeds']} feed"
+        + ("s" if summary["added_feeds"] != 1 else ""),
+        f"{summary['added_accounts']} account"
+        + ("s" if summary["added_accounts"] != 1 else ""),
+        f"{summary['added_echoes']} echo"
+        + ("s" if summary["added_echoes"] != 1 else ""),
+    ]
+    if summary["existing_feeds"] or summary["existing_accounts"] or summary["existing_echoes"]:
+        parts.append(
+            f"{summary['existing_feeds'] + summary['existing_accounts'] + summary['existing_echoes']}"
+            " already present (skipped)"
+        )
+    if summary["skipped_echoes"]:
+        parts.append(
+            f"{summary['skipped_echoes']} echo"
+            + ("s" if summary["skipped_echoes"] != 1 else "")
+            + " skipped (missing feed or account)"
+        )
+    return _render_settings(request, import_success=", ".join(parts) + ".")
 
 
 @app.get("/healthz")

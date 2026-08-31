@@ -3,6 +3,13 @@
 {% block content %}
 <h1>Settings</h1>
 
+{% if import_success %}
+<div class="alert alert-success" role="status">{{ import_success }}</div>
+{% endif %}
+{% if import_error %}
+<div class="alert alert-warning" role="status">{{ import_error }}</div>
+{% endif %}
+
 <section>
     <h2>SMTP Configuration</h2>
     <p class="hint">Configure the SMTP server used to send email echoes. Required if you want to route feed items to email addresses.</p>
@@ -118,5 +125,21 @@
     </form>
 
     <button type="button" class="btn-sm" onclick="testAltText(this)">Test Vision API</button>
+</section>
+
+<section>
+    <h2>Backup &amp; Migration</h2>
+    <p class="hint">Download your feeds, connected accounts, and echoes as a single file you can import into another FeedEcho instance — including the hosted service — and the reverse. <strong>The file contains account credentials</strong> (access tokens, app passwords, webhook URLs), so store it somewhere safe.</p>
+
+    <p><a class="btn-sm" href="/api/export" download>Download backup</a></p>
+
+    <form method="post" action="/api/import" enctype="multipart/form-data" class="echo-form">
+        <div class="form-row">
+            <label for="import-file">Import a backup file
+                <input type="file" id="import-file" name="file" accept=".json,application/json" required>
+            </label>
+        </div>
+        <button type="submit">Import</button>
+    </form>
 </section>
 {% endblock %}

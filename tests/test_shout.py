@@ -87,6 +87,14 @@ class TestShout:
         with TestClient(app) as c:
             assert c.post("/api/reader/999/shout", data={"destination": "mastodon:1"}).status_code == 404
 
+    def test_reader_page_renders_shout_form(self, single_env):
+        with TestClient(app) as c:
+            resp = c.get("/reader")
+        assert resp.status_code == 200
+        assert "Shout" in resp.text
+        assert "readerShout" in resp.text
+        assert 'name="destination"' in resp.text
+
 
 @pytest.fixture
 def multi_env(monkeypatch, tmp_path):

@@ -26,13 +26,19 @@
   </aside>
 
   <section class="reader-main" aria-label="Items">
+    <form method="get" action="/reader" class="reader-search" role="search">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search titles and articles…" aria-label="Search titles and articles">
+      {% if current_feed %}<input type="hidden" name="feed" value="{{ current_feed }}">{% endif %}
+      <button type="submit" class="btn-sm">Search</button>
+      {% if q %}<a class="reader-search-clear" href="/reader{% if current_feed %}?feed={{ current_feed }}{% endif %}">Clear</a>{% endif %}
+    </form>
     <div class="reader-toolbar">
       <div class="reader-tabs" role="tablist" aria-label="Filter">
-        <a class="reader-tab {% if view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}">Unread</a>
-        <a class="reader-tab {% if view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">All</a>
-        <a class="reader-tab {% if view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}">Starred</a>
+        <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}">Unread</a>
+        <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">All</a>
+        <a class="reader-tab {% if not q and view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}">Starred</a>
       </div>
-      {% if items %}
+      {% if items and not q %}
       <button class="btn-sm" onclick="readerMarkAllRead(this)">Mark all read</button>
       {% endif %}
     </div>
@@ -87,7 +93,8 @@
     </ul>
     {% else %}
     <p class="empty-state">
-      {% if view == 'starred' %}No starred items. Star an item to keep it here.
+      {% if q %}No results for "{{ q }}".
+      {% elif view == 'starred' %}No starred items. Star an item to keep it here.
       {% elif view == 'all' %}No items stored yet. Enable reading on a feed, then it fills in on the next poll.
       {% else %}No unread items. <a href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">View all</a>.
       {% endif %}

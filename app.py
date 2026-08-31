@@ -1817,7 +1817,7 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
 
 
 @app.get("/reader", response_class=HTMLResponse)
-async def reader_page(request: Request, feed: str = "", view: str = "unread"):
+async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = ""):
     """Consolidated RSS reading surface (issue #11).
 
     Server-rendered list of stored feed items, newest first, scoped to the
@@ -1828,6 +1828,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
     view = view if view in ("all", "unread", "starred") else "unread"
+    q = (q or "").strip()
     with get_db() as db:
         _require_reader(db, uid)
         feeds = db.execute(
@@ -1850,7 +1851,17 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
         if feed_id is not None:
             where.append("i.feed_id = ?")
             params.append(feed_id)
-        if view == "unread":
+        if q:
+            # Full-text search across title + body, case-insensitive. The
+            # unread/starred filter is skipped so a search surfaces everything
+            # cached, read or not. (% and _ in the query act as LIKE wildcards.)
+            like = f"%{q.lower()}%"
+            where.append(
+                "(LOWER(i.title) LIKE ? OR LOWER(i.content) LIKE ?"
+                " OR LOWER(i.summary) LIKE ?)"
+            )
+            params.extend([like, like, like])
+        elif view == "unread":
             where.append("i.is_read = 0")
         elif view == "starred":
             where.append("i.starred = 1")
@@ -1873,6 +1884,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
         items=items,
         current_feed=str(feed_id) if feed_id is not None else "",
         view=view,
+        q=q,
         shout_destinations=_shout_destinations(uid),
         default_template="{{ title }} {{ link }}",
     )

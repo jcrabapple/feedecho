@@ -135,3 +135,30 @@ class TestReaderScoping:
             a = db.execute("SELECT is_read FROM feed_items WHERE id = 1").fetchone()["is_read"]
             b = db.execute("SELECT is_read FROM feed_items WHERE id = 2").fetchone()["is_read"]
         assert a == 1 and b == 0
+
+
+
+class TestReaderSearch:
+    def test_search_matches_title(self, single_env):
+        with TestClient(app) as c:
+            assert "Item A" in c.get("/reader", params={"q": "item a"}).text
+
+    def test_search_matches_body_and_ignores_unread(self, single_env):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, content, is_read)"
+                " VALUES (1, 'c', 'Read Me', 'A distinctive body phrase', 1)"
+            )
+        with TestClient(app) as c:
+            # body match, and the item is read so the unread filter must be bypassed
+            assert "Read Me" in c.get("/reader", params={"q": "distinctive body"}).text
+
+    def test_search_is_case_insensitive(self, single_env):
+        with TestClient(app) as c:
+            assert "Item A" in c.get("/reader", params={"q": "ITEM A"}).text
+
+    def test_search_no_results(self, single_env):
+        with TestClient(app) as c:
+            resp = c.get("/reader", params={"q": "zzzznothing"})
+        assert "No results for" in resp.text
+

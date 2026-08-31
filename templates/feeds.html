@@ -51,7 +51,7 @@
                 <button class="btn-sm" onclick="withBusy(this, (btn) => testFeed({{ feed.id }}, btn))" title="Fetch the feed now and show a preview of its items">Test</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => fetchNow({{ feed.id }}, btn))" title="Check the feed for new items right now">Fetch</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => pauseFeed({{ feed.id }}, btn))">{{ 'Resume' if feed.paused else 'Pause' }}</button>
-                <button class="reader-toggle-icon" onclick="readerToggleFeed({{ feed.id }}, this)"
+                <button class="btn-sm" onclick="readerToggleFeed({{ feed.id }}, this)"
                         title="Reading is {{ 'on' if feed.read_enabled else 'off' }} — click to toggle"
                         aria-label="Toggle reading (currently {{ 'on' if feed.read_enabled else 'off' }})"
                         aria-pressed="{{ 'true' if feed.read_enabled else 'false' }}">

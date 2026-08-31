@@ -44,9 +44,9 @@
     </div>
 
     {% if items %}
-    <ul class="reader-item-list">
+    <ul class="reader-item-list" data-view="{{ view }}">
       {% for item in items %}
-      <li>
+      <li id="item-{{ item.id }}" class="reader-entry" data-item-id="{{ item.id }}">
         <details class="reader-item {% if not item.is_read %}unread{% endif %}">
           <summary>
             <span class="reader-item-title">{{ item.title or '(untitled)' }}{% if item.starred %} <span aria-label="Starred">★</span>{% endif %}</span>

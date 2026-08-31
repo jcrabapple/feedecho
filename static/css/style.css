@@ -1291,3 +1291,6 @@ details.account-section > summary:focus-visible {
 .action-btn__star { color: var(--text-muted); }
 .action-btn--star.is-starred { border-color: var(--accent); }
 .action-btn--star.is-starred .action-btn__star { color: var(--accent); }
+
+/* Keep scrolled-to reader cards clear of the sticky navbar */
+.reader-entry { scroll-margin-top: 72px; }

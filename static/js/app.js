@@ -684,22 +684,79 @@ function hydrateTableHeaders() {
 hydrateTableHeaders();
 
 // ── Reader (issue #11) ─────────────────────────────────────────────────────
+function readerNextEntry(entry) {
+    let n = entry.nextElementSibling;
+    while (n && !n.classList.contains('reader-entry')) n = n.nextElementSibling;
+    return n;
+}
+
+function readerList(entry) {
+    return entry.closest('.reader-item-list');
+}
+
+function readerApplyStar(btn, starred) {
+    btn.classList.toggle('is-starred', starred);
+    const glyph = btn.querySelector('.action-btn__star');
+    if (glyph) glyph.textContent = starred ? '★' : '☆';
+    btn.setAttribute('aria-pressed', starred ? 'true' : 'false');
+}
+
+// Sticky-header offset: keep the next card just below the navbar.
+const READER_HEADER_OFFSET = 72;
+
+function readerRemoveAndAdvance(entry) {
+    const list = readerList(entry);
+    const next = readerNextEntry(entry);
+    entry.remove();
+    if (next) {
+        // The next card slides up into the removed one's place. Only nudge the
+        // viewport if its top ended up hidden under the sticky header.
+        const top = next.getBoundingClientRect().top;
+        if (top < READER_HEADER_OFFSET) {
+            scrollBy({ top: top - READER_HEADER_OFFSET, behavior: 'smooth' });
+        }
+        next.querySelector('summary')?.focus({ preventScroll: true });
+    } else if (list && !list.querySelector('.reader-entry')) {
+        reloadPreservingScroll(); // list is empty -> reload to surface the empty state
+    }
+}
+
 async function readerToggleRead(itemId, btn) {
+    if (btn.disabled) return;
+    const entry = btn.closest('.reader-entry');
+    btn.disabled = true;
     try {
         const resp = await fetch(`/api/reader/${itemId}/read`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
-        reloadPreservingScroll();
+        const list = readerList(entry);
+        if (list && list.dataset.view === 'unread' && data.is_read) {
+            readerRemoveAndAdvance(entry);
+        } else {
+            const details = entry.querySelector('.reader-item');
+            details.classList.toggle('unread', !data.is_read);
+            btn.textContent = data.is_read ? 'Mark unread' : 'Mark read';
+        }
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
 }
 
 async function readerToggleStar(itemId, btn) {
+    if (btn.disabled) return;
+    const entry = btn.closest('.reader-entry');
+    btn.disabled = true;
     try {
         const resp = await fetch(`/api/reader/${itemId}/star`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
-        reloadPreservingScroll();
+        const list = readerList(entry);
+        if (list && list.dataset.view === 'starred' && !data.starred) {
+            readerRemoveAndAdvance(entry);
+        } else {
+            readerApplyStar(btn, data.starred);
+        }
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
 }
 
 async function readerToggleFeed(feedId, btn) {

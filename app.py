@@ -1850,7 +1850,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
               FROM feed_items i
               JOIN feeds f ON i.feed_id = f.id
              WHERE {" AND ".join(where)}
-             ORDER BY i.published_at DESC, i.id DESC
+             ORDER BY (i.published_at IS NULL), i.published_at DESC, i.id DESC
              LIMIT 100
             """,
             tuple(params),
@@ -3076,50 +3076,45 @@ def toggle_reader_feed(request: Request, feed_id: int):
     """Toggle whether a feed is ingested for reading (issue #11)."""
     uid = current_user_id(request)
     with get_db() as db:
-        feed = db.execute(
-            "SELECT read_enabled FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+        result = db.execute(
+            "UPDATE feeds SET read_enabled = 1 - read_enabled"
+            " WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
             (feed_id, uid),
-        ).fetchone()
-        if not feed:
-            raise HTTPException(status_code=404, detail="Feed not found")
-        new_val = 0 if feed["read_enabled"] else 1
-        db.execute(
-            "UPDATE feeds SET read_enabled = ? WHERE id = ? AND user_id = ?",
-            (new_val, feed_id, uid),
         )
-    return {"success": True, "read_enabled": bool(new_val)}
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        row = db.execute("SELECT read_enabled FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+    return {"success": True, "read_enabled": bool(row["read_enabled"])}
 
 
 @app.post("/api/reader/{item_id}/read")
 def reader_toggle_read(request: Request, item_id: int):
     uid = current_user_id(request)
     with get_db() as db:
-        row = db.execute(
-            "SELECT i.is_read FROM feed_items i JOIN feeds f ON i.feed_id = f.id"
-            " WHERE i.id = ? AND f.user_id = ?",
+        result = db.execute(
+            "UPDATE feed_items SET is_read = 1 - is_read"
+            " WHERE id = ? AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (item_id, uid),
-        ).fetchone()
-        if not row:
+        )
+        if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Item not found")
-        new_val = 0 if row["is_read"] else 1
-        db.execute("UPDATE feed_items SET is_read = ? WHERE id = ?", (new_val, item_id))
-    return {"success": True, "is_read": bool(new_val)}
+        row = db.execute("SELECT is_read FROM feed_items WHERE id = ?", (item_id,)).fetchone()
+    return {"success": True, "is_read": bool(row["is_read"])}
 
 
 @app.post("/api/reader/{item_id}/star")
 def reader_toggle_star(request: Request, item_id: int):
     uid = current_user_id(request)
     with get_db() as db:
-        row = db.execute(
-            "SELECT i.starred FROM feed_items i JOIN feeds f ON i.feed_id = f.id"
-            " WHERE i.id = ? AND f.user_id = ?",
+        result = db.execute(
+            "UPDATE feed_items SET starred = 1 - starred"
+            " WHERE id = ? AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (item_id, uid),
-        ).fetchone()
-        if not row:
+        )
+        if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Item not found")
-        new_val = 0 if row["starred"] else 1
-        db.execute("UPDATE feed_items SET starred = ? WHERE id = ?", (new_val, item_id))
-    return {"success": True, "starred": bool(new_val)}
+        row = db.execute("SELECT starred FROM feed_items WHERE id = ?", (item_id,)).fetchone()
+    return {"success": True, "starred": bool(row["starred"])}
 
 
 @app.post("/api/reader/mark-all-read")
@@ -3373,9 +3368,10 @@ async def add_echo(
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
              delivery_mode, drip_limit, is_enabled, uid),
         )
-    # Return to the originating surface (reader deep-link), guarded against
-    # open redirects: only an absolute path, never a protocol-relative "//host".
-    if not return_to.startswith("/") or return_to.startswith("//"):
+    # Return to the originating surface. Allowlist rather than prefix checks:
+    # the WHATWG URL parser treats backslashes as slashes, so a prefix check
+    # that accepts "/\evil.com" would be an open redirect.
+    if return_to not in ("/echoes", "/reader"):
         return_to = "/echoes"
     return RedirectResponse(url=return_to, status_code=303)
 

@@ -67,7 +67,7 @@
               {% if shout_destinations %}
               <details class="reader-shout">
                 <summary class="btn-sm">Shout…</summary>
-                <form class="reader-shout-form" onsubmit="return readerShout({{ item.id }}, this)">
+                <form class="reader-shout-form" onsubmit="readerShout({{ item.id }}, this); return false">
                   <label>Destination
                     <select name="destination" required>
                       {% for d in shout_destinations %}

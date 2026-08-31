@@ -58,14 +58,15 @@ class TestEchoDeepLink:
 
     def test_add_echo_rejects_open_redirect(self, env):
         with TestClient(app) as c:
-            r = c.post(
-                "/api/echoes",
-                data={"feed_id": "1", "destination_type": "mastodon",
-                      "account_id": "1", "return_to": "//evil.com"},
-                follow_redirects=False,
-            )
-        assert r.status_code == 303
-        assert r.headers["location"] == "/echoes"
+            for redirect_target in ("//evil.com", "/\\evil.com", "https://evil.com"):
+                r = c.post(
+                    "/api/echoes",
+                    data={"feed_id": "1", "destination_type": "mastodon",
+                          "account_id": "1", "return_to": redirect_target},
+                    follow_redirects=False,
+                )
+                assert r.status_code == 303
+                assert r.headers["location"] == "/echoes"
 
     def test_reader_shows_echo_link(self, env):
         with TestClient(app) as c:

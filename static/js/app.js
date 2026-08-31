@@ -735,8 +735,10 @@ async function readerMarkAllRead(btn) {
 }
 
 async function readerShout(itemId, form) {
-    const data = new URLSearchParams(new FormData(form));
     const btn = form.querySelector('button[type="submit"]');
+    if (btn.disabled) return false;
+    const data = new URLSearchParams(new FormData(form));
+    btn.disabled = true;
     try {
         const resp = await fetch(`/api/reader/${itemId}/shout`, { method: 'POST', body: data });
         const result = await resp.json();
@@ -748,5 +750,6 @@ async function readerShout(itemId, form) {
             showStatus(btn, result.error_message || 'Shout failed', 'error');
         }
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
     return false;
 }

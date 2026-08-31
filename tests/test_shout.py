@@ -93,6 +93,7 @@ class TestShout:
         assert resp.status_code == 200
         assert "Shout" in resp.text
         assert "readerShout" in resp.text
+        assert "return false" in resp.text
         assert 'name="destination"' in resp.text
 
 

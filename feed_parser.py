@@ -414,6 +414,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
             "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
+            "content_text": html_to_text(content_html) if content_html else "",
             "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
             "date": _parse_date_struct(entry),
@@ -451,6 +452,7 @@ def parse_json_feed(data: dict) -> dict:
             "link": entry.get("url", ""),
             "summary": entry.get("summary", ""),
             "content": strip_html(entry.get("content_html") or entry.get("content_text", "")),
+            "content_text": html_to_text(entry.get("content_html") or "") or entry.get("content_text", ""),
             "content_link": _extract_first_link(content_html, base_url=entry.get("url", "")),
             "author": author_name,
             "date": _parse_iso_date(entry.get("date_published") or entry.get("date_modified")),
@@ -641,6 +643,46 @@ def strip_html(html_str: str) -> str:
     # Normalize whitespace
     html_str = re.sub(r"\s+", " ", html_str).strip()
     return html_str
+
+
+def html_to_text(html_str: str) -> str:
+    """Convert HTML to readable plain text, preserving paragraph/list structure.
+
+    Unlike :func:`strip_html` (which collapses everything to one run for
+    statuses), this keeps a document's shape for the reader: block boundaries
+    and <br> become newlines, <li> becomes a bullet, and script/style/iframe
+    blocks are dropped. Output is safe plain text (rendered pre-wrap, never as
+    HTML), so it needs no sanitizer.
+    """
+    if not html_str:
+        return ""
+    html_str = re.sub(
+        r"<(script|style|iframe|object|embed|form)[^>]*>.*?</\1>",
+        "", html_str, flags=re.DOTALL | re.IGNORECASE,
+    )
+    html_str = re.sub(
+        r"</(p|div|section|article|blockquote|pre|h[1-6]|li|ul|ol|table|tr|figure|figcaption)>",
+        "\n", html_str, flags=re.IGNORECASE,
+    )
+    html_str = re.sub(r"<(br|hr)\s*/?>", "\n", html_str, flags=re.IGNORECASE)
+    html_str = re.sub(r"<li[^>]*>", "\n• ", html_str, flags=re.IGNORECASE)
+    html_str = re.sub(r"<[^>]+>", "", html_str)
+    text = html.unescape(html_str)
+    lines = [re.sub(r"[ \t\r\f\v]+", " ", ln).strip() for ln in text.split("\n")]
+    out = []
+    blank = True
+    for ln in lines:
+        if not ln:
+            if blank:
+                continue
+            out.append("")
+            blank = True
+        else:
+            out.append(ln)
+            blank = False
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
 
 
 def clean_html(html_str: str) -> str:

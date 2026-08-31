@@ -74,6 +74,19 @@ class TestStoreFeedItems:
         assert "T" not in row["published_at"]
         assert row["published_at"].count(":") == 2
 
+    def test_stores_content_text(self, env):
+        database, scheduler = env
+        with database.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES (?, ?)", ("f", "u"))
+        item = {"id": "x", "title": "T", "link": "l",
+                "content": "flat", "content_text": "para one\n\npara two"}
+        scheduler._store_feed_items(1, [item])
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT content_text FROM feed_items WHERE item_id = 'x'"
+            ).fetchone()
+        assert row["content_text"] == "para one\n\npara two"
+
 
 class TestCheckFeedReaderIngestion:
     def test_read_enabled_feed_without_echoes_is_stored(self, env, monkeypatch):
@@ -142,3 +155,33 @@ class TestCheckFeedReaderIngestion:
         stored = [r["item_id"] for r in rows]
         assert "a" in stored and "b" in stored
         assert posted, "echo must still deliver when reading is also enabled"
+
+
+class TestHtmlToText:
+    def test_preserves_paragraphs_and_lists(self):
+        from feed_parser import html_to_text
+
+        out = html_to_text(
+            "<p>First paragraph.</p><p>Second paragraph.</p>"
+            "<ul><li>Item 1</li><li>Item 2</li></ul>"
+        )
+        assert "First paragraph." in out
+        assert "Second paragraph." in out
+        assert "• Item 1" in out
+        assert "• Item 2" in out
+        assert "\n" in out
+
+    def test_drops_script_and_style(self):
+        from feed_parser import html_to_text
+
+        out = html_to_text("<script>alert(1)</script><p>Safe text</p><style>body{}</style>")
+        assert "alert" not in out
+        assert "Safe text" in out
+
+    def test_handles_br(self):
+        from feed_parser import html_to_text
+
+        out = html_to_text("line one<br>line two")
+        assert "line one" in out and "line two" in out
+        assert "\n" in out
+

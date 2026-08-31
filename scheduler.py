@@ -238,6 +238,7 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
             item.get("link") or "",
             item.get("summary") or "",
             item.get("content") or "",
+            item.get("content_text") or "",
             item.get("content_link") or "",
             item.get("author") or "",
             published_at,
@@ -252,9 +253,9 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                 """
                 INSERT INTO feed_items (
                     feed_id, item_id, title, link, summary, content,
-                    content_link, author, published_at
+                    content_text, content_link, author, published_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(feed_id, item_id) DO NOTHING
                 """,
                 row,

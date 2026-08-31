@@ -789,6 +789,7 @@ button:hover { background: var(--primary-hover); }
     background: var(--surface-light);
     border: 1px solid var(--border);
     color: var(--text);
+    text-decoration: none;
     margin-right: 0.25rem;
     margin-bottom: 0.25rem;
     min-height: 36px;
@@ -1257,6 +1258,7 @@ details.account-section > summary:focus-visible {
 .reader-shout-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--text-muted); }
 
 /* Reader full-text search */
-.reader-search { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
-.reader-search input[type="search"] { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 0.9rem; }
-.reader-search-clear { color: var(--text-muted); font-size: 0.85rem; }
+.reader-search { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 auto; max-width: 420px; }
+.reader-search input[type="search"] { flex: 1; min-width: 0; padding: 0.45rem 0.85rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 0.9rem; }
+.reader-search input[type="search"]:focus { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
+.reader-search-clear { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }

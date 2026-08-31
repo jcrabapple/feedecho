@@ -1214,3 +1214,34 @@ details.account-section > summary:focus-visible {
 .account-section-body { padding: 0 1rem 1rem; }
 .account-section-body > section { margin-top: 1rem; }
 .account-section-body h2 { margin-top: 1.25rem; }
+
+/* ── Reader (issue #11) ─────────────────────────────────────────────── */
+.reader { display: grid; grid-template-columns: 260px 1fr; gap: 1.25rem; align-items: start; }
+.reader-feeds { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+.reader-feeds h2 { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.reader-feed-list { list-style: none; margin: 0; padding: 0; }
+.reader-feed { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.reader-feed:last-child { border-bottom: 0; }
+.reader-feed-link { display: flex; flex-direction: column; gap: 0.3rem; color: var(--text); text-decoration: none; }
+.reader-feed-name { font-weight: 600; }
+.reader-feed-stats { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.reader-feed.active .reader-feed-name { color: var(--primary); }
+.reader-feed-toggle { margin-top: 0.55rem; }
+.reader-main { min-width: 0; }
+.reader-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.reader-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.reader-tab { padding: 0.45rem 0.9rem; color: var(--text-muted); text-decoration: none; border-right: 1px solid var(--border); }
+.reader-tab:last-child { border-right: 0; }
+.reader-tab.active { background: var(--primary-wash); color: var(--primary); }
+.reader-item-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.reader-item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.reader-item.unread { border-left: 3px solid var(--primary); }
+.reader-item summary { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.8rem 1rem; cursor: pointer; list-style: none; }
+.reader-item summary::-webkit-details-marker { display: none; }
+.reader-item.unread .reader-item-title { font-weight: 700; }
+.reader-item-title { font-size: 1.02rem; }
+.reader-item-meta { color: var(--text-muted); font-size: 0.82rem; }
+.reader-item-body { padding: 0 1rem 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.reader-item-content { color: var(--text); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reader-item-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+@media (max-width: 720px) { .reader { grid-template-columns: 1fr; } }

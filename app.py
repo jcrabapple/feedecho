@@ -1780,6 +1780,65 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
     )
 
 
+@app.get("/reader", response_class=HTMLResponse)
+async def reader_page(request: Request, feed: str = "", view: str = "unread"):
+    """Consolidated RSS reading surface (issue #11).
+
+    Server-rendered list of stored feed items, newest first, scoped to the
+    viewer's feeds. ``view`` is one of all|unread|starred; ``feed`` narrows to
+    a single feed. Read/star toggles and the per-feed reading switch live in
+    the reader API routes below.
+    """
+    uid = current_user_id(request)
+    feed_id = _filter_int(feed)
+    view = view if view in ("all", "unread", "starred") else "unread"
+    with get_db() as db:
+        feeds = db.execute(
+            """
+            SELECT f.*,
+                   (SELECT COUNT(*) FROM feed_items i
+                     WHERE i.feed_id = f.id AND i.is_read = 0) AS unread,
+                   (SELECT COUNT(*) FROM echoes e
+                     WHERE e.feed_id = f.id AND e.deleted_at IS NULL
+                       AND e.enabled = 1) AS echo_count
+              FROM feeds f
+             WHERE f.deleted_at IS NULL AND f.user_id = ?
+             ORDER BY f.name
+            """,
+            (uid,),
+        ).fetchall()
+
+        where = ["f.user_id = ?"]
+        params: list = [uid]
+        if feed_id is not None:
+            where.append("i.feed_id = ?")
+            params.append(feed_id)
+        if view == "unread":
+            where.append("i.is_read = 0")
+        elif view == "starred":
+            where.append("i.starred = 1")
+
+        items = db.execute(
+            f"""
+            SELECT i.*, f.name AS feed_name
+              FROM feed_items i
+              JOIN feeds f ON i.feed_id = f.id
+             WHERE {" AND ".join(where)}
+             ORDER BY i.published_at DESC, i.id DESC
+             LIMIT 100
+            """,
+            tuple(params),
+        ).fetchall()
+    return render(
+        "reader.html",
+        request,
+        feeds=feeds,
+        items=items,
+        current_feed=str(feed_id) if feed_id is not None else "",
+        view=view,
+    )
+
+
 @app.get("/howto", response_class=HTMLResponse)
 async def howto_page(request: Request):
     return render("howto.html", request)
@@ -2980,6 +3039,83 @@ async def give_up_post(request: Request, posted_id: int):
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="No failed post with that id")
     return {"success": True, "message": "Post marked as given up"}
+
+
+# ── Reader ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/feeds/{feed_id}/reader-toggle")
+def toggle_reader_feed(request: Request, feed_id: int):
+    """Toggle whether a feed is ingested for reading (issue #11)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT read_enabled FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        new_val = 0 if feed["read_enabled"] else 1
+        db.execute(
+            "UPDATE feeds SET read_enabled = ? WHERE id = ? AND user_id = ?",
+            (new_val, feed_id, uid),
+        )
+    return {"success": True, "read_enabled": bool(new_val)}
+
+
+@app.post("/api/reader/{item_id}/read")
+def reader_toggle_read(request: Request, item_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        row = db.execute(
+            "SELECT i.is_read FROM feed_items i JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ?",
+            (item_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        new_val = 0 if row["is_read"] else 1
+        db.execute("UPDATE feed_items SET is_read = ? WHERE id = ?", (new_val, item_id))
+    return {"success": True, "is_read": bool(new_val)}
+
+
+@app.post("/api/reader/{item_id}/star")
+def reader_toggle_star(request: Request, item_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        row = db.execute(
+            "SELECT i.starred FROM feed_items i JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ?",
+            (item_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        new_val = 0 if row["starred"] else 1
+        db.execute("UPDATE feed_items SET starred = ? WHERE id = ?", (new_val, item_id))
+    return {"success": True, "starred": bool(new_val)}
+
+
+@app.post("/api/reader/mark-all-read")
+def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
+    uid = current_user_id(request)
+    with get_db() as db:
+        if feed_id is not None:
+            owns = db.execute(
+                "SELECT id FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                (feed_id, uid),
+            ).fetchone()
+            if not owns:
+                raise HTTPException(status_code=404, detail="Feed not found")
+            db.execute(
+                "UPDATE feed_items SET is_read = 1 WHERE feed_id = ?",
+                (feed_id,),
+            )
+        else:
+            db.execute(
+                "UPDATE feed_items SET is_read = 1 WHERE feed_id IN"
+                " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+                (uid,),
+            )
+    return {"success": True}
 
 
 # ── API: Echoes ─────────────────────────────────────────────────────────────

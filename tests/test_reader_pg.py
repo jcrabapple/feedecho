@@ -72,3 +72,41 @@ class TestReaderStoragePg:
             ]
         # The NULL-published item is pruned first (portable NULL-last order).
         assert ids == ["a", "b"]
+
+
+@requires_pg
+class TestReaderPagePg:
+    def test_reader_page_renders_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        # The lifespan starts the scheduler; no-op its feed sweep so the
+        # background thread does no DB work that could race monkeypatch
+        # teardown (which flips the dialect back to sqlite mid-query).
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'paid')",
+                (11, "r@example.com"),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled, user_id) VALUES (?, ?, 1, ?)",
+                ("F", "https://example.com/feed", 11),
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, is_read) VALUES (1, 'a', 'PG Item', 0)"
+            )
+
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(11, "r@example.com"))
+            resp = c.get("/reader")
+        assert resp.status_code == 200
+        assert "PG Item" in resp.text
+

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}FeedEcho — Reader{% endblock %}
+{% block content %}
+<h1>Reader</h1>
+
+<div class="reader">
+  <aside class="reader-feeds" aria-label="Feeds">
+    <h2>Feeds</h2>
+    {% if feeds %}
+    <ul class="reader-feed-list">
+      {% for f in feeds %}
+      <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}">
+        <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}">
+          <span class="reader-feed-name">{{ f.name }}</span>
+          <span class="reader-feed-stats">
+            {% if f.unread %}<span class="badge badge-info">{{ f.unread }} unread</span>{% endif %}
+            {% if f.echo_count %}<span class="badge badge-muted">{{ f.echo_count }} echo{{ 's' if f.echo_count != 1 else '' }}</span>{% endif %}
+          </span>
+        </a>
+        <button class="btn-sm reader-feed-toggle" onclick="readerToggleFeed({{ f.id }}, this)">
+          {% if f.read_enabled %}Reading: on{% else %}Reading: off{% endif %}
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-state"><a href="/feeds">Add a feed</a> to start reading.</p>
+    {% endif %}
+  </aside>
+
+  <section class="reader-main" aria-label="Items">
+    <div class="reader-toolbar">
+      <div class="reader-tabs" role="tablist" aria-label="Filter">
+        <a class="reader-tab {% if view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}">Unread</a>
+        <a class="reader-tab {% if view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">All</a>
+        <a class="reader-tab {% if view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}">Starred</a>
+      </div>
+      {% if items %}
+      <button class="btn-sm" onclick="readerMarkAllRead(this)">Mark all read</button>
+      {% endif %}
+    </div>
+
+    {% if items %}
+    <ul class="reader-item-list">
+      {% for item in items %}
+      <li>
+        <details class="reader-item {% if not item.is_read %}unread{% endif %}">
+          <summary>
+            <span class="reader-item-title">{{ item.title or '(untitled)' }}{% if item.starred %} <span aria-label="Starred">★</span>{% endif %}</span>
+            <span class="reader-item-meta">
+              {{ item.feed_name }}
+              {% if item.author %} · {{ item.author }}{% endif %}
+              {% if item.published_at %} · <time class="local-time" datetime="{{ item.published_at | iso_utc }}">{{ item.published_at | utc_text }} UTC</time>{% endif %}
+            </span>
+          </summary>
+          <div class="reader-item-body">
+            {% if item.content or item.summary %}
+            <div class="reader-item-content">{{ item.content or item.summary }}</div>
+            {% endif %}
+            <div class="reader-item-actions">
+              {% if item.link | safe_url %}
+              <a class="btn-sm" href="{{ item.link | safe_url }}" target="_blank" rel="noopener">Open original ↗</a>
+              {% endif %}
+              <button class="btn-sm" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
+              <button class="btn-sm" onclick="readerToggleStar({{ item.id }}, this)">{% if item.starred %}Unstar{% else %}Star{% endif %}</button>
+            </div>
+          </div>
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-state">
+      {% if view == 'starred' %}No starred items. Star an item to keep it here.
+      {% elif view == 'all' %}No items stored yet. Enable reading on a feed, then it fills in on the next poll.
+      {% else %}No unread items. <a href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">View all</a>.
+      {% endif %}
+    </p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

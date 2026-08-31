@@ -693,3 +693,43 @@ function hydrateTableHeaders() {
     });
 }
 hydrateTableHeaders();
+
+// ── Reader (issue #11) ─────────────────────────────────────────────────────
+async function readerToggleRead(itemId, btn) {
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/read`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+}
+
+async function readerToggleStar(itemId, btn) {
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/star`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+}
+
+async function readerToggleFeed(feedId, btn) {
+    try {
+        const resp = await fetch(`/api/feeds/${feedId}/reader-toggle`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+}
+
+async function readerMarkAllRead(btn) {
+    const params = new URLSearchParams(window.location.search);
+    const feedId = params.get('feed');
+    const body = feedId ? new URLSearchParams({ feed_id: feedId }) : new URLSearchParams();
+    try {
+        const resp = await fetch('/api/reader/mark-all-read', { method: 'POST', body });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+}

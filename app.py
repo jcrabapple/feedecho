@@ -1819,6 +1819,8 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
     feed_id = _filter_int(feed)
     view = view if view in ("all", "unread", "starred") else "unread"
     with get_db() as db:
+        if settings.MULTI and not plans.reader_enabled(_user_plan(db, uid)):
+            raise HTTPException(status_code=402, detail="The RSS reader requires a paid plan")
         feeds = db.execute(
             """
             SELECT f.*,
@@ -3169,6 +3171,8 @@ def reader_shout(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as db:
+        if settings.MULTI and not plans.reader_enabled(_user_plan(db, uid)):
+            raise HTTPException(status_code=402, detail="The RSS reader requires a paid plan")
         row = db.execute(
             "SELECT i.*, f.name AS feed_name FROM feed_items i"
             " JOIN feeds f ON i.feed_id = f.id"

@@ -57,7 +57,7 @@ ACCOUNT_TYPES = tuple(section for section, *_ in _ACCOUNTS)
 ACCOUNT_TABLES = {section: table for section, table, _, _ in _ACCOUNTS}
 _KEY_COLS = {section: keys for section, _, _, keys in _ACCOUNTS}
 
-_FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused"]
+_FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
 
 _ECHO_COLS = [
     "feed_id", "destination_type", "destination_id", "template", "visibility",
@@ -370,7 +370,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
         poll = _clamp_poll(db, uid, feed.get("poll_interval"))
         row = db.execute(
             "INSERT INTO feeds (name, url, feed_type, poll_interval, last_item_id,"
-            " paused, user_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            " paused, read_enabled, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             (
                 str(feed.get("name") or "").strip(),
                 url,
@@ -378,6 +378,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 poll,
                 feed.get("last_item_id"),
                 1 if feed.get("paused") else 0,
+                1 if feed.get("read_enabled") else 0,
                 uid,
             ),
         ).fetchone()

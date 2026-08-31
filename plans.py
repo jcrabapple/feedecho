@@ -124,3 +124,12 @@ def clamp_drip_limit(per_hour: int, plan: str) -> int:
     if cap and per_hour > cap:
         return cap
     return per_hour
+
+
+def reader_enabled(plan: str) -> bool:
+    """Whether the plan includes the RSS reader (issue #11).
+
+    Single mode never consults this — callers gate on ``settings.MULTI``.
+    Unknown plans and plans without the key read as disabled (fail closed).
+    """
+    return bool(limit_for(plan, "reader"))

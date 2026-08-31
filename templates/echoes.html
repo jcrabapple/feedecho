@@ -10,7 +10,7 @@
         <label>Feed
             <select name="feed_id" required>
                 {% for feed in feeds %}
-                <option value="{{ feed.id }}">{{ feed.name }}</option>
+                <option value="{{ feed.id }}"{% if preselect_feed_id == feed.id %} selected{% endif %}>{{ feed.name }}</option>
                 {% endfor %}
             </select>
         </label>
@@ -184,6 +184,7 @@
             <span class="hint" style="margin: 0.2rem 0 0;">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
         </label>
     </div>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
     <button type="submit">Create Echo</button>
 </form>
 

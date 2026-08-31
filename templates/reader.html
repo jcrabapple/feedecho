@@ -63,6 +63,7 @@
               {% endif %}
               <button class="btn-sm" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
               <button class="btn-sm" onclick="readerToggleStar({{ item.id }}, this)">{% if item.starred %}Unstar{% else %}Star{% endif %}</button>
+              <a class="btn-sm" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo…</a>
               {% if shout_destinations %}
               <details class="reader-shout">
                 <summary class="btn-sm">Shout…</summary>

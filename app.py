@@ -1582,7 +1582,7 @@ async def accounts_page(request: Request):
 
 
 @app.get("/echoes", response_class=HTMLResponse)
-async def echoes_page(request: Request):
+async def echoes_page(request: Request, feed: str = "", from_: str = "echoes"):
     uid = current_user_id(request)
     with get_db() as db:
         echoes = db.execute("""
@@ -1643,6 +1643,8 @@ async def echoes_page(request: Request):
             " WHERE user_id = ? ORDER BY name",
             (uid,),
         ).fetchall()
+    preselect_feed_id = _filter_int(feed)
+    return_to = "/reader" if from_ == "reader" else "/echoes"
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
@@ -1651,7 +1653,9 @@ async def echoes_page(request: Request):
                   matrix_accounts=matrix_accounts,
                   discord_accounts=discord_accounts,
                   webhook_accounts=webhook_accounts,
-                  template_vars=available_variables())
+                  template_vars=available_variables(),
+                  preselect_feed_id=preselect_feed_id,
+                  return_to=return_to)
 
 
 # Post history: one label per destination type, the instance/handle detail
@@ -3283,6 +3287,7 @@ async def add_echo(
     delivery_mode: str = Form("instant"),
     drip_limit: int = Form(0),
     enabled: str = Form(""),
+    return_to: str = Form("/echoes"),
 ):
     uid = current_user_id(request)
     if destination_type not in VALID_DEST_TYPES:
@@ -3368,7 +3373,11 @@ async def add_echo(
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
              delivery_mode, drip_limit, is_enabled, uid),
         )
-    return RedirectResponse(url="/echoes", status_code=303)
+    # Return to the originating surface (reader deep-link), guarded against
+    # open redirects: only an absolute path, never a protocol-relative "//host".
+    if not return_to.startswith("/") or return_to.startswith("//"):
+        return_to = "/echoes"
+    return RedirectResponse(url=return_to, status_code=303)
 
 
 @app.post("/api/echoes/{echo_id}/toggle")

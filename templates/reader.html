@@ -63,6 +63,24 @@
               {% endif %}
               <button class="btn-sm" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
               <button class="btn-sm" onclick="readerToggleStar({{ item.id }}, this)">{% if item.starred %}Unstar{% else %}Star{% endif %}</button>
+              {% if shout_destinations %}
+              <details class="reader-shout">
+                <summary class="btn-sm">Shout…</summary>
+                <form class="reader-shout-form" onsubmit="return readerShout({{ item.id }}, this)">
+                  <label>Destination
+                    <select name="destination" required>
+                      {% for d in shout_destinations %}
+                      <option value="{{ d.value }}">{{ d.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label>Template
+                    <input type="text" name="template" value="{{ default_template }}">
+                  </label>
+                  <button type="submit" class="btn-sm">Shout</button>
+                </form>
+              </details>
+              {% endif %}
             </div>
           </div>
         </details>

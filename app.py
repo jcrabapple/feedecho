@@ -80,7 +80,7 @@ from webhook import (
     parse_headers as webhook_parse_headers,
     test_connection as test_webhook_connection,
 )
-from scheduler import start_scheduler, stop_scheduler, check_feed
+from scheduler import start_scheduler, stop_scheduler, check_feed, process_echo
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
 
@@ -835,6 +835,28 @@ def _get_all_accounts(user_id: int = 1):
                 }
             )
     return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows
+
+
+def _shout_destinations(user_id: int):
+    """One option per connected account, encoded ``type:id`` for the reader's
+    Shout picker. Labels carry the type so a flat <select> is unambiguous."""
+    (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows) = _get_all_accounts(user_id)
+    out = []
+    for row in mastodon:
+        out.append({"value": f"mastodon:{row['id']}", "label": f"Mastodon · {row['name']}"})
+    for row in email:
+        out.append({"value": f"email:{row['id']}", "label": f"Email · {row['name']}"})
+    for row in bluesky:
+        out.append({"value": f"bluesky:{row['id']}", "label": f"Bluesky · {row['name']}"})
+    for row in microblog:
+        out.append({"value": f"microblog:{row['id']}", "label": f"Micro.blog · {row['name']}"})
+    for row in matrix_rows:
+        out.append({"value": f"matrix:{row['id']}", "label": f"Matrix · {row['name']}"})
+    for row in discord_rows:
+        out.append({"value": f"discord:{row['id']}", "label": f"Discord · {row['name']}"})
+    for row in webhook_rows:
+        out.append({"value": f"webhook:{row['id']}", "label": f"Webhook · {row['name']}"})
+    return out
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
@@ -1836,6 +1858,8 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread"):
         items=items,
         current_feed=str(feed_id) if feed_id is not None else "",
         view=view,
+        shout_destinations=_shout_destinations(uid),
+        default_template="{{ title }} {{ link }}",
     )
 
 
@@ -3116,6 +3140,84 @@ def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
                 (uid,),
             )
     return {"success": True}
+
+
+@app.post("/api/reader/{item_id}/shout")
+def reader_shout(
+    request: Request,
+    item_id: int,
+    destination: str = Form(...),
+    template: str = Form("{{ title }} {{ link }}"),
+    visibility: str = Form("public"),
+):
+    """Shout: post one stored reader item to one account, once (issue #11).
+
+    Materializes a one-shot echo (enabled=0 + soft-deleted, so neither /echoes
+    nor the scheduler picks it up) and runs it through the normal
+    ``process_echo`` pipeline, so the result lands in /history unchanged.
+    """
+    uid = current_user_id(request)
+    dest_type, sep, raw_id = destination.partition(":")
+    if not sep or dest_type not in VALID_DEST_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid destination")
+    destination_id = _filter_int(raw_id)
+    if destination_id is None:
+        raise HTTPException(status_code=400, detail="Invalid destination")
+    if visibility not in VALID_VISIBILITY:
+        raise HTTPException(status_code=400, detail="Invalid visibility")
+    _validate_echo_template(template)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as db:
+        row = db.execute(
+            "SELECT i.*, f.name AS feed_name FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ?",
+            (item_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        dest_table = DESTINATION_TABLES_BY_TYPE[dest_type]
+        dest = db.execute(
+            f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
+            (destination_id, uid),
+        ).fetchone()
+        if not dest:
+            raise HTTPException(status_code=404, detail="Destination not found")
+
+        echo_id = db.execute(
+            """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                   visibility, enabled, one_shot, deleted_at, user_id)
+               VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id""",
+            (row["feed_id"], dest_type, destination_id, template, visibility, now, uid),
+        ).fetchone()["id"]
+        echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+
+    item = {
+        "id": row["item_id"],
+        "title": row["title"] or "",
+        "link": row["link"] or "",
+        "summary": row["summary"] or "",
+        "content": row["content"] or "",
+        "content_link": row["content_link"] or "",
+        "author": row["author"] or "",
+        "date": row["published_at"] or "",
+    }
+    ok = process_echo(echo, item, feed_name=row["feed_name"] or "")
+    with get_db() as db:
+        pi = db.execute(
+            "SELECT status, post_url, error_message FROM posted_items"
+            " WHERE echo_id = ? AND item_id = ?",
+            (echo_id, row["item_id"]),
+        ).fetchone()
+    return {
+        "success": bool(ok),
+        "status": pi["status"] if pi else "unknown",
+        "post_url": pi["post_url"] if pi else None,
+        "error_message": pi["error_message"] if pi else None,
+    }
 
 
 # ── API: Echoes ─────────────────────────────────────────────────────────────

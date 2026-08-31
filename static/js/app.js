@@ -733,3 +733,20 @@ async function readerMarkAllRead(btn) {
         reloadPreservingScroll();
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
 }
+
+async function readerShout(itemId, form) {
+    const data = new URLSearchParams(new FormData(form));
+    const btn = form.querySelector('button[type="submit"]');
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/shout`, { method: 'POST', body: data });
+        const result = await resp.json();
+        if (!resp.ok) { showStatus(btn, result.detail || 'Shout failed', 'error'); return false; }
+        if (result.success) {
+            showStatus(btn, 'Shouted' + (result.post_url ? ' — view in History' : ''), 'success');
+            form.reset();
+        } else {
+            showStatus(btn, result.error_message || 'Shout failed', 'error');
+        }
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    return false;
+}

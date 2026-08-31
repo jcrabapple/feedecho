@@ -55,332 +55,393 @@
 <div class="alert alert-success" role="status">Webhook deleted.</div>
 {% endif %}
 
-<section class="oauth-section">
-    <h2>Connect Mastodon via OAuth</h2>
-    <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
-    <form method="get" action="/oauth/connect" class="inline-form">
-        <label for="oauth-instance">Instance URL</label>
-        <input type="text" name="instance" id="oauth-instance" placeholder="https://dmv.community" required>
-        <button type="submit">Connect Account</button>
-    </form>
-</section>
+<div class="account-sections-toolbar">
+    <button type="button" class="btn-sm" onclick="setAccountSections(true)">Expand all</button>
+    <button type="button" class="btn-sm" onclick="setAccountSections(false)">Collapse all</button>
+</div>
 
-<section class="manual-section">
-    <details>
-        <summary>Or add Mastodon manually with a token</summary>
-        <form method="post" action="/api/accounts" class="inline-form" style="margin-top: 0.75rem;">
-            <label for="masto-name">Display name</label>
-            <input type="text" name="name" id="masto-name" placeholder="Display name" required>
-            <label for="masto-username">Username</label>
-            <input type="text" name="username" id="masto-username" placeholder="Username">
-            <label for="masto-instance">Instance URL</label>
-            <input type="url" name="instance" id="masto-instance" placeholder="https://dmv.community" required>
-            <label for="masto-token">Access token</label>
-            <input type="password" name="access_token" id="masto-token" placeholder="Access token" required>
-            <button type="submit">Add Account</button>
-        </form>
-    </details>
-</section>
-
-<section>
-    <h2>Add Email Address</h2>
-    <p class="hint">Route feed items to an email inbox instead of (or in addition to) Mastodon. <a href="/settings">Configure SMTP first.</a></p>
-    <form method="post" action="/api/email-accounts" class="inline-form">
-        <label for="email-acct-name">Name</label>
-        <input type="text" name="name" id="email-acct-name" placeholder="Name" required>
-        <label for="email-acct-address">Email address</label>
-        <input type="email" name="email" id="email-acct-address" placeholder="user@example.com" required>
-        <button type="submit">Add Email Address</button>
-    </form>
-</section>
-
-<section>
-    <h2>Connect Bluesky</h2>
-    <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored only in FeedEcho's local database. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
-    <form method="post" action="/api/bluesky-accounts" class="inline-form">
-        <label for="bsky-name">Display name</label>
-        <input type="text" name="name" id="bsky-name" placeholder="Display name">
-        <label for="bsky-handle">Bluesky handle</label>
-        <input type="text" name="handle" id="bsky-handle" placeholder="username.bsky.social" required>
-        <label for="bsky-app-password">App password</label>
-        <input type="password" name="app_password" id="bsky-app-password" placeholder="App password (xxxx-xxxx-xxxx-xxxx)" required>
-        <button type="submit">Connect Account</button>
-    </form>
-</section>
-
-<section>
-    <h2>Connect Micro.blog</h2>
-    <p class="hint">Create an <strong>App Token</strong> at micro.blog (Account → Edit Apps → Add Token, or <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a>) and paste it here. FeedEcho discovers every blog the token can post to and connects each one. Tokens can post on your behalf but cannot change account settings.</p>
-    <form method="post" action="/api/microblog-accounts" class="inline-form">
-        <label for="microblog-token">Micro.blog app token</label>
-        <input type="password" name="token" id="microblog-token" placeholder="Micro.blog app token" required autocomplete="off">
-        <button type="submit">Connect Blogs</button>
-    </form>
-</section>
-
-<section>
-    <h2>Connect Matrix</h2>
-    <p class="hint">Post feed items into a Matrix room. Log the account you want to post as into any client, copy its <strong>access token</strong> (Element: Settings → Help &amp; About → Access Token), and give the room's ID or alias. That account must already be in the room — FeedEcho posts as it, it never joins rooms for you. Connect one room per form submission.</p>
-    <form method="post" action="/api/matrix-accounts" class="inline-form">
-        <label for="matrix-homeserver">Homeserver</label>
-        <input type="text" name="homeserver" id="matrix-homeserver" placeholder="https://matrix.org" required>
-        <label for="matrix-token">Access token</label>
-        <input type="password" name="access_token" id="matrix-token" placeholder="Access token" required autocomplete="off">
-        <label for="matrix-room">Room ID or alias</label>
-        <input type="text" name="room" id="matrix-room" placeholder="#feeds:example.org" required>
-        <label for="matrix-name">Display name (optional)</label>
-        <input type="text" name="name" id="matrix-name" placeholder="Feeds room">
-        <button type="submit">Connect Room</button>
-    </form>
-</section>
-
-<section>
-    <h2>Connect Discord</h2>
-    <p class="hint">Post feed items into a Discord channel via a webhook. In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it here. The webhook URL is a secret — anyone who has it can post to that channel, so treat it like a token.</p>
-    <form method="post" action="/api/discord-accounts" class="inline-form">
-        <label for="discord-webhook-url">Webhook URL</label>
-        <input type="password" name="webhook_url" id="discord-webhook-url" placeholder="https://discord.com/api/webhooks/…" required autocomplete="off">
-        <label for="discord-name">Display name (optional)</label>
-        <input type="text" name="name" id="discord-name" placeholder="Announcements channel">
-        <button type="submit">Connect Discord Webhook</button>
-    </form>
-</section>
-
-<section>
-    <h2>Connect Webhook</h2>
-    <p class="hint">Post feed items as JSON to any HTTP endpoint. Works with Slack and Mattermost incoming webhooks, ntfy and Gotify notifications, Zapier or n8n, or anything you run yourself. Each item arrives as one JSON object: <code>text</code> (your template output) plus <code>title</code>, <code>link</code>, <code>summary</code>, <code>content</code>, <code>author</code>, <code>published</code>, <code>tags</code>, <code>image_url</code>, <code>image_alt</code>, <code>id</code>, and <code>feed_name</code>. Custom headers are optional and go in one per line, like <code>Authorization: Bearer your-token</code> — header values are stored like credentials and are never shown again.</p>
-    <form method="post" action="/api/webhook-accounts" class="inline-form">
-        <label for="webhook-url">Webhook URL</label>
-        <input type="password" name="url" id="webhook-url" placeholder="https://hooks.example.com/feedecho" required autocomplete="off">
-        <label for="webhook-name">Display name (optional)</label>
-        <input type="text" name="name" id="webhook-name" placeholder="n8n workflow">
-        <label for="webhook-headers">Headers (optional)</label>
-        <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer your-token&#10;X-Custom-Header: value"></textarea>
-        <button type="submit">Connect Webhook</button>
-    </form>
-</section>
-
-{% if mastodon_accounts %}
-<h2>Mastodon Accounts</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-<thead>
-    <tr>
-        <th scope="col">Handle</th>
-        <th scope="col">Name</th>
-        <th scope="col">Instance</th>
-        <th scope="col">Added</th>
-        <th scope="col">Actions</th>
-    </tr>
-</thead>
-<tbody>
-    {% for account in mastodon_accounts %}
-    <tr>
-        <td data-label="Handle"><code>@{{ account.username }}@{{ account.instance | replace('https://', '') }}</code></td>
-        <td data-label="Name">{{ account.name }}</td>
-        <td data-label="Instance">{{ account.instance }}</td>
-        <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-        <td data-label="Actions" class="action-cell">
-            <button class="btn-sm" onclick="withBusy(this, (btn) => testAccount({{ account.id }}, btn))">Test</button>
-            <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
-                <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
+<details class="account-section"{% if mastodon_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Mastodon</span>
+        <span class="account-count{% if mastodon_accounts %} count-active{% endif %}">{% if mastodon_accounts %}{{ mastodon_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section class="oauth-section">
+            <h2>Connect Mastodon via OAuth</h2>
+            <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
+            <form method="get" action="/oauth/connect" class="inline-form">
+                <label for="oauth-instance">Instance URL</label>
+                <input type="text" name="instance" id="oauth-instance" placeholder="https://dmv.community" required>
+                <button type="submit">Connect Account</button>
             </form>
-        </td>
-    </tr>
-    {% endfor %}
-</tbody>
-</table>
-</div>
-{% endif %}
+        </section>
 
-{% if email_accounts %}
-<h2>Email Addresses</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-    <thead>
-        <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Email</th>
-            <th scope="col">Added</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for account in email_accounts %}
-        <tr>
-            <td data-label="Name">{{ account.name }}</td>
-            <td data-label="Email">{{ account.email }}</td>
-            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-            <td data-label="Actions" class="action-cell">
-                <form method="post" action="/api/email-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this email address? Any echo that delivers to it will stop working until you point it somewhere else.')">Delete</button>
+        <section class="manual-section">
+            <details>
+                <summary>Or add Mastodon manually with a token</summary>
+                <form method="post" action="/api/accounts" class="inline-form" style="margin-top: 0.75rem;">
+                    <label for="masto-name">Display name</label>
+                    <input type="text" name="name" id="masto-name" placeholder="Display name" required>
+                    <label for="masto-username">Username</label>
+                    <input type="text" name="username" id="masto-username" placeholder="Username">
+                    <label for="masto-instance">Instance URL</label>
+                    <input type="url" name="instance" id="masto-instance" placeholder="https://dmv.community" required>
+                    <label for="masto-token">Access token</label>
+                    <input type="password" name="access_token" id="masto-token" placeholder="Access token" required>
+                    <button type="submit">Add Account</button>
                 </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
-{% endif %}
+            </details>
+        </section>
 
-{% if bluesky_accounts %}
-<h2>Bluesky Accounts</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-    <thead>
-        <tr>
-            <th scope="col">Handle</th>
-            <th scope="col">Name</th>
-            <th scope="col">Added</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for account in bluesky_accounts %}
-        <tr>
-            <td data-label="Handle"><code>@{{ account.handle }}</code></td>
-            <td data-label="Name">{{ account.name }}</td>
-            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-            <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="withBusy(this, (btn) => testBlueskyAccount({{ account.id }}, btn))">Test</button>
-                <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
-{% endif %}
+        {% if mastodon_accounts %}
+        <h2>Mastodon Accounts</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+        <thead>
+            <tr>
+                <th scope="col">Handle</th>
+                <th scope="col">Name</th>
+                <th scope="col">Instance</th>
+                <th scope="col">Added</th>
+                <th scope="col">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for account in mastodon_accounts %}
+            <tr>
+                <td data-label="Handle"><code>@{{ account.username }}@{{ account.instance | replace('https://', '') }}</code></td>
+                <td data-label="Name">{{ account.name }}</td>
+                <td data-label="Instance">{{ account.instance }}</td>
+                <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                <td data-label="Actions" class="action-cell">
+                    <button class="btn-sm" onclick="withBusy(this, (btn) => testAccount({{ account.id }}, btn))">Test</button>
+                    <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
+                        <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
 
-{% if microblog_accounts %}
-<h2>Micro.blog Blogs</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-    <thead>
-        <tr>
-            <th scope="col">Blog</th>
-            <th scope="col">URL</th>
-            <th scope="col">Added</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for account in microblog_accounts %}
-        <tr>
-            <td data-label="Blog">{{ account.name }}</td>
-            <td data-label="URL"><code>{{ account.uid }}</code></td>
-            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-            <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="withBusy(this, (btn) => testMicroblogAccount({{ account.id }}, btn))">Test</button>
-                <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this blog? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
-{% endif %}
+<details class="account-section"{% if email_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Email</span>
+        <span class="account-count{% if email_accounts %} count-active{% endif %}">{% if email_accounts %}{{ email_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Add Email Address</h2>
+            <p class="hint">Route feed items to an email inbox instead of (or in addition to) Mastodon. <a href="/settings">Configure SMTP first.</a></p>
+            <form method="post" action="/api/email-accounts" class="inline-form">
+                <label for="email-acct-name">Name</label>
+                <input type="text" name="name" id="email-acct-name" placeholder="Name" required>
+                <label for="email-acct-address">Email address</label>
+                <input type="email" name="email" id="email-acct-address" placeholder="user@example.com" required>
+                <button type="submit">Add Email Address</button>
+            </form>
+        </section>
 
-{% if matrix_accounts %}
-<h2>Matrix Rooms</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-    <thead>
-        <tr>
-            <th scope="col">Room</th>
-            <th scope="col">Posts as</th>
-            <th scope="col">Homeserver</th>
-            <th scope="col">Added</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for account in matrix_accounts %}
-        <tr>
-            <td data-label="Room">{{ account.name }}<br><small><code>{{ account.room_id }}</code></small></td>
-            <td data-label="Posts as"><code>{{ account.matrix_user_id or '—' }}</code></td>
-            <td data-label="Homeserver">{{ account.homeserver }}</td>
-            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-            <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="withBusy(this, (btn) => testMatrixAccount({{ account.id }}, btn))">Test</button>
-                <form method="post" action="/api/matrix-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this room? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
-{% endif %}
+        {% if email_accounts %}
+        <h2>Email Addresses</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Email</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in email_accounts %}
+                <tr>
+                    <td data-label="Name">{{ account.name }}</td>
+                    <td data-label="Email">{{ account.email }}</td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <form method="post" action="/api/email-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this email address? Any echo that delivers to it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
 
-{% if discord_accounts %}
-<h2>Discord Webhooks</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-    <thead>
-        <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Channel ID</th>
-            <th scope="col">Added</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for account in discord_accounts %}
-        <tr>
-            <td data-label="Name">{{ account.name }}</td>
-            <td data-label="Channel ID">{% if account.channel_id %}<code>{{ account.channel_id }}</code>{% else %}—{% endif %}</td>
-            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-            <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="withBusy(this, (btn) => testDiscordAccount({{ account.id }}, btn))">Test</button>
-                <form method="post" action="/api/discord-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
-{% endif %}
+<details class="account-section"{% if bluesky_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Bluesky</span>
+        <span class="account-count{% if bluesky_accounts %} count-active{% endif %}">{% if bluesky_accounts %}{{ bluesky_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect Bluesky</h2>
+            <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored only in FeedEcho's local database. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
+            <form method="post" action="/api/bluesky-accounts" class="inline-form">
+                <label for="bsky-name">Display name</label>
+                <input type="text" name="name" id="bsky-name" placeholder="Display name">
+                <label for="bsky-handle">Bluesky handle</label>
+                <input type="text" name="handle" id="bsky-handle" placeholder="username.bsky.social" required>
+                <label for="bsky-app-password">App password</label>
+                <input type="password" name="app_password" id="bsky-app-password" placeholder="App password (xxxx-xxxx-xxxx-xxxx)" required>
+                <button type="submit">Connect Account</button>
+            </form>
+        </section>
 
-{% if webhook_accounts %}
-<h2>Webhooks</h2>
-<div class="data-table-wrapper">
-<table class="data-table">
-    <thead>
-        <tr>
-            <th scope="col">Name</th>
-            <th scope="col">URL</th>
-            <th scope="col">Headers</th>
-            <th scope="col">Added</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for account in webhook_accounts %}
-        <tr>
-            <td data-label="Name">{{ account.name }}</td>
-            <td data-label="URL"><code>{{ account.url_display }}</code></td>
-            <td data-label="Headers">{% if account.header_names %}<small>{{ account.header_names }}</small>{% else %}—{% endif %}</td>
-            <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
-            <td data-label="Actions" class="action-cell">
-                <button class="btn-sm" onclick="withBusy(this, (btn) => testWebhookAccount({{ account.id }}, btn))">Test</button>
-                <form method="post" action="/api/webhook-accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
-{% endif %}
+        {% if bluesky_accounts %}
+        <h2>Bluesky Accounts</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Handle</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in bluesky_accounts %}
+                <tr>
+                    <td data-label="Handle"><code>@{{ account.handle }}</code></td>
+                    <td data-label="Name">{{ account.name }}</td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testBlueskyAccount({{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
+
+<details class="account-section"{% if microblog_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Micro.blog</span>
+        <span class="account-count{% if microblog_accounts %} count-active{% endif %}">{% if microblog_accounts %}{{ microblog_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect Micro.blog</h2>
+            <p class="hint">Create an <strong>App Token</strong> at micro.blog (Account → Edit Apps → Add Token, or <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a>) and paste it here. FeedEcho discovers every blog the token can post to and connects each one. Tokens can post on your behalf but cannot change account settings.</p>
+            <form method="post" action="/api/microblog-accounts" class="inline-form">
+                <label for="microblog-token">Micro.blog app token</label>
+                <input type="password" name="token" id="microblog-token" placeholder="Micro.blog app token" required autocomplete="off">
+                <button type="submit">Connect Blogs</button>
+            </form>
+        </section>
+
+        {% if microblog_accounts %}
+        <h2>Micro.blog Blogs</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Blog</th>
+                    <th scope="col">URL</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in microblog_accounts %}
+                <tr>
+                    <td data-label="Blog">{{ account.name }}</td>
+                    <td data-label="URL"><code>{{ account.uid }}</code></td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testMicroblogAccount({{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this blog? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
+
+<details class="account-section"{% if matrix_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Matrix</span>
+        <span class="account-count{% if matrix_accounts %} count-active{% endif %}">{% if matrix_accounts %}{{ matrix_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect Matrix</h2>
+            <p class="hint">Post feed items into a Matrix room. Log the account you want to post as into any client, copy its <strong>access token</strong> (Element: Settings → Help &amp; About → Access Token), and give the room's ID or alias. That account must already be in the room — FeedEcho posts as it, it never joins rooms for you. Connect one room per form submission.</p>
+            <form method="post" action="/api/matrix-accounts" class="inline-form">
+                <label for="matrix-homeserver">Homeserver</label>
+                <input type="text" name="homeserver" id="matrix-homeserver" placeholder="https://matrix.org" required>
+                <label for="matrix-token">Access token</label>
+                <input type="password" name="access_token" id="matrix-token" placeholder="Access token" required autocomplete="off">
+                <label for="matrix-room">Room ID or alias</label>
+                <input type="text" name="room" id="matrix-room" placeholder="#feeds:example.org" required>
+                <label for="matrix-name">Display name (optional)</label>
+                <input type="text" name="name" id="matrix-name" placeholder="Feeds room">
+                <button type="submit">Connect Room</button>
+            </form>
+        </section>
+
+        {% if matrix_accounts %}
+        <h2>Matrix Rooms</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Room</th>
+                    <th scope="col">Posts as</th>
+                    <th scope="col">Homeserver</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in matrix_accounts %}
+                <tr>
+                    <td data-label="Room">{{ account.name }}<br><small><code>{{ account.room_id }}</code></small></td>
+                    <td data-label="Posts as"><code>{{ account.matrix_user_id or '—' }}</code></td>
+                    <td data-label="Homeserver">{{ account.homeserver }}</td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testMatrixAccount({{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/matrix-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this room? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
+
+<details class="account-section"{% if discord_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Discord</span>
+        <span class="account-count{% if discord_accounts %} count-active{% endif %}">{% if discord_accounts %}{{ discord_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect Discord</h2>
+            <p class="hint">Post feed items into a Discord channel via a webhook. In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it here. The webhook URL is a secret — anyone who has it can post to that channel, so treat it like a token.</p>
+            <form method="post" action="/api/discord-accounts" class="inline-form">
+                <label for="discord-webhook-url">Webhook URL</label>
+                <input type="password" name="webhook_url" id="discord-webhook-url" placeholder="https://discord.com/api/webhooks/…" required autocomplete="off">
+                <label for="discord-name">Display name (optional)</label>
+                <input type="text" name="name" id="discord-name" placeholder="Announcements channel">
+                <button type="submit">Connect Discord Webhook</button>
+            </form>
+        </section>
+
+        {% if discord_accounts %}
+        <h2>Discord Webhooks</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Channel ID</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in discord_accounts %}
+                <tr>
+                    <td data-label="Name">{{ account.name }}</td>
+                    <td data-label="Channel ID">{% if account.channel_id %}<code>{{ account.channel_id }}</code>{% else %}—{% endif %}</td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDiscordAccount({{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/discord-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
+
+<details class="account-section"{% if webhook_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Webhook</span>
+        <span class="account-count{% if webhook_accounts %} count-active{% endif %}">{% if webhook_accounts %}{{ webhook_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect Webhook</h2>
+            <p class="hint">Post feed items as JSON to any HTTP endpoint. Works with Slack and Mattermost incoming webhooks, ntfy and Gotify notifications, Zapier or n8n, or anything you run yourself. Each item arrives as one JSON object: <code>text</code> (your template output) plus <code>title</code>, <code>link</code>, <code>summary</code>, <code>content</code>, <code>author</code>, <code>published</code>, <code>tags</code>, <code>image_url</code>, <code>image_alt</code>, <code>id</code>, and <code>feed_name</code>. Custom headers are optional and go in one per line, like <code>Authorization: Bearer your-token</code> — header values are stored like credentials and are never shown again.</p>
+            <form method="post" action="/api/webhook-accounts" class="inline-form">
+                <label for="webhook-url">Webhook URL</label>
+                <input type="password" name="url" id="webhook-url" placeholder="https://hooks.example.com/feedecho" required autocomplete="off">
+                <label for="webhook-name">Display name (optional)</label>
+                <input type="text" name="name" id="webhook-name" placeholder="n8n workflow">
+                <label for="webhook-headers">Headers (optional)</label>
+                <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer your-token&#10;X-Custom-Header: value"></textarea>
+                <button type="submit">Connect Webhook</button>
+            </form>
+        </section>
+
+        {% if webhook_accounts %}
+        <h2>Webhooks</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">URL</th>
+                    <th scope="col">Headers</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in webhook_accounts %}
+                <tr>
+                    <td data-label="Name">{{ account.name }}</td>
+                    <td data-label="URL"><code>{{ account.url_display }}</code></td>
+                    <td data-label="Headers">{% if account.header_names %}<small>{{ account.header_names }}</small>{% else %}—{% endif %}</td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testWebhookAccount({{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/webhook-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
 
 {% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts and not webhook_accounts %}
 <p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, generic webhook, or add an email address above.</p>
@@ -398,5 +459,11 @@
         history.replaceState(null, '', url.pathname + (url.search || ''));
     }
 })();
+
+function setAccountSections(open) {
+    document.querySelectorAll('details.account-section').forEach(function (el) {
+        el.open = open;
+    });
+}
 </script>
 {% endblock %}

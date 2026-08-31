@@ -211,6 +211,32 @@ def _add_column_if_missing(
         )
 
 
+def prune_feed_items(db, feed_id: int, limit: int | None = None) -> None:
+    """Delete a feed's oldest items beyond ``limit``, newest kept.
+
+    Ordering is ``published_at IS NULL, published_at DESC, id DESC`` so NULL
+    dates are pruned first on BOTH dialects: bare ``published_at DESC`` sorts
+    NULLs last on sqlite but first on Postgres, which would keep the wrong
+    rows. ``published_at IS NULL`` (0 before 1) normalizes that.
+    """
+    cap = limit if limit is not None else settings.READER_MAX_ITEMS_PER_FEED
+    if cap <= 0:
+        return
+    db.execute(
+        """
+        DELETE FROM feed_items
+         WHERE feed_id = ?
+           AND id NOT IN (
+               SELECT id FROM feed_items
+                WHERE feed_id = ?
+                ORDER BY published_at IS NULL, published_at DESC, id DESC
+                LIMIT ?
+           )
+        """,
+        (feed_id, feed_id, cap),
+    )
+
+
 def init_db() -> None:
     """Create and migrate the schema for the active dialect."""
     if dialect() == "postgres":
@@ -266,6 +292,7 @@ def init_db_sqlite() -> None:
                 lease_token TEXT,
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
+                read_enabled INTEGER NOT NULL DEFAULT 0,
                 deleted_at TIMESTAMP,
                 user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -274,9 +301,41 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "feeds", "lease_token", "TEXT")
         _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
         _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
         # Soft-delete marker: feeds are never hard-deleted by the app so that
         # echo configuration and posted-item history survive as an audit trail.
         _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS feed_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                title TEXT,
+                link TEXT,
+                summary TEXT,
+                content TEXT,
+                content_link TEXT,
+                author TEXT,
+                published_at TIMESTAMP,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                starred INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_items_feed_item
+            ON feed_items(feed_id, item_id)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feed_items_feed_pub
+            ON feed_items(feed_id, published_at DESC)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feed_items_feed_read
+            ON feed_items(feed_id, is_read)
+        """)
 
         echo_columns = _column_names(db, "echoes")
         if (
@@ -799,10 +858,45 @@ def init_db_postgres() -> None:
                 lease_token TEXT,
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
+                read_enabled INTEGER NOT NULL DEFAULT 0,
                 deleted_at TIMESTAMP,
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        # Reader toggle for already-deployed hosted databases (fresh installs
+        # get the column from the CREATE TABLE above).
+        _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS feed_items (
+                id BIGSERIAL PRIMARY KEY,
+                feed_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                title TEXT,
+                link TEXT,
+                summary TEXT,
+                content TEXT,
+                content_link TEXT,
+                author TEXT,
+                published_at TIMESTAMP,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                starred INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_items_feed_item
+            ON feed_items(feed_id, item_id)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feed_items_feed_pub
+            ON feed_items(feed_id, published_at DESC)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feed_items_feed_read
+            ON feed_items(feed_id, is_read)
         """)
 
         db.execute("""

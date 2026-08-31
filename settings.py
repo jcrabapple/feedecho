@@ -216,6 +216,19 @@ except ValueError:
     )
     MAX_BACKDATED_ENTRY_DAYS = 3
 
+# ── Reader (RSS reading surface, issue #11) ──────────────────────────────────
+#
+# The reader persists feed items for reading; this caps how many are kept per
+# feed (oldest pruned on insert) so a shared hosted database cannot grow
+# without bound. Single mode uses the same default and may tune it via env.
+try:
+    READER_MAX_ITEMS_PER_FEED = int(env("READER_MAX_ITEMS_PER_FEED", "200"))
+except ValueError:
+    logging.getLogger("feedecho").warning(
+        "FEEDECHO_READER_MAX_ITEMS_PER_FEED is not a valid integer; using default of 200"
+    )
+    READER_MAX_ITEMS_PER_FEED = 200
+
 
 def validate_config() -> None:
     """Fail fast on misconfigured multi mode. Called from app startup.

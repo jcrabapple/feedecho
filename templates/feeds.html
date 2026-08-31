@@ -47,7 +47,13 @@
                 <span class="badge badge-warning">Not initialized — click Initialize</span>
                 {% endif %}
             </td>
-            <td data-label="Echoes">{{ feed_echoes[feed.id] }}</td>
+            <td data-label="Echoes">
+                {% if feed_echoes[feed.id] %}
+                <a href="/echoes" class="badge badge-success" title="{{ feed_echoes[feed.id] }} active echo{{ 's' if feed_echoes[feed.id] != 1 else '' }} — manage on the Echoes page">{{ feed_echoes[feed.id] }} echo{{ 's' if feed_echoes[feed.id] != 1 else '' }}</a>
+                {% else %}
+                —
+                {% endif %}
+            </td>
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="editFeed({{ feed.id }})">Edit</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => testFeed({{ feed.id }}, btn))" title="Fetch the feed now and show a preview of its items">Test</button>

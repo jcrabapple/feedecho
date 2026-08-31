@@ -87,6 +87,22 @@ class TestStoreFeedItems:
             ).fetchone()
         assert row["content_text"] == "para one\n\npara two"
 
+    def test_reingest_updates_content_but_preserves_read(self, env):
+        database, scheduler = env
+        with database.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES (?, ?)", ("f", "u"))
+        scheduler._store_feed_items(1, [{"id": "a", "title": "old", "link": "l", "content_text": "old body"}])
+        with database.get_db() as db:
+            db.execute("UPDATE feed_items SET is_read = 1 WHERE item_id = 'a'")
+        scheduler._store_feed_items(1, [{"id": "a", "title": "new", "link": "l", "content_text": "new body"}])
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT title, content_text, is_read FROM feed_items WHERE item_id = 'a'"
+            ).fetchone()
+        assert row["title"] == "new"
+        assert row["content_text"] == "new body"
+        assert row["is_read"] == 1
+
 
 class TestCheckFeedReaderIngestion:
     def test_read_enabled_feed_without_echoes_is_stored(self, env, monkeypatch):

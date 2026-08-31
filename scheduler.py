@@ -256,7 +256,15 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                     content_text, content_link, author, published_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(feed_id, item_id) DO NOTHING
+                ON CONFLICT(feed_id, item_id) DO UPDATE SET
+                    title = excluded.title,
+                    link = excluded.link,
+                    summary = excluded.summary,
+                    content = excluded.content,
+                    content_text = excluded.content_text,
+                    content_link = excluded.content_link,
+                    author = excluded.author,
+                    published_at = excluded.published_at
                 """,
                 row,
             )

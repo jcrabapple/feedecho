@@ -99,10 +99,10 @@ class TestFeedsPage:
             "badge may say 'click Initialize' but never the jargon 'click Init'"
         )
 
-    def test_plain_language_tracking_states(self):
+    def test_reading_toggle_present(self):
         page = _tpl("feeds.html")
-        assert "Tracking" in page
-        assert "Initialize" in page
+        assert "readerToggleFeed" in page
+        assert "Reading is" in page
 
     def test_add_feed_form_has_visible_labels(self):
         page = _tpl("feeds.html")

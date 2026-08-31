@@ -138,17 +138,6 @@ async function testFeed(feedId, btn) {
     }
 }
 
-async function initFeed(feedId, btn) {
-    if (!confirm('Initialize feed? This sets the last seen item so only new posts going forward will be cross-posted.')) return;
-    try {
-        const resp = await fetch(`/api/feeds/${feedId}/init`, { method: 'POST' });
-        const data = await resp.json();
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
 async function fetchNow(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/fetch`, { method: 'POST' });

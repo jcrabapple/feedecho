@@ -422,6 +422,23 @@ def init_db_sqlite() -> None:
             )
         """)
 
+        # One row per Discord webhook URL: the URL is the credential and the
+        # posting endpoint in one. channel_id comes from Discord's metadata
+        # endpoint and is display-only. UNIQUE(user_id, webhook_url) makes
+        # reconnecting the same webhook (to refresh the name) an in-place
+        # update instead of a duplicate row.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS discord_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                webhook_url TEXT NOT NULL,
+                channel_id TEXT DEFAULT '',
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, webhook_url)
+            )
+        """)
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -444,7 +461,7 @@ def init_db_sqlite() -> None:
 
         # Owned tables carry user_id. Existing single-tenant databases
         # backfill to user 1 via the column default.
-        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts"):
+        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts"):
             _add_column_if_missing(
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
@@ -870,6 +887,18 @@ def init_db_postgres() -> None:
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, homeserver, room_id)
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS discord_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                webhook_url TEXT NOT NULL,
+                channel_id TEXT DEFAULT '',
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, webhook_url)
             )
         """)
 

@@ -61,6 +61,14 @@ from matrix import (
     normalize_room as matrix_normalize_room,
     test_connection as test_matrix_connection,
 )
+from discord import (
+    DiscordAuthError,
+    DiscordError,
+    DiscordNotFoundError,
+    connect as discord_connect,
+    normalize_webhook_url as discord_normalize_webhook_url,
+    test_connection as test_discord_connection,
+)
 from scheduler import start_scheduler, stop_scheduler, check_feed
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
@@ -138,6 +146,7 @@ DESTINATION_TABLES_BY_TYPE = {
     "bluesky": "bluesky_accounts",
     "microblog": "microblog_accounts",
     "matrix": "matrix_accounts",
+    "discord": "discord_accounts",
 }
 DESTINATION_TABLES = tuple(DESTINATION_TABLES_BY_TYPE.values())
 
@@ -728,7 +737,8 @@ def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
 
 
 def _get_all_accounts(user_id: int = 1):
-    """Fetch Mastodon, email, Bluesky, micro.blog, and Matrix accounts for one user."""
+    """Fetch Mastodon, email, Bluesky, micro.blog, Matrix, and Discord
+    accounts for one user."""
     with get_db() as db:
         mastodon = db.execute(
             "SELECT id, name, username, instance, created_at FROM accounts"
@@ -756,7 +766,13 @@ def _get_all_accounts(user_id: int = 1):
             " WHERE user_id = ? ORDER BY name",
             (user_id,),
         ).fetchall()
-    return mastodon, email, bluesky, microblog, matrix_rows
+        # webhook_url is the credential — never selected for display.
+        discord_rows = db.execute(
+            "SELECT id, name, channel_id, created_at FROM discord_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        ).fetchall()
+    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
@@ -768,6 +784,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         bluesky_accounts,
         microblog_accounts,
         matrix_accounts,
+        discord_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     return render(
@@ -778,6 +795,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         bluesky_accounts=bluesky_accounts,
         microblog_accounts=microblog_accounts,
         matrix_accounts=matrix_accounts,
+        discord_accounts=discord_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
         error=message,
@@ -809,6 +827,9 @@ async def dashboard(request: Request):
         matrix_accounts = db.execute(
             "SELECT COUNT(*) as c FROM matrix_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
+        discord_accounts = db.execute(
+            "SELECT COUNT(*) as c FROM discord_accounts WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
         feeds = db.execute(
             "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
             (uid,),
@@ -821,6 +842,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
+                     WHEN e.destination_type = 'discord' THEN dc.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -829,6 +851,7 @@ async def dashboard(request: Request):
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
+            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -840,6 +863,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
+                     WHEN e.destination_type = 'discord' THEN dc.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
@@ -847,6 +871,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'bluesky' THEN b.pds
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
+                     WHEN e.destination_type = 'discord' THEN dc.channel_id
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -856,6 +881,7 @@ async def dashboard(request: Request):
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
+            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
@@ -867,6 +893,7 @@ async def dashboard(request: Request):
                 + bluesky_accounts
                 + microblog_accounts
                 + matrix_accounts
+                + discord_accounts
             ),
             "feeds": len(feeds),
             "echoes": len(echoes),
@@ -1006,7 +1033,9 @@ def _admin_usage(db) -> list:
             (SELECT COUNT(*) FROM microblog_accounts m
               WHERE m.user_id = u.id) +
             (SELECT COUNT(*) FROM matrix_accounts mx
-              WHERE mx.user_id = u.id) AS destinations,
+              WHERE mx.user_id = u.id) +
+            (SELECT COUNT(*) FROM discord_accounts dc
+              WHERE dc.user_id = u.id) AS destinations,
             (SELECT COUNT(*) FROM posted_items pi
               JOIN echoes e2 ON pi.echo_id = e2.id
               WHERE e2.user_id = u.id AND pi.status = 'success'
@@ -1436,6 +1465,7 @@ async def accounts_page(request: Request):
         bluesky_accounts,
         microblog_accounts,
         matrix_accounts,
+        discord_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
@@ -1445,6 +1475,7 @@ async def accounts_page(request: Request):
                   bluesky_accounts=bluesky_accounts,
                   microblog_accounts=microblog_accounts,
                   matrix_accounts=matrix_accounts,
+                  discord_accounts=discord_accounts,
                   smtp_configured=smtp_configured,
                   smtp_settings=smtp_settings)
 
@@ -1461,6 +1492,7 @@ async def echoes_page(request: Request):
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
+                     WHEN e.destination_type = 'discord' THEN dc.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -1469,6 +1501,7 @@ async def echoes_page(request: Request):
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
+            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -1497,12 +1530,18 @@ async def echoes_page(request: Request):
             " WHERE user_id = ? ORDER BY name",
             (uid,),
         ).fetchall()
+        discord_accounts = db.execute(
+            "SELECT id, name, channel_id FROM discord_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
                   bluesky_accounts=bluesky_accounts,
                   microblog_accounts=microblog_accounts,
                   matrix_accounts=matrix_accounts,
+                  discord_accounts=discord_accounts,
                   template_vars=available_variables())
 
 
@@ -1517,6 +1556,7 @@ _HISTORY_ACCOUNT_LABEL_SQL = """CASE
                      WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
+                     WHEN e.destination_type = 'discord' THEN dc.name
                    END"""
 
 _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
@@ -1525,6 +1565,7 @@ _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
                      WHEN e.destination_type = 'bluesky' THEN b.pds
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
+                     WHEN e.destination_type = 'discord' THEN dc.channel_id
                    END"""
 
 _HISTORY_DESTINATION_JOINS_SQL = """
@@ -1532,7 +1573,8 @@ _HISTORY_DESTINATION_JOINS_SQL = """
             LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
             LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
-            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id"""
+            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
+            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id"""
 
 
 def _filter_int(value: str) -> int | None:
@@ -2185,6 +2227,102 @@ def delete_matrix_account(request: Request, account_id: int):
     return RedirectResponse(url="/accounts?status=matrix_deleted", status_code=303)
 
 
+# ── API: Discord Accounts ───────────────────────────────────────────────────
+
+@app.post("/api/discord-accounts")
+def add_discord_account(
+    request: Request,
+    webhook_url: str = Form(...),
+    name: str = Form(""),
+):
+    """Verify a Discord webhook URL and store one account row for it.
+
+    Synchronous route (threadpool-offloaded): the verification GET is a
+    blocking HTTPS call. Reconnecting the same webhook URL updates the stored
+    row (name refresh) instead of duplicating it.
+    """
+    webhook_url = webhook_url.strip()
+    if not webhook_url:
+        return _render_accounts_error(request, "Paste the Discord webhook URL.")
+
+    try:
+        info = discord_connect(webhook_url)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+    except DiscordAuthError as e:
+        return _render_accounts_error(request, str(e))
+    except DiscordNotFoundError as e:
+        return _render_accounts_error(request, str(e))
+    except DiscordError as e:
+        logger.warning("Discord connect failed: %s", e)
+        return _render_accounts_error(request, str(e))
+    except Exception:
+        logger.exception("Discord account verification failed")
+        return _render_accounts_error(
+            request, "Could not verify the Discord webhook. Try again."
+        )
+
+    # Default display name is the webhook's own name on Discord; the optional
+    # user-supplied name wins when given.
+    display_name = name.strip()[:100] or info["name"] or "Discord webhook"
+
+    with get_db() as db:
+        uid = current_user_id(request)
+        # Cap counts NEW rows only: reconnecting the same webhook (to refresh
+        # the name) updates in place and must not be blocked at the cap.
+        existing = db.execute(
+            "SELECT id FROM discord_accounts"
+            " WHERE user_id = ? AND webhook_url = ?",
+            (uid, info["webhook_url"]),
+        ).fetchone()
+        if not existing:
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
+        db.execute(
+            """
+            INSERT INTO discord_accounts (name, webhook_url, channel_id, user_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, webhook_url) DO UPDATE SET
+                name = excluded.name,
+                channel_id = excluded.channel_id
+            """,
+            (display_name, info["webhook_url"], info["channel_id"], uid),
+        )
+    return RedirectResponse(url="/accounts?status=discord_connected", status_code=303)
+
+
+@app.post("/api/discord-accounts/{account_id}/test")
+def test_discord_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM discord_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not account:
+        raise HTTPException(status_code=404, detail="Discord account not found")
+    success, message = test_discord_connection(account["webhook_url"])
+    return {"success": success, "message": message}
+
+
+@app.post("/api/discord-accounts/{account_id}/delete")
+def delete_discord_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    if _dependent_echo_count(uid, "discord", account_id):
+        return _render_accounts_error(
+            request,
+            "This Discord webhook is used by echoes. Delete or reassign those echoes first.",
+        )
+    with get_db() as db:
+        db.execute(
+            "DELETE FROM discord_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
+    return RedirectResponse(url="/accounts?status=discord_deleted", status_code=303)
+
+
 # ── API: Settings ───────────────────────────────────────────────────────────
 
 @app.post("/api/settings/smtp")
@@ -2637,6 +2775,7 @@ async def add_echo(
     bluesky_account_id: int = Form(None),
     microblog_account_id: int = Form(None),
     matrix_account_id: int = Form(None),
+    discord_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -2684,10 +2823,18 @@ async def add_echo(
         destination_id = microblog_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="microblog_account_id required for microblog destination")
-    else:
+    elif destination_type == "matrix":
         destination_id = matrix_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="matrix_account_id required for matrix destination")
+    elif destination_type == "discord":
+        destination_id = discord_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="discord_account_id required for discord destination")
+    else:
+        # Unreachable (VALID_DEST_TYPES is checked above), kept explicit so a
+        # future destination type cannot silently fall through to Discord.
+        raise HTTPException(status_code=400, detail="Invalid destination type")
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -2751,6 +2898,7 @@ async def edit_echo(
     bluesky_account_id: int = Form(None),
     microblog_account_id: int = Form(None),
     matrix_account_id: int = Form(None),
+    discord_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -2795,10 +2943,18 @@ async def edit_echo(
         destination_id = microblog_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="microblog_account_id required for microblog destination")
-    else:
+    elif destination_type == "matrix":
         destination_id = matrix_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="matrix_account_id required for matrix destination")
+    elif destination_type == "discord":
+        destination_id = discord_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="discord_account_id required for discord destination")
+    else:
+        # Unreachable (VALID_DEST_TYPES is checked above), kept explicit so a
+        # future destination type cannot silently fall through to Discord.
+        raise HTTPException(status_code=400, detail="Invalid destination type")
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0

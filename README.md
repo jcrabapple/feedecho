@@ -4,7 +4,7 @@
   <p><em>Your feeds, echoed everywhere.</em></p>
 </div>
 
-Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, and email using configurable templates.
+Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, and email using configurable templates.
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
@@ -15,20 +15,21 @@ Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/s
 - **Bluesky support** — connect accounts with an App Password; posts get auto-detected link facets, 300-grapheme truncation, and image embeds with alt text
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
 - **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
+- **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
-- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, and Matrix rooms
+- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, and Discord channels
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
-- **Image attachments** — automatically upload the feed item's first image (Mastodon, Bluesky, and Matrix upload as media; micro.blog fetches it by URL)
+- **Image attachments** — automatically attach the feed item's first image (Mastodon, Bluesky, and Matrix upload as media; micro.blog and Discord fetch it by URL)
 - **AI alt text** — optionally generate image descriptions via an OpenAI-compatible vision API
 - **Digest mode** — batch email deliveries into hourly digests instead of one email per item
 - **Mobile-responsive** — tables convert to cards, forms stack, 44px touch targets
 - **Idempotent posting** — failed posts are retried, duplicates are prevented
 - **Auto-initialization** — feeds set their baseline on first fetch, no manual init needed
-- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, and Matrix
+- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, Matrix, and Discord
 
 ## Tech Stack
 
@@ -153,9 +154,10 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 2. **Add a Bluesky account** — Create an App Password in Bluesky (Settings → Privacy & Security → App Passwords), then enter your handle and the app password on `/accounts`. FeedEcho verifies the credentials, resolves your PDS, and caches a session.
 3. **Add a micro.blog blog** — Create an app token at [micro.blog/account/apps](https://micro.blog/account/apps), then paste it under Connect Micro.blog on `/accounts`. FeedEcho discovers every blog the token can post to and connects each one.
 4. **Add a Matrix room** — Copy the access token of the account that should post (Element: Settings → Help & About → Access Token), then enter the homeserver, token, and room ID or alias under Connect Matrix on `/accounts`. That account must already be in the room.
-5. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
-6. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
-7. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
+5. **Add a Discord channel** — In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it under Connect Discord on `/accounts`.
+6. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
+7. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
+8. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
 ### Bluesky details
 
@@ -173,6 +175,14 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - Messages are sent as `m.room.message` / `m.text` with an `org.matrix.custom.html` body so links are clickable in every client, and the transaction ID is derived from the echo and feed item — a retry after a lost response is de-duplicated by the homeserver instead of double-posting.
 - Attached images are uploaded to the homeserver's media repo and sent as a second `m.image` event with alt text in `body` (Matrix has no combined text+image message). An image failure never fails the item: the text has already been delivered.
 - Post history links to the message via `matrix.to`. Content warnings and visibility settings are Mastodon-only and are ignored for Matrix.
+
+### Discord details
+
+- Accounts connect via a **webhook URL**, which is the credential and the posting endpoint in one. Anyone with the URL can post to that channel, so treat it like a token; FeedEcho never renders it back in the UI.
+- The webhook URL is verified at connect time with a read-only metadata request, and the webhook's own name pre-fills the display name.
+- Posts send the rendered template as the message content (truncated to Discord's 2000-character limit). When image attachments are on and the item has one, a single embed carries the title, link, and image — Discord fetches the embed image itself, so an unusable image simply renders the post without the picture.
+- Webhooks reply with no message ID and no guild link, so post history has no per-message URL for Discord. Content warnings and visibility settings are Mastodon-only and are ignored for Discord.
+- Deleted or revoked webhooks fail permanently until reconnected; Discord's 30-messages-per-minute rate limit is treated as a transient error and rides the normal retry pipeline.
 
 ## Template Variables
 

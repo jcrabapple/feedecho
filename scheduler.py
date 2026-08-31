@@ -56,6 +56,14 @@ from matrix import (
     transaction_id as matrix_transaction_id,
     upload_media as matrix_upload_media,
 )
+from discord import (
+    DiscordAuthError,
+    DiscordBadRequestError,
+    DiscordError,
+    DiscordNotFoundError,
+    build_embed as discord_build_embed,
+    send_webhook as discord_send_webhook,
+)
 from notify import (
     max_attempts,
     next_retry_delay,
@@ -781,6 +789,16 @@ def _render_and_dispatch(
 
     if echo["destination_type"] == "matrix":
         return _send_matrix(
+            echo,
+            item,
+            content,
+            echo["destination_id"],
+            posted_id,
+            claim_token,
+        )
+
+    if echo["destination_type"] == "discord":
+        return _send_discord(
             echo,
             item,
             content,
@@ -1714,6 +1732,98 @@ def _matrix_image_filename(content_type: str) -> str:
     if not ext.isalnum():
         ext = "img"
     return f"feed-image.{ext}"
+
+
+def _send_discord(
+    echo,
+    item: dict,
+    content: str,
+    account_id: int,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Dispatch one rendered item to a Discord channel via its webhook.
+
+    The message is one POST: ``content`` is the rendered template, and when
+    image attachments are on and the item has one, a single embed carries the
+    title, link, and image URL. Discord fetches the embed image itself, so
+    there is no download/upload step on our side — an unusable image simply
+    renders as text + link and the delivery still succeeds.
+
+    A deleted or revoked webhook (401/404) is permanent until the user
+    reconnects; rate limits and 5xx ride the transient retry pipeline.
+    """
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM discord_accounts WHERE id = ? AND user_id = ?",
+            (account_id, echo["user_id"]),
+        ).fetchone()
+
+    if not account:
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Discord account {account_id} not found",
+            permanent=True,
+        )
+
+    webhook_url = account["webhook_url"]
+
+    try:
+        attach_image = bool(echo["attach_image"])
+    except (KeyError, IndexError):
+        attach_image = False
+
+    embed = None
+    if attach_image:
+        embed = discord_build_embed(
+            item.get("title", ""),
+            item.get("link", ""),
+            item.get("image_url", ""),
+        )
+
+    # Discord work has no slow image pipeline that could lapse the lease, but
+    # the claim is still re-validated so this path keeps the same contract as
+    # the other senders.
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before Discord dispatch; skipping item %s",
+            echo["id"],
+            item["id"],
+        )
+        return False
+
+    try:
+        discord_send_webhook(webhook_url, content, embed)
+    except (DiscordAuthError, DiscordNotFoundError, DiscordBadRequestError) as e:
+        # Revoked/deleted webhooks and rejected payloads cannot heal on
+        # retry: permanent until the user reconnects or fixes the template.
+        logger.error("Echo %s: Discord delivery refused: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Discord delivery refused: {e}",
+            permanent=True,
+        )
+    except DiscordError as e:
+        logger.exception("Echo %s: Discord post failed", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"Discord delivery failed: {e}"
+        )
+    except Exception:
+        logger.exception("Echo %s: Discord post failed unexpectedly", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], "Discord delivery failed"
+        )
+
+    # Discord replies 204 with no message id (and a jump link would need the
+    # guild id, which webhooks do not expose), so there is no post_url.
+    ok = _update_post(posted_id, claim_token, "success", post_url="")
+    if ok:
+        record_success(echo["id"])
+    return ok
 
 
 def _queue_for_digest(

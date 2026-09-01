@@ -11,8 +11,10 @@
       {% for f in feeds %}
       <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}" data-feed-id="{{ f.id }}">
         <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}">
+          <span class="reader-feed-avatar" aria-hidden="true">{{ f.name[:1] | upper }}</span>
           <span class="reader-feed-name">{{ f.name }}</span>
           <span class="reader-feed-meta">
+            {% if f.last_error %}<span class="reader-feed-error" title="Last fetch failed: {{ f.last_error }}">⚠</span>{% endif %}
             {% if f.echo_count %}<span class="reader-feed-echo" title="{{ f.echo_count }} active echo{{ 's' if f.echo_count != 1 else '' }}">⇢</span>{% endif %}
             {% if f.unread %}<span class="reader-feed-unread">{{ f.unread }}</span>{% endif %}
           </span>
@@ -31,6 +33,7 @@
         <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}">Unread</a>
         <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">All</a>
         <a class="reader-tab {% if not q and view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}">Starred</a>
+        <a class="reader-tab {% if not q and view == 'today' %}active{% endif %}" href="/reader?view=today{% if current_feed %}&feed={{ current_feed }}{% endif %}">Today</a>
       </div>
       <form method="get" action="/reader" class="reader-search" role="search">
         <input type="search" name="q" value="{{ q }}" placeholder="Search…" aria-label="Search titles and articles" title="Operators: is:starred, is:unread, is:read, feed:NAME, in:title, in:body">
@@ -43,6 +46,7 @@
         <button class="btn-sm" onclick="readerMarkAllRead(this)">Mark all read</button>
         {% endif %}
         <button class="btn-sm" type="button" id="reader-density-btn" onclick="readerToggleDensity()" title="Toggle list density" aria-pressed="false">Compact</button>
+        <button class="btn-sm" type="button" id="reader-autoread-btn" onclick="readerToggleAutoRead()" title="Mark items read as you scroll past them" aria-pressed="false">Auto-read</button>
         <button class="btn-sm" type="button" onclick="readerShowShortcuts()" title="Keyboard shortcuts">?</button>
       </div>
     </div>

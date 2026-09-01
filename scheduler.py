@@ -195,6 +195,22 @@ def _update_last_fetched(feed_id: int, lease_token: str) -> None:
         )
 
 
+def _set_feed_error(feed_id: int, lease_token: str, message: str) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE feeds SET last_error = ? WHERE id = ? AND lease_token = ?",
+            (message[:300], feed_id, lease_token),
+        )
+
+
+def _clear_feed_error(feed_id: int, lease_token: str) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE feeds SET last_error = NULL WHERE id = ? AND lease_token = ?",
+            (feed_id, lease_token),
+        )
+
+
 def _update_cursor(feed_id: int, lease_token: str, cursor_id: str) -> bool:
     """Advance a cursor only while the current worker still owns the lease."""
     with get_db() as db:
@@ -336,8 +352,10 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
 
     try:
         feed_data = fetch_feed(feed_url)
-    except Exception:
+        _clear_feed_error(feed_id, lease_token)
+    except Exception as exc:
         logger.exception("Feed %s (%s): fetch failed", feed_id, feed_name)
+        _set_feed_error(feed_id, lease_token, str(exc))
         _update_last_fetched(feed_id, lease_token)
         return
 

@@ -110,3 +110,49 @@ class TestReaderPagePg:
         assert resp.status_code == 200
         assert "PG Item" in resp.text
 
+
+@requires_pg
+class TestReaderTier2Pg:
+    def test_mutes_and_bulk_mark_read_unread_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'paid')",
+                (11, "r@example.com"),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled, mute_keywords, user_id)"
+                " VALUES (?, ?, 1, ?, ?)",
+                ("F", "https://example.com/feed", "noise", 11),
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, content, is_read)"
+                " VALUES (1, 'a', 'Good', 'clean', 0)"
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, content, is_read)"
+                " VALUES (1, 'b', 'Bad', 'noise here', 0)"
+            )
+
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(11, "r@example.com"))
+            # mute hides the "noise" item (COALESCE keeps NULL-safe on PG)
+            page = c.get("/reader", params={"view": "all"}).text
+            assert "Good" in page
+            assert "Bad" not in page
+            # bulk mark-read + mark-unread roundtrip via IN placeholders
+            assert c.post("/api/reader/mark-read", data={"ids": "1,2"}).json()["count"] == 2
+            assert c.post("/api/reader/mark-unread", data={"ids": "1,2"}).json()["count"] == 2
+            # today view (items have no published_at, so empty but 200)
+            assert c.get("/reader", params={"view": "today"}).status_code == 200
+

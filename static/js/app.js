@@ -192,8 +192,9 @@ function editFeed(feedId) {
     const name = row.dataset.name;
     const url = row.dataset.url;
     const pollInterval = row.dataset.pollInterval || '15';
+    const muteKeywords = row.dataset.muteKeywords || '';
 
-    row.innerHTML = `<td colspan="7">
+    row.innerHTML = `<td colspan="6">
         <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form">
             <div class="form-row">
                 <label>Name
@@ -204,6 +205,9 @@ function editFeed(feedId) {
                 </label>
                 <label>Poll interval (min)
                     <input type="number" name="poll_interval" min="1" max="1440" value="${pollInterval}">
+                </label>
+                <label>Mute keywords (comma-separated)
+                    <input type="text" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                 </label>
             </div>
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
@@ -928,10 +932,71 @@ async function readerUndo(ids) {
     location.reload();
 }
 
+// ── Reader auto-read-on-scroll ───────────────────────────────────────────────
+let readerAutoReadObserver = null;
+let readerAutoReadQueue = new Set();
+let readerAutoReadTimer = null;
+
+function readerAutoReadFlush() {
+    readerAutoReadTimer = null;
+    const ids = Array.from(readerAutoReadQueue);
+    readerAutoReadQueue.clear();
+    if (!ids.length) return;
+    fetch('/api/reader/mark-read', { method: 'POST', body: new URLSearchParams({ ids: ids.join(',') }) }).catch(() => {});
+}
+
+function readerEnableAutoRead() {
+    if (readerAutoReadObserver) return;
+    const list = document.querySelector('.reader-item-list');
+    const view = list && list.dataset.view;
+    // Only in All/Today, where marking read leaves the item in the list.
+    if (view !== 'all' && view !== 'today') return;
+    if (!('IntersectionObserver' in window)) return;
+    readerAutoReadObserver = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+            if (e.isIntersecting) continue;
+            const entry = e.target;
+            const details = entry.querySelector('details.reader-item');
+            if (!details || !details.classList.contains('unread')) continue;
+            details.classList.remove('unread');
+            const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
+            if (btn) btn.textContent = 'Mark unread';
+            readerAdjustUnread(entry.dataset.feedId, -1);
+            readerAutoReadQueue.add(entry.dataset.itemId);
+            readerAutoReadObserver.unobserve(entry);
+        }
+        if (readerAutoReadQueue.size && !readerAutoReadTimer) {
+            readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);
+        }
+    }, { rootMargin: '-80px 0px 0px 0px' });
+    document.querySelectorAll('.reader-entry').forEach((el) => readerAutoReadObserver.observe(el));
+}
+
+function readerDisableAutoRead() {
+    if (readerAutoReadObserver) { readerAutoReadObserver.disconnect(); readerAutoReadObserver = null; }
+    if (readerAutoReadTimer) { clearTimeout(readerAutoReadTimer); readerAutoReadTimer = null; }
+    readerAutoReadQueue.clear();
+}
+
+function readerApplyAutoRead() {
+    const btn = document.getElementById('reader-autoread-btn');
+    const on = localStorage.getItem('feedecho-reader-autoread') === '1';
+    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) readerEnableAutoRead();
+}
+
+function readerToggleAutoRead() {
+    const on = localStorage.getItem('feedecho-reader-autoread') === '1';
+    localStorage.setItem('feedecho-reader-autoread', on ? '0' : '1');
+    if (on) readerDisableAutoRead(); else readerEnableAutoRead();
+    readerApplyAutoRead();
+}
+
 // ── Reader page init ─────────────────────────────────────────────────────────
 (function () {
     if (!document.querySelector('.reader')) return;
     readerApplyDensity();
+    readerApplyAutoRead();
     const raw = sessionStorage.getItem('feedecho-reader-undo');
     if (raw) {
         try {

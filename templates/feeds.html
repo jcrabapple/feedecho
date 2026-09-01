@@ -13,6 +13,21 @@
     <button type="submit">Add Feed</button>
 </form>
 
+<details class="account-section">
+    <summary>Import / export subscriptions (OPML)</summary>
+    <div class="opml-actions">
+        <a class="btn-sm" href="/api/feeds/opml">Export OPML</a>
+        <form method="post" action="/api/feeds/opml" class="opml-import-form">
+            <label for="opml">Import OPML (paste XML)</label>
+            <textarea name="opml" id="opml" rows="6" placeholder="Paste an OPML document to bulk-add subscriptions…"></textarea>
+            <button type="submit" class="btn-sm">Import</button>
+        </form>
+        {% if request.query_params.get('imported') %}
+        <p class="hint">Imported {{ request.query_params.get('imported') }} feed(s).</p>
+        {% endif %}
+    </div>
+</details>
+
 {% if feeds %}
 <div class="data-table-wrapper">
 <table class="data-table">
@@ -31,10 +46,12 @@
         <tr id="feed-row-{{ feed.id }}"
             data-name="{{ feed.name | e }}"
             data-url="{{ feed.url | e }}"
-            data-poll-interval="{{ feed.poll_interval }}">
+            data-poll-interval="{{ feed.poll_interval }}"
+            data-mute-keywords="{{ feed.mute_keywords or '' | e }}">
             <td data-label="Name">
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
+                {% if feed.last_error %}<span class="badge badge-warning" title="Last fetch failed: {{ feed.last_error }}">⚠</span>{% endif %}
             </td>
             <td data-label="URL"><a href="{{ feed.url | safe_url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>

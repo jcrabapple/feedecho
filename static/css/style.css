@@ -1339,3 +1339,12 @@ details.account-section > summary:focus-visible {
 
 /* Tier 1 — toolbar right group */
 .reader-toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+/* Tier 2 — letter avatar + fetch-error badge */
+.reader-feed-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--primary-wash); color: var(--primary); font-size: 0.7rem; font-weight: 700; flex-shrink: 0; }
+.reader-feed-error { color: #d97706; flex-shrink: 0; }
+
+/* Tier 2 — OPML import on the Feeds page */
+.opml-actions { display: flex; flex-direction: column; gap: 0.6rem; }
+.opml-import-form { display: flex; flex-direction: column; gap: 0.4rem; }
+.opml-import-form textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }

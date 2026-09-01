@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+import xml.etree.ElementTree as ElementTree
+from xml.sax.saxutils import quoteattr
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Match
 from fastapi.staticfiles import StaticFiles
@@ -1847,7 +1849,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
     """
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
-    view = view if view in ("all", "unread", "starred") else "unread"
+    view = view if view in ("all", "unread", "starred", "today") else "unread"
     q = (q or "").strip()
     with get_db() as db:
         _require_reader(db, uid)
@@ -1909,6 +1911,28 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
             where.append("i.is_read = 0")
         elif view == "starred":
             where.append("i.starred = 1")
+        elif view == "today":
+            # Last-24h across all feeds, read or not (a daily entry point).
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            where.append("i.published_at >= ?")
+            params.append(cutoff.strftime("%Y-%m-%d %H:%M:%S"))
+
+        # Per-feed keyword mutes (NewsBlur "training-lite"): hide items whose
+        # title/body match any muted keyword on their feed, at query time.
+        mutes = db.execute(
+            "SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND read_enabled = 1"
+            " AND mute_keywords IS NOT NULL AND mute_keywords != ''",
+            (uid,),
+        ).fetchall()
+        for mf in mutes:
+            for kw in [k.strip() for k in (mf["mute_keywords"] or "").split(",") if k.strip()]:
+                like = f"%{kw.lower()}%"
+                where.append(
+                    "NOT (i.feed_id = ? AND (LOWER(COALESCE(i.title, '')) LIKE ?"
+                    " OR LOWER(COALESCE(i.content, '')) LIKE ?"
+                    " OR LOWER(COALESCE(i.summary, '')) LIKE ?))"
+                )
+                params.extend([mf["id"], like, like, like])
 
         items = db.execute(
             f"""
@@ -2927,6 +2951,82 @@ async def add_feed(
     return RedirectResponse(url="/feeds", status_code=303)
 
 
+@app.get("/api/feeds/opml")
+def export_opml(request: Request):
+    """Export this user's feeds as an OPML 2.0 document (issue #11, Tier 2)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        feeds = db.execute(
+            "SELECT name, url FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
+    outlines = "\n".join(
+        f'    <outline text={quoteattr(f["name"])} type="rss" xmlUrl={quoteattr(f["url"])} />'
+        for f in feeds
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<opml version="2.0">\n'
+        "  <head><title>FeedEcho subscriptions</title></head>\n"
+        "  <body>\n"
+        f"{outlines}\n"
+        "  </body>\n"
+        "</opml>\n"
+    )
+    return Response(
+        content=xml,
+        media_type="text/x-opml",
+        headers={"Content-Disposition": 'attachment; filename="feedecho-subscriptions.opml"'},
+    )
+
+
+@app.post("/api/feeds/opml")
+async def import_opml(request: Request, opml: str = Form("")):
+    """Bulk-add feeds from an OPML document (issue #11, Tier 2)."""
+    uid = current_user_id(request)
+    try:
+        root = ElementTree.fromstring(opml)
+    except ElementTree.ParseError:
+        raise HTTPException(status_code=400, detail="Invalid OPML XML")
+    with get_db() as db:
+        reader_allowed = not settings.MULTI or plans.reader_enabled(_user_plan(db, uid))
+        existing = {
+            r["url"] for r in db.execute(
+                "SELECT url FROM feeds WHERE deleted_at IS NULL AND user_id = ?", (uid,)
+            ).fetchall()
+        }
+        added = skipped = 0
+        for o in root.iter("outline"):
+            url = (o.get("xmlUrl") or "").strip()
+            if not url:
+                continue
+            try:
+                url = validate_url(url)
+            except HTTPException:
+                skipped += 1
+                continue
+            if url in existing:
+                skipped += 1
+                continue
+            if settings.MULTI:
+                count = db.execute(
+                    "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
+                    (uid,),
+                ).fetchone()["c"]
+                try:
+                    plans.check_feed_allowance(count, _user_plan(db, uid))
+                except PlanError as e:
+                    raise HTTPException(status_code=402, detail=str(e))
+            title = (o.get("title") or o.get("text") or "").strip() or url
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled, user_id) VALUES (?, ?, ?, ?)",
+                (title, url, 1 if reader_allowed else 0, uid),
+            )
+            existing.add(url)
+            added += 1
+    return RedirectResponse(url=f"/feeds?imported={added}&skipped={skipped}", status_code=303)
+
+
 @app.post("/api/feeds/{feed_id}/edit")
 async def edit_feed(
     request: Request,
@@ -2934,8 +3034,9 @@ async def edit_feed(
     name: str = Form(...),
     url: str = Form(...),
     poll_interval: int = Form(15),
+    mute_keywords: str = Form(""),
 ):
-    """Update a feed's name, URL, or poll interval in place (issue #3).
+    """Update a feed's name, URL, poll interval, or mute keywords (issues #3, #11).
 
     Changing the URL invalidates the cursor: last_item_id belonged to the
     old feed, and comparing it against the new feed's item IDs could
@@ -2949,6 +3050,7 @@ async def edit_feed(
         raise HTTPException(status_code=400, detail="Feed name is required")
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
+    mute_keywords = (mute_keywords or "").strip()
     with get_db() as db:
         if settings.MULTI:
             # Clamp to the plan's floor, never reject: tightening an existing
@@ -2966,16 +3068,17 @@ async def edit_feed(
             db.execute(
                 """
                 UPDATE feeds
-                   SET name = ?, url = ?, poll_interval = ?, last_item_id = NULL
+                   SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?,
+                       last_item_id = NULL
                  WHERE id = ? AND deleted_at IS NULL AND user_id = ?
                 """,
-                (name, url, poll_interval, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, feed_id, uid),
             )
         else:
             db.execute(
-                "UPDATE feeds SET name = ?, url = ?, poll_interval = ? "
+                "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ? "
                 "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (name, url, poll_interval, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, feed_id, uid),
             )
     return RedirectResponse(url="/feeds", status_code=303)
 
@@ -3237,6 +3340,32 @@ def reader_mark_unread(request: Request, ids: str = Form("")):
         placeholders = ", ".join("?" for _ in id_list)
         result = db.execute(
             f"UPDATE feed_items SET is_read = 0 WHERE id IN ({placeholders})"
+            " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+            (*id_list, uid),
+        )
+    return {"success": True, "count": result.rowcount}
+
+
+@app.post("/api/reader/mark-read")
+def reader_mark_read(request: Request, ids: str = Form("")):
+    """Bulk mark-as-read for a set of item ids (issue #11, auto-read-on-scroll).
+
+    Idempotent: sets is_read = 1 (never toggles), scoped to the caller's feeds.
+    Empty/invalid ids are a no-op rather than an error, since the auto-read
+    batching can send an empty set.
+    """
+    uid = current_user_id(request)
+    id_list = []
+    for part in ids.split(","):
+        val = _filter_int(part.strip())
+        if val is not None:
+            id_list.append(val)
+    if not id_list:
+        return {"success": True, "count": 0}
+    with get_db() as db:
+        placeholders = ", ".join("?" for _ in id_list)
+        result = db.execute(
+            f"UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND id IN ({placeholders})"
             " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (*id_list, uid),
         )

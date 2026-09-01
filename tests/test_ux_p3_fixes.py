@@ -152,7 +152,10 @@ class TestThemeToggleNaming:
         assert any("setAttribute('aria-pressed'" in h and "density" in h for h in hits), (
             "the reader density toggle should set aria-pressed for its on/off state"
         )
-        assert len([h for h in hits if h.strip()]) == 3
+        assert any("setAttribute('aria-pressed'" in h and "on ?" in h for h in hits), (
+            "the reader auto-read toggle should set aria-pressed for its on/off state"
+        )
+        assert len([h for h in hits if h.strip()]) == 4
 
     def test_state_dependent_label(self):
         assert "'Switch to dark theme'" in APP_JS

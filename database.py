@@ -293,6 +293,8 @@ def init_db_sqlite() -> None:
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
                 read_enabled INTEGER NOT NULL DEFAULT 0,
+                mute_keywords TEXT DEFAULT '',
+                last_error TEXT,
                 deleted_at TIMESTAMP,
                 user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -302,6 +304,8 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
         _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
+        _add_column_if_missing(db, "feeds", "last_error", "TEXT")
         # Soft-delete marker: feeds are never hard-deleted by the app so that
         # echo configuration and posted-item history survive as an audit trail.
         _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
@@ -863,6 +867,8 @@ def init_db_postgres() -> None:
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
                 read_enabled INTEGER NOT NULL DEFAULT 0,
+                mute_keywords TEXT DEFAULT '',
+                last_error TEXT,
                 deleted_at TIMESTAMP,
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -871,6 +877,8 @@ def init_db_postgres() -> None:
         # Reader toggle for already-deployed hosted databases (fresh installs
         # get the column from the CREATE TABLE above).
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
+        _add_column_if_missing(db, "feeds", "last_error", "TEXT")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS feed_items (

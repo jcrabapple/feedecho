@@ -1220,6 +1220,7 @@ details.account-section > summary:focus-visible {
 .reader { display: grid; grid-template-columns: 260px 1fr; gap: 1.25rem; align-items: start; }
 .reader-feeds { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
 .reader-feeds h2 { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.reader-feeds-hint { font-size: 0.78rem; color: var(--text-muted); line-height: 1.45; margin: -0.45rem 0 0.75rem; }
 .reader-feed-list { list-style: none; margin: 0; padding: 0; }
 .reader-feed { border-bottom: 1px solid var(--border); }
 .reader-feed:last-child { border-bottom: 0; }

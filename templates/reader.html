@@ -10,6 +10,7 @@
   <aside class="reader-feeds" aria-label="Feeds">
     <button class="reader-feeds-close" type="button" onclick="readerToggleFeeds()" aria-label="Close feeds">×</button>
     <h2>Feeds</h2>
+    <p class="reader-feeds-hint">Only feeds with reading enabled appear here. <a href="/feeds">Enable reading</a> on the Feeds page.</p>
     {% if feeds %}
     <ul class="reader-feed-list">
       {% for f in feeds %}

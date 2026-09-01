@@ -1017,10 +1017,11 @@ function readerLoadBody(details) {
     const itemId = content.dataset.itemId;
     if (!itemId) return;
     content.dataset.loaded = '1';
+    content.classList.add('is-loading');
     fetch(`/api/reader/${itemId}/body`)
         .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((d) => { content.textContent = d.content || ''; })
-        .catch(() => { content.dataset.loaded = '0'; });
+        .then((d) => { content.textContent = d.content || ''; content.classList.remove('is-loading'); })
+        .catch(() => { content.dataset.loaded = '0'; content.classList.remove('is-loading'); });
 }
 
 document.addEventListener('toggle', (e) => {

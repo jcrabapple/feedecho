@@ -59,7 +59,7 @@ class TestReaderPageSingle:
         text = resp.text
         assert "action-btn" in text
         assert "aria-pressed" in text
-        assert "☆" in text or "★" in text
+        assert "M12 2l3.09 6.26" in text  # SVG star icon (replaced the ☆/★ glyph)
 
     def test_reader_hides_read_disabled_feeds(self, single_env):
         with database.get_db() as db:

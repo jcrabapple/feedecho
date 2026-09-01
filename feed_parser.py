@@ -408,18 +408,23 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
         # stripped text, {{ content_link }} is the first outbound link
         # inside it (recovered before strip_html drops the href).
         content_html = entry.get("content", [{}])[0].get("value", "") if entry.get("content") else ""
+        # Feeds without <content:encoded> (plain WordPress <description>) put
+        # the full body in summary; use it so the reader text stays structured.
+        display_html = content_html or entry.get("summary", "")
         item = {
             "id": _get_item_id(entry),
             "title": clean_text(entry.get("title", "")),
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
             "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
+            "content_text": html_to_text(display_html) if display_html else "",
             "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
             "date": _parse_date_struct(entry),
             "tags": [tag.get("term", "") for tag in entry.get("tags", []) if tag.get("term")],
             "image_url": _extract_rss_image(entry),
             "image_alt": _extract_rss_image_alt(entry),
+            "enclosure_url": _extract_audio_enclosure(entry),
             "raw": {k: v for k, v in entry.items()},
         }
         items.append(item)
@@ -451,12 +456,14 @@ def parse_json_feed(data: dict) -> dict:
             "link": entry.get("url", ""),
             "summary": entry.get("summary", ""),
             "content": strip_html(entry.get("content_html") or entry.get("content_text", "")),
+            "content_text": html_to_text(entry.get("content_html") or "") or entry.get("content_text", ""),
             "content_link": _extract_first_link(content_html, base_url=entry.get("url", "")),
             "author": author_name,
             "date": _parse_iso_date(entry.get("date_published") or entry.get("date_modified")),
             "tags": entry.get("tags", []),
             "image_url": _extract_json_feed_image(entry),
             "image_alt": _extract_json_feed_image_alt(entry),
+            "enclosure_url": _extract_json_feed_audio(entry),
             "raw": entry,
         }
         items.append(item)
@@ -643,6 +650,46 @@ def strip_html(html_str: str) -> str:
     return html_str
 
 
+def html_to_text(html_str: str) -> str:
+    """Convert HTML to readable plain text, preserving paragraph/list structure.
+
+    Unlike :func:`strip_html` (which collapses everything to one run for
+    statuses), this keeps a document's shape for the reader: block boundaries
+    and <br> become newlines, <li> becomes a bullet, and script/style/iframe
+    blocks are dropped. Output is safe plain text (rendered pre-wrap, never as
+    HTML), so it needs no sanitizer.
+    """
+    if not html_str:
+        return ""
+    html_str = re.sub(
+        r"<(script|style|iframe|object|embed|form)[^>]*>.*?</\1>",
+        "", html_str, flags=re.DOTALL | re.IGNORECASE,
+    )
+    html_str = re.sub(
+        r"</(p|div|section|article|blockquote|pre|h[1-6]|li|ul|ol|table|tr|figure|figcaption)>",
+        "\n", html_str, flags=re.IGNORECASE,
+    )
+    html_str = re.sub(r"<(br|hr)\s*/?>", "\n", html_str, flags=re.IGNORECASE)
+    html_str = re.sub(r"<li[^>]*>", "\n• ", html_str, flags=re.IGNORECASE)
+    html_str = re.sub(r"<[^>]+>", "", html_str)
+    text = html.unescape(html_str)
+    lines = [re.sub(r"[ \t\r\f\v]+", " ", ln).strip() for ln in text.split("\n")]
+    out = []
+    blank = True
+    for ln in lines:
+        if not ln:
+            if blank:
+                continue
+            out.append("")
+            blank = True
+        else:
+            out.append(ln)
+            blank = False
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
 def clean_html(html_str: str) -> str:
     """Light-clean HTML: kept for backwards compat. Use strip_html for Mastodon output."""
     return strip_html(html_str)
@@ -759,6 +806,22 @@ def _extract_rss_image_alt(entry: dict) -> str:
         return ""
     alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
     return alt.group(1).strip() if alt else ""
+
+
+def _extract_audio_enclosure(entry: dict) -> str:
+    """First audio enclosure URL (podcasts), or ''."""
+    for enc in entry.get("enclosures", []):
+        if isinstance(enc, dict) and enc.get("type", "").startswith("audio/") and enc.get("href"):
+            return enc["href"]
+    return ""
+
+
+def _extract_json_feed_audio(entry: dict) -> str:
+    """First audio attachment URL from a JSON Feed item, or ''."""
+    for att in entry.get("attachments") or []:
+        if isinstance(att, dict) and str(att.get("mime_type", "")).startswith("audio/") and att.get("url"):
+            return att["url"]
+    return ""
 
 
 def _extract_json_feed_image(entry: dict) -> str:

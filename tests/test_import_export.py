@@ -392,3 +392,52 @@ class TestImportExportPostgres:
             echo = db.execute("SELECT * FROM echoes WHERE user_id = ?", (uid,)).fetchone()
             assert echo["feed_id"] == feed["id"]
             assert echo["destination_id"] == account["id"]
+
+
+
+class TestReaderImportExport:
+    def test_export_includes_read_enabled_not_feed_items(self, temp_db):
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled) VALUES (?, ?, 1)",
+                ("F", "https://e.com/f"),
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title) VALUES (1, 'a', 'SECRET_ITEM_CONTENT')"
+            )
+            doc = import_export.build_export(db, 1)
+        assert doc["feeds"][0]["read_enabled"] == 1
+        assert "feed_items" not in doc
+        # Derived reader content must never leak into the export document.
+        assert "SECRET_ITEM_CONTENT" not in json.dumps(doc)
+
+    def test_import_roundtrips_read_enabled(self, temp_db):
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://e.com/f", "read_enabled": 1}],
+            "accounts": {section: [] for section in import_export.ACCOUNT_TYPES},
+            "echoes": [],
+        }
+        with get_db() as db:
+            import_export.import_data(db, 1, payload)
+            row = db.execute(
+                "SELECT read_enabled FROM feeds WHERE url = ?", ("https://e.com/f",)
+            ).fetchone()
+        assert row["read_enabled"] == 1
+
+    def test_import_defaults_read_enabled_off_when_absent(self, temp_db):
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://e.com/f"}],
+            "accounts": {section: [] for section in import_export.ACCOUNT_TYPES},
+            "echoes": [],
+        }
+        with get_db() as db:
+            import_export.import_data(db, 1, payload)
+            row = db.execute(
+                "SELECT read_enabled FROM feeds WHERE url = ?", ("https://e.com/f",)
+            ).fetchone()
+        assert row["read_enabled"] == 0
+

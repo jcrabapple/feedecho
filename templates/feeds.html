@@ -13,6 +13,21 @@
     <button type="submit">Add Feed</button>
 </form>
 
+<details class="account-section">
+    <summary>Import / export subscriptions (OPML)</summary>
+    <div class="opml-actions">
+        <a class="btn-sm" href="/api/feeds/opml">Export OPML</a>
+        <form method="post" action="/api/feeds/opml" class="opml-import-form">
+            <label for="opml">Import OPML (paste XML)</label>
+            <textarea name="opml" id="opml" rows="6" placeholder="Paste an OPML document to bulk-add subscriptions…"></textarea>
+            <button type="submit" class="btn-sm">Import</button>
+        </form>
+        {% if request.query_params.get('imported') %}
+        <p class="hint">Imported {{ request.query_params.get('imported') }} feed(s).</p>
+        {% endif %}
+    </div>
+</details>
+
 {% if feeds %}
 <div class="data-table-wrapper">
 <table class="data-table">
@@ -22,7 +37,6 @@
             <th scope="col">URL</th>
             <th scope="col">Interval</th>
             <th scope="col">Last Fetched</th>
-            <th scope="col">Tracking</th>
             <th scope="col">Echoes</th>
             <th scope="col">Actions</th>
         </tr>
@@ -32,28 +46,34 @@
         <tr id="feed-row-{{ feed.id }}"
             data-name="{{ feed.name | e }}"
             data-url="{{ feed.url | e }}"
-            data-poll-interval="{{ feed.poll_interval }}">
+            data-poll-interval="{{ feed.poll_interval }}"
+            data-mute-keywords="{{ (feed.mute_keywords or '') | e }}">
             <td data-label="Name">
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
+                {% if feed.last_error %}<span class="badge badge-warning" title="Last fetch failed: {{ feed.last_error }}">⚠</span>{% endif %}
             </td>
             <td data-label="URL"><a href="{{ feed.url | safe_url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>
             <td data-label="Last Fetched"><small>{% if feed.last_fetched %}<time class="local-time" datetime="{{ feed.last_fetched | iso_utc }}">{{ feed.last_fetched | utc_text }} UTC</time>{% else %}Never{% endif %}</small></td>
-            <td data-label="Tracking">
-                {% if feed.last_item_id %}
-                <span class="badge badge-success">Tracking new items</span>
+            <td data-label="Echoes">
+                {% if feed_echoes[feed.id] %}
+                <a href="/echoes" class="badge badge-success" title="{{ feed_echoes[feed.id] }} active echo{{ 's' if feed_echoes[feed.id] != 1 else '' }} — manage on the Echoes page">{{ feed_echoes[feed.id] }} echo{{ 's' if feed_echoes[feed.id] != 1 else '' }}</a>
                 {% else %}
-                <span class="badge badge-warning">Not initialized — click Initialize</span>
+                —
                 {% endif %}
             </td>
-            <td data-label="Echoes">{{ feed_echoes[feed.id] }}</td>
             <td data-label="Actions" class="action-cell">
                 <button class="btn-sm" onclick="editFeed({{ feed.id }})">Edit</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => testFeed({{ feed.id }}, btn))" title="Fetch the feed now and show a preview of its items">Test</button>
-                <button class="btn-sm" onclick="withBusy(this, (btn) => initFeed({{ feed.id }}, btn))" title="Set the feed's current latest item as the starting point so only newer items get posted">Initialize</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => fetchNow({{ feed.id }}, btn))" title="Check the feed for new items right now">Fetch</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => pauseFeed({{ feed.id }}, btn))">{{ 'Resume' if feed.paused else 'Pause' }}</button>
+                <button class="btn-sm" onclick="readerToggleFeed({{ feed.id }}, this)"
+                        title="Reading is {{ 'on' if feed.read_enabled else 'off' }} — click to toggle"
+                        aria-label="Toggle reading (currently {{ 'on' if feed.read_enabled else 'off' }})"
+                        aria-pressed="{{ 'true' if feed.read_enabled else 'false' }}">
+                  {% if feed.read_enabled %}📖{% else %}📕{% endif %}
+                </button>
                 <form method="post" action="/api/feeds/{{ feed.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this feed? Echoes and post history are preserved.')">Delete</button>
                 </form>
@@ -63,7 +83,7 @@
     </tbody>
 </table>
 </div>
-<p class="hint">A new feed starts paused for tracking: the first <strong>Initialize</strong> records where to start so nothing already in the feed is back-posted. From then on each check posts only items newer than the last one seen.</p>
+<p class="hint">A new feed starts tracking automatically: the first check records the feed's latest item as the starting point, so nothing already published is back-posted. After that, each check cross-posts only items newer than the last one seen.</p>
 {% else %}
 <p class="empty-state">No feeds yet. Add one above to get started.</p>
 {% endif %}

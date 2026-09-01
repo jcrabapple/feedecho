@@ -138,17 +138,6 @@ async function testFeed(feedId, btn) {
     }
 }
 
-async function initFeed(feedId, btn) {
-    if (!confirm('Initialize feed? This sets the last seen item so only new posts going forward will be cross-posted.')) return;
-    try {
-        const resp = await fetch(`/api/feeds/${feedId}/init`, { method: 'POST' });
-        const data = await resp.json();
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
 async function fetchNow(feedId, btn) {
     try {
         const resp = await fetch(`/api/feeds/${feedId}/fetch`, { method: 'POST' });
@@ -203,8 +192,9 @@ function editFeed(feedId) {
     const name = row.dataset.name;
     const url = row.dataset.url;
     const pollInterval = row.dataset.pollInterval || '15';
+    const muteKeywords = row.dataset.muteKeywords || '';
 
-    row.innerHTML = `<td colspan="7">
+    row.innerHTML = `<td colspan="6">
         <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form">
             <div class="form-row">
                 <label>Name
@@ -215,6 +205,9 @@ function editFeed(feedId) {
                 </label>
                 <label>Poll interval (min)
                     <input type="number" name="poll_interval" min="1" max="1440" value="${pollInterval}">
+                </label>
+                <label>Mute keywords (comma-separated)
+                    <input type="text" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                 </label>
             </div>
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
@@ -693,3 +686,431 @@ function hydrateTableHeaders() {
     });
 }
 hydrateTableHeaders();
+
+// ── Reader (issue #11) ─────────────────────────────────────────────────────
+function readerNextEntry(entry) {
+    let n = entry.nextElementSibling;
+    while (n && !n.classList.contains('reader-entry')) n = n.nextElementSibling;
+    return n;
+}
+
+function readerList(entry) {
+    return entry.closest('.reader-item-list');
+}
+
+function readerApplyStar(btn, starred) {
+    btn.classList.toggle('is-starred', starred);
+    const svg = btn.querySelector('.action-btn__star svg');
+    if (svg) svg.setAttribute('fill', starred ? 'currentColor' : 'none');
+    btn.setAttribute('aria-pressed', starred ? 'true' : 'false');
+    btn.setAttribute('aria-label', starred ? 'Unstar' : 'Star');
+}
+
+function readerAdjustUnread(feedId, delta) {
+    if (!feedId || !delta) return;
+    const feed = document.querySelector(`li.reader-feed[data-feed-id="${feedId}"]`);
+    if (!feed) return;
+    const badge = feed.querySelector('.reader-feed-unread');
+    if (!badge) {
+        if (delta > 0) {
+            const meta = feed.querySelector('.reader-feed-meta');
+            const span = document.createElement('span');
+            span.className = 'reader-feed-unread';
+            span.textContent = '1';
+            (meta || feed).appendChild(span);
+        }
+        return;
+    }
+    const n = parseInt(badge.textContent, 10) + delta;
+    if (n <= 0) badge.remove();
+    else badge.textContent = String(n);
+}
+
+// Sticky-header offset: keep the next card just below the navbar.
+const READER_HEADER_OFFSET = 72;
+
+function readerRemoveAndAdvance(entry) {
+    const list = readerList(entry);
+    const next = readerNextEntry(entry);
+    const wasCurrent = entry.classList.contains('reader-current');
+    entry.remove();
+    if (next) {
+        // Keep keyboard focus flowing: if the removed card was the "current"
+        // one, the next card inherits the highlight.
+        if (wasCurrent) next.classList.add('reader-current');
+        // The next card slides up into the removed one's place. Only nudge the
+        // viewport if its top ended up hidden under the sticky header.
+        const top = next.getBoundingClientRect().top;
+        if (top < READER_HEADER_OFFSET) {
+            scrollBy({ top: top - READER_HEADER_OFFSET, behavior: 'smooth' });
+        }
+        next.querySelector('summary')?.focus({ preventScroll: true });
+    } else if (list && !list.querySelector('.reader-entry')) {
+        reloadPreservingScroll(); // list is empty -> reload to surface the empty state
+    }
+}
+
+async function readerToggleRead(itemId, btn) {
+    if (btn.disabled) return;
+    const entry = btn.closest('.reader-entry');
+    btn.disabled = true;
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/read`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        readerAdjustUnread(entry.dataset.feedId, data.is_read ? -1 : 1);
+        const list = readerList(entry);
+        if (list && list.dataset.view === 'unread' && data.is_read) {
+            readerRemoveAndAdvance(entry);
+        } else {
+            const details = entry.querySelector('.reader-item');
+            details.classList.toggle('unread', !data.is_read);
+            btn.textContent = data.is_read ? 'Mark unread' : 'Mark read';
+        }
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
+}
+
+async function readerToggleStar(itemId, btn) {
+    if (btn.disabled) return;
+    const entry = btn.closest('.reader-entry');
+    btn.disabled = true;
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/star`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        const list = readerList(entry);
+        if (list && list.dataset.view === 'starred' && !data.starred) {
+            readerRemoveAndAdvance(entry);
+        } else {
+            readerApplyStar(btn, data.starred);
+        }
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
+}
+
+async function readerToggleFeed(feedId, btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+        const resp = await fetch(`/api/feeds/${feedId}/reader-toggle`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
+}
+
+async function readerMarkAllRead(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const params = new URLSearchParams(window.location.search);
+    const feedId = params.get('feed');
+    const body = feedId ? new URLSearchParams({ feed_id: feedId }) : new URLSearchParams();
+    try {
+        const resp = await fetch('/api/reader/mark-all-read', { method: 'POST', body });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        if (data.count > 0 && Array.isArray(data.ids) && data.ids.length) {
+            sessionStorage.setItem('feedecho-reader-undo', JSON.stringify({ ids: data.ids, at: Date.now() }));
+        }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
+}
+
+async function readerShout(itemId, form) {
+    const btn = form.querySelector('button[type="submit"]');
+    if (btn.disabled) return false;
+    const data = new URLSearchParams(new FormData(form));
+    btn.disabled = true;
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/shout`, { method: 'POST', body: data });
+        const result = await resp.json();
+        if (!resp.ok) { showStatus(btn, result.detail || 'Shout failed', 'error'); return false; }
+        if (result.success) {
+            showStatus(btn, 'Shouted' + (result.post_url ? ' — view in History' : ''), 'success');
+            form.reset();
+        } else {
+            showStatus(btn, result.error_message || 'Shout failed', 'error');
+        }
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
+    return false;
+}
+
+// ── Reader keyboard shortcuts ────────────────────────────────────────────────
+function readerCurrent() {
+    return document.querySelector('.reader-entry.reader-current') || document.querySelector('.reader-entry') || null;
+}
+
+function readerMove(dir) {
+    const entries = Array.from(document.querySelectorAll('.reader-entry'));
+    if (!entries.length) return;
+    const cur = document.querySelector('.reader-entry.reader-current');
+    const idx = cur ? entries.indexOf(cur) : -1;
+    const next = entries[idx + dir];
+    if (!next) return;
+    if (cur) cur.classList.remove('reader-current');
+    next.classList.add('reader-current');
+    next.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    next.querySelector('summary')?.focus({ preventScroll: true });
+}
+
+function readerShowShortcuts() {
+    const d = document.getElementById('reader-shortcuts');
+    if (!d) return;
+    if (d.open) d.close(); else d.showModal();
+}
+
+document.addEventListener('keydown', (e) => {
+    if (!document.querySelector('.reader-entry')) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '?') { e.preventDefault(); readerShowShortcuts(); return; }
+    const k = e.key.toLowerCase();
+    if (k === 'j') { readerMove(1); }
+    else if (k === 'k') { readerMove(-1); }
+    else if (k === 'o' || k === 'enter') {
+        const cur = readerCurrent(); if (!cur) return;
+        const d = cur.querySelector('details.reader-item');
+        if (d) { e.preventDefault(); d.open = !d.open; }
+    } else if (k === 'm') {
+        const cur = readerCurrent(); if (!cur) return;
+        const btn = cur.querySelector('button[onclick*="readerToggleRead"]');
+        if (btn) { e.preventDefault(); btn.click(); }
+    } else if (k === 's') {
+        const cur = readerCurrent(); if (!cur) return;
+        const btn = cur.querySelector('button[onclick*="readerToggleStar"]');
+        if (btn) { e.preventDefault(); btn.click(); }
+    }
+});
+
+// ── Reader density toggle ────────────────────────────────────────────────────
+function readerApplyDensity() {
+    const container = document.querySelector('.reader');
+    if (!container) return;
+    if (localStorage.getItem('feedecho-reader-density') === 'compact') {
+        container.dataset.density = 'compact';
+    }
+    const btn = document.getElementById('reader-density-btn');
+    if (btn) {
+        btn.setAttribute('aria-pressed', container.dataset.density === 'compact' ? 'true' : 'false');
+    }
+}
+
+function readerToggleDensity() {
+    const container = document.querySelector('.reader');
+    if (!container) return;
+    const compact = container.dataset.density === 'compact';
+    container.dataset.density = compact ? 'comfortable' : 'compact';
+    localStorage.setItem('feedecho-reader-density', compact ? 'comfortable' : 'compact');
+    readerApplyDensity();
+}
+
+// ── Reader mark-all-read undo ────────────────────────────────────────────────
+function readerUndoToast(ids) {
+    const toast = document.createElement('div');
+    toast.className = 'reader-undo-toast';
+    toast.setAttribute('role', 'status');
+    toast.appendChild(document.createTextNode('Marked as read'));
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Undo';
+    btn.onclick = () => readerUndo(ids);
+    toast.appendChild(btn);
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.remove(); sessionStorage.removeItem('feedecho-reader-undo'); }, 5000);
+}
+
+async function readerUndo(ids) {
+    sessionStorage.removeItem('feedecho-reader-undo');
+    if (!Array.isArray(ids) || !ids.length) { reloadPreservingScroll(); return; }
+    const body = new URLSearchParams({ ids: ids.join(',') });
+    try {
+        await fetch('/api/reader/mark-unread', { method: 'POST', body });
+    } catch (e) { /* ignore; the reload below reflects whatever state took */ }
+    location.reload();
+}
+
+// ── Reader auto-read-on-scroll ───────────────────────────────────────────────
+let readerAutoReadActive = false;
+let readerAutoReadQueue = new Set();
+let readerAutoReadTimer = null;
+let readerAutoScrollTick = false;
+
+function readerAutoReadFlush() {
+    readerAutoReadTimer = null;
+    const ids = Array.from(readerAutoReadQueue);
+    readerAutoReadQueue.clear();
+    if (!ids.length) return;
+    // On failure, reload to resync — the DOM was already mutated optimistically.
+    fetch('/api/reader/mark-read', { method: 'POST', body: new URLSearchParams({ ids: ids.join(',') }) })
+        .catch(() => { reloadPreservingScroll(); });
+}
+
+function readerAutoReadMark(entry) {
+    const details = entry.querySelector('details.reader-item');
+    if (!details || !details.classList.contains('unread')) return;
+    entry.dataset.autoDone = '1';
+    if (entry.dataset.itemId) readerAutoReadQueue.add(entry.dataset.itemId);
+    // Mark read only — never remove the card (layout stays anchored).
+    details.classList.remove('unread');
+    details.classList.add('reader-auto-read');
+    const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
+    if (btn) btn.textContent = 'Mark unread';
+    readerAdjustUnread(entry.dataset.feedId, -1);
+}
+
+function readerAutoReadScroll() {
+    if (readerAutoScrollTick) return;
+    readerAutoScrollTick = true;
+    requestAnimationFrame(() => {
+        readerAutoScrollTick = false;
+        // Mark any item whose TOP has crossed the header. This also covers tall
+        // expanded articles — their top crosses while still on screen, which the
+        // IntersectionObserver enter/leave model could not detect.
+        document.querySelectorAll('.reader-entry').forEach((entry) => {
+            if (entry.dataset.autoDone === '1') return;
+            if (entry.getBoundingClientRect().top > READER_HEADER_OFFSET) return;
+            readerAutoReadMark(entry);
+        });
+        if (readerAutoReadQueue.size && !readerAutoReadTimer) {
+            readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);
+        }
+    });
+}
+
+function readerEnableAutoRead() {
+    if (readerAutoReadActive) return;
+    const list = document.querySelector('.reader-item-list');
+    const view = list && list.dataset.view;
+    // Not in Starred view — that's a curated list, not a triage queue.
+    if (view === 'starred') return;
+    readerAutoReadActive = true;
+    window.addEventListener('scroll', readerAutoReadScroll, { passive: true });
+    window.addEventListener('resize', readerAutoReadScroll, { passive: true });
+    readerAutoReadScroll(); // mark anything already past the header
+}
+
+function readerDisableAutoRead() {
+    if (!readerAutoReadActive) return;
+    readerAutoReadActive = false;
+    window.removeEventListener('scroll', readerAutoReadScroll);
+    window.removeEventListener('resize', readerAutoReadScroll);
+    if (readerAutoReadTimer) { clearTimeout(readerAutoReadTimer); readerAutoReadTimer = null; }
+    readerAutoReadQueue.clear();
+}
+
+function readerApplyAutoRead() {
+    const btn = document.getElementById('reader-autoread-btn');
+    const on = localStorage.getItem('feedecho-reader-autoread') === '1';
+    if (btn) {
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.textContent = on ? 'Auto-read ✓' : 'Auto-read';
+    }
+    if (on) readerEnableAutoRead();
+}
+
+function readerToggleAutoRead() {
+    const on = localStorage.getItem('feedecho-reader-autoread') === '1';
+    localStorage.setItem('feedecho-reader-autoread', on ? '0' : '1');
+    if (on) readerDisableAutoRead(); else readerEnableAutoRead();
+    readerApplyAutoRead();
+}
+
+function readerToggleFullText() {
+    // Full-text view is server-rendered via the ?fulltext=1 param (the page
+    // reloads with full article bodies inline). Toggle the param and reload.
+    const url = new URL(window.location);
+    if (url.searchParams.get('fulltext')) {
+        url.searchParams.delete('fulltext');
+    } else {
+        url.searchParams.set('fulltext', '1');
+    }
+    window.location = url.toString();
+}
+
+// ── Reader lazy body + feeds drawer + poll pill ──────────────────────────────
+let readerMaxItemId = 0;
+let readerPollTimer = null;
+
+function readerLoadBody(details) {
+    const content = details.querySelector('.reader-item-content');
+    if (!content || content.dataset.loaded === '1') return;
+    const itemId = content.dataset.itemId;
+    if (!itemId) return;
+    content.dataset.loaded = '1';
+    content.classList.add('is-loading');
+    fetch(`/api/reader/${itemId}/body`)
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((d) => { content.textContent = d.content || ''; content.classList.remove('is-loading'); })
+        .catch(() => { content.dataset.loaded = '0'; content.classList.remove('is-loading'); });
+}
+
+document.addEventListener('toggle', (e) => {
+    const details = e.target;
+    if (details && details.matches && details.matches('details.reader-item') && details.open) {
+        readerLoadBody(details);
+    }
+});
+
+function readerToggleFeeds() {
+    const feeds = document.querySelector('.reader-feeds');
+    if (feeds) feeds.classList.toggle('open');
+}
+
+function readerStartPolling() {
+    // Baseline comes from the server (data-max-item-id on the .reader
+    // container) = the newest item id across ALL read-enabled feeds, not the
+    // subset currently on screen. Otherwise the "N new" count is inflated by
+    // already-read items that the current view filters out.
+    const container = document.querySelector('.reader');
+    readerMaxItemId = container ? (parseInt(container.dataset.maxItemId, 10) || 0) : 0;
+    if (readerMaxItemId === 0) return;
+    if (readerPollTimer) clearInterval(readerPollTimer);
+    readerPollTimer = setInterval(readerPoll, 60000);
+}
+
+async function readerPoll() {
+    try {
+        const resp = await fetch(`/api/reader/new-count?since_id=${readerMaxItemId}`);
+        const data = await resp.json();
+        if (data.count > 0) readerShowNewPill(data.count);
+    } catch (e) { /* network hiccup; next tick retries */ }
+}
+
+function readerShowNewPill(n) {
+    let pill = document.getElementById('reader-new-pill');
+    if (!pill) {
+        pill = document.createElement('button');
+        pill.id = 'reader-new-pill';
+        pill.className = 'reader-new-pill';
+        pill.type = 'button';
+        pill.addEventListener('click', () => reloadPreservingScroll());
+        document.body.appendChild(pill);
+    }
+    pill.textContent = `${n} new — Load`;
+}
+
+// ── Reader page init ─────────────────────────────────────────────────────────
+(function () {
+    if (!document.querySelector('.reader')) return;
+    readerApplyDensity();
+    readerApplyAutoRead();
+    readerStartPolling();
+    const raw = sessionStorage.getItem('feedecho-reader-undo');
+    if (raw) {
+        try {
+            const undo = JSON.parse(raw);
+            if (Date.now() - undo.at > 5000) {
+                sessionStorage.removeItem('feedecho-reader-undo');
+            } else {
+                readerUndoToast(undo.ids);
+            }
+        } catch (e) {
+            sessionStorage.removeItem('feedecho-reader-undo');
+        }
+    }
+})();

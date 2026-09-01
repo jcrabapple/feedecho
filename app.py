@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+import xml.etree.ElementTree as ElementTree
+from xml.sax.saxutils import quoteattr
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Match
 from fastapi.staticfiles import StaticFiles
@@ -80,7 +82,7 @@ from webhook import (
     parse_headers as webhook_parse_headers,
     test_connection as test_webhook_connection,
 )
-from scheduler import start_scheduler, stop_scheduler, check_feed
+from scheduler import start_scheduler, stop_scheduler, check_feed, process_echo
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
 
@@ -582,6 +584,16 @@ def _user_plan(db, uid: int) -> str:
     return (row["plan"] if row else None) or "trial"
 
 
+def _require_reader(db, uid: int) -> None:
+    """402 in multi mode when the plan does not include the RSS reader.
+
+    Single mode never raises (no plan gating). Every reader route must call
+    this so a future route cannot forget the entitlement check.
+    """
+    if settings.MULTI and not plans.reader_enabled(_user_plan(db, uid)):
+        raise HTTPException(status_code=402, detail="The RSS reader requires a paid plan")
+
+
 def _check_destination_cap(db, uid: int) -> None:
     """Raise PlanError when one more connected account exceeds the plan.
 
@@ -835,6 +847,28 @@ def _get_all_accounts(user_id: int = 1):
                 }
             )
     return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows
+
+
+def _shout_destinations(user_id: int):
+    """One option per connected account, encoded ``type:id`` for the reader's
+    Shout picker. Labels carry the type so a flat <select> is unambiguous."""
+    (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows) = _get_all_accounts(user_id)
+    out = []
+    for row in mastodon:
+        out.append({"value": f"mastodon:{row['id']}", "label": f"Mastodon · {row['name']}"})
+    for row in email:
+        out.append({"value": f"email:{row['id']}", "label": f"Email · {row['name']}"})
+    for row in bluesky:
+        out.append({"value": f"bluesky:{row['id']}", "label": f"Bluesky · {row['name']}"})
+    for row in microblog:
+        out.append({"value": f"microblog:{row['id']}", "label": f"Micro.blog · {row['name']}"})
+    for row in matrix_rows:
+        out.append({"value": f"matrix:{row['id']}", "label": f"Matrix · {row['name']}"})
+    for row in discord_rows:
+        out.append({"value": f"discord:{row['id']}", "label": f"Discord · {row['name']}"})
+    for row in webhook_rows:
+        out.append({"value": f"webhook:{row['id']}", "label": f"Webhook · {row['name']}"})
+    return out
 
 
 def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
@@ -1560,7 +1594,7 @@ async def accounts_page(request: Request):
 
 
 @app.get("/echoes", response_class=HTMLResponse)
-async def echoes_page(request: Request):
+async def echoes_page(request: Request, feed: str = "", from_: str = "echoes"):
     uid = current_user_id(request)
     with get_db() as db:
         echoes = db.execute("""
@@ -1621,6 +1655,8 @@ async def echoes_page(request: Request):
             " WHERE user_id = ? ORDER BY name",
             (uid,),
         ).fetchall()
+    preselect_feed_id = _filter_int(feed)
+    return_to = "/reader" if from_ == "reader" else "/echoes"
     return render("echoes.html", request, echoes=echoes, feeds=feeds,
                   mastodon_accounts=mastodon_accounts,
                   email_accounts=email_accounts,
@@ -1629,7 +1665,9 @@ async def echoes_page(request: Request):
                   matrix_accounts=matrix_accounts,
                   discord_accounts=discord_accounts,
                   webhook_accounts=webhook_accounts,
-                  template_vars=available_variables())
+                  template_vars=available_variables(),
+                  preselect_feed_id=preselect_feed_id,
+                  return_to=return_to)
 
 
 # Post history: one label per destination type, the instance/handle detail
@@ -1777,6 +1815,178 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
             "account": f"{dest_type}:{dest_id}" if dest_type is not None else "",
         },
         filtered=feed_id is not None or dest_type is not None,
+    )
+
+
+def _parse_reader_query(q: str):
+    """Split a reader search query into operator filters and bare text terms.
+
+    Returns ``(filters, terms)``. Operators (lowercased) are:
+      is:starred | is:unread | is:read
+      feed:NAME   (substring match on the feed name)
+      in:title | in:body  (scope the free-text terms)
+    Anything without a recognized ``op:value`` shape becomes a bare term.
+    """
+    filters = []
+    terms = []
+    for token in q.split():
+        op, sep, val = token.partition(":")
+        if sep and op.lower() in ("is", "feed", "in") and val:
+            filters.append((op.lower(), val.lower()))
+        else:
+            terms.append(token.lower())
+    return filters, terms
+
+
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so user text matches literally.
+
+    Patterns built from this are used with ``LIKE ... ESCAPE '!'`` on both
+    dialects (Postgres defaults to backslash, sqlite has none — so we pick an
+    explicit, dialect-neutral escape character).
+    """
+    return term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
+@app.get("/reader", response_class=HTMLResponse)
+async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = "", fulltext: str = ""):
+    """Consolidated RSS reading surface (issue #11).
+
+    Server-rendered list of stored feed items, newest first, scoped to the
+    viewer's feeds. ``view`` is one of all|unread|starred|today; ``feed``
+    narrows to a single feed; ``fulltext`` renders the full article body
+    inline instead of the summary teaser. Read/star toggles and the per-feed
+    reading switch live in the reader API routes below.
+    """
+    uid = current_user_id(request)
+    feed_id = _filter_int(feed)
+    view = view if view in ("all", "unread", "starred", "today") else "unread"
+    q = (q or "").strip()
+    with get_db() as db:
+        _require_reader(db, uid)
+        feeds = db.execute(
+            """
+            SELECT f.*,
+                   (SELECT COUNT(*) FROM feed_items i
+                     WHERE i.feed_id = f.id AND i.is_read = 0) AS unread,
+                   (SELECT COUNT(*) FROM echoes e
+                     WHERE e.feed_id = f.id AND e.deleted_at IS NULL
+                       AND e.enabled = 1) AS echo_count
+              FROM feeds f
+             WHERE f.deleted_at IS NULL AND f.user_id = ? AND f.read_enabled = 1
+             ORDER BY f.name
+            """,
+            (uid,),
+        ).fetchall()
+
+        where = ["f.user_id = ?", "f.read_enabled = 1"]
+        params: list = [uid]
+        if feed_id is not None:
+            where.append("i.feed_id = ?")
+            params.append(feed_id)
+        if q:
+            # Full-text search with operators (issue #11, Tier 1). The
+            # unread/starred view filter is skipped so a search surfaces
+            # everything cached, read or not. (% and _ act as LIKE wildcards.)
+            filters, terms = _parse_reader_query(q)
+            text_scope = None  # None = title+body, else "title" or "body"
+            for op, val in filters:
+                if op == "is":
+                    if val == "starred":
+                        where.append("i.starred = 1")
+                    elif val == "unread":
+                        where.append("i.is_read = 0")
+                    elif val == "read":
+                        where.append("i.is_read = 1")
+                elif op == "feed":
+                    where.append("LOWER(f.name) LIKE ? ESCAPE '!'")
+                    params.append(f"%{_escape_like(val)}%")
+                elif op == "in":
+                    if val in ("title", "body"):
+                        text_scope = val
+            if terms:
+                like = f"%{_escape_like(' '.join(terms))}%"
+                if text_scope == "title":
+                    where.append("LOWER(i.title) LIKE ? ESCAPE '!'")
+                    params.append(like)
+                elif text_scope == "body":
+                    where.append(
+                        "(LOWER(i.content) LIKE ? ESCAPE '!'"
+                        " OR LOWER(i.summary) LIKE ? ESCAPE '!')"
+                    )
+                    params.extend([like, like])
+                else:
+                    where.append(
+                        "(LOWER(i.title) LIKE ? ESCAPE '!'"
+                        " OR LOWER(i.content) LIKE ? ESCAPE '!'"
+                        " OR LOWER(i.summary) LIKE ? ESCAPE '!')"
+                    )
+                    params.extend([like, like, like])
+        elif view == "unread":
+            where.append("i.is_read = 0")
+        elif view == "starred":
+            where.append("i.starred = 1")
+        elif view == "today":
+            # Last-24h across all feeds, read or not (a daily entry point).
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            where.append("i.published_at >= ?")
+            params.append(cutoff.strftime("%Y-%m-%d %H:%M:%S"))
+
+        # Per-feed keyword mutes (NewsBlur "training-lite"): hide items whose
+        # title/body match any muted keyword on their feed, at query time.
+        mutes = db.execute(
+            "SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND read_enabled = 1"
+            " AND mute_keywords IS NOT NULL AND mute_keywords != ''",
+            (uid,),
+        ).fetchall()
+        for mf in mutes:
+            for kw in [k.strip() for k in (mf["mute_keywords"] or "").split(",") if k.strip()]:
+                like = f"%{_escape_like(kw.lower())}%"
+                where.append(
+                    "NOT (i.feed_id = ? AND (LOWER(COALESCE(i.title, '')) LIKE ? ESCAPE '!'"
+                    " OR LOWER(COALESCE(i.content, '')) LIKE ? ESCAPE '!'"
+                    " OR LOWER(COALESCE(i.summary, '')) LIKE ? ESCAPE '!'))"
+                )
+                params.extend([mf["id"], like, like, like])
+
+        items = db.execute(
+            f"""
+            SELECT i.*, f.name AS feed_name,
+                   (SELECT COUNT(*) FROM posted_items p
+                     JOIN echoes e ON p.echo_id = e.id
+                    WHERE e.one_shot = 1 AND e.feed_id = i.feed_id
+                      AND p.item_id = i.item_id AND p.status = 'success') AS shouted
+              FROM feed_items i
+              JOIN feeds f ON i.feed_id = f.id
+             WHERE {" AND ".join(where)}
+             ORDER BY (i.published_at IS NULL), i.published_at DESC, i.id DESC
+             LIMIT 100
+            """,
+            tuple(params),
+        ).fetchall()
+
+        # Baseline for the "N new" poll: the newest item id across ALL the
+        # user's read-enabled feeds (independent of the current view/filter),
+        # so the client counts only items that arrive after this page load —
+        # not already-read items the current view happens to hide.
+        max_row = db.execute(
+            "SELECT COALESCE(MAX(i.id), 0) AS m FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE f.user_id = ? AND f.read_enabled = 1 AND f.deleted_at IS NULL",
+            (uid,),
+        ).fetchone()
+    return render(
+        "reader.html",
+        request,
+        feeds=feeds,
+        items=items,
+        max_item_id=max_row["m"] if max_row else 0,
+        current_feed=str(feed_id) if feed_id is not None else "",
+        view=view,
+        q=q,
+        fulltext=bool(fulltext),
+        shout_destinations=_shout_destinations(uid),
+        default_template="{{ title }} {{ link }}",
     )
 
 
@@ -2773,6 +2983,88 @@ async def add_feed(
     return RedirectResponse(url="/feeds", status_code=303)
 
 
+@app.get("/api/feeds/opml")
+def export_opml(request: Request):
+    """Export this user's feeds as an OPML 2.0 document (issue #11, Tier 2)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        feeds = db.execute(
+            "SELECT name, url FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
+    outlines = "\n".join(
+        f'    <outline text={quoteattr(f["name"])} type="rss" xmlUrl={quoteattr(f["url"])} />'
+        for f in feeds
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<opml version="2.0">\n'
+        "  <head><title>FeedEcho subscriptions</title></head>\n"
+        "  <body>\n"
+        f"{outlines}\n"
+        "  </body>\n"
+        "</opml>\n"
+    )
+    return Response(
+        content=xml,
+        media_type="text/x-opml",
+        headers={"Content-Disposition": 'attachment; filename="feedecho-subscriptions.opml"'},
+    )
+
+
+@app.post("/api/feeds/opml")
+async def import_opml(request: Request, opml: str = Form("")):
+    """Bulk-add feeds from an OPML document (issue #11, Tier 2)."""
+    uid = current_user_id(request)
+    # Reject DTD/entity declarations before parsing: ElementTree doesn't fetch
+    # external entities, but a <!DOCTYPE> subset can still trigger entity
+    # expansion (billion-laughs) DoS.
+    if "<!DOCTYPE" in opml.upper() or "<!ENTITY" in opml.upper():
+        raise HTTPException(status_code=400, detail="OPML must not contain a DOCTYPE or entity declarations")
+    try:
+        root = ElementTree.fromstring(opml)
+    except ElementTree.ParseError:
+        raise HTTPException(status_code=400, detail="Invalid OPML XML")
+    with get_db() as db:
+        reader_allowed = not settings.MULTI or plans.reader_enabled(_user_plan(db, uid))
+        existing = {
+            r["url"] for r in db.execute(
+                "SELECT url FROM feeds WHERE deleted_at IS NULL AND user_id = ?", (uid,)
+            ).fetchall()
+        }
+        added = skipped = 0
+        for o in root.iter("outline"):
+            url = (o.get("xmlUrl") or "").strip()
+            if not url:
+                continue
+            try:
+                url = validate_url(url)
+            except HTTPException:
+                skipped += 1
+                continue
+            if url in existing:
+                skipped += 1
+                continue
+            if settings.MULTI:
+                count = db.execute(
+                    "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
+                    (uid,),
+                ).fetchone()["c"]
+                try:
+                    plans.check_feed_allowance(count, _user_plan(db, uid))
+                except PlanError:
+                    skipped += 1
+                    continue
+            title = (o.get("title") or o.get("text") or "").strip() or url
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled, user_id) VALUES (?, ?, ?, ?)",
+                (title, url, 1 if reader_allowed else 0, uid),
+            )
+            existing.add(url)
+            added += 1
+    return RedirectResponse(url=f"/feeds?imported={added}&skipped={skipped}", status_code=303)
+
+
 @app.post("/api/feeds/{feed_id}/edit")
 async def edit_feed(
     request: Request,
@@ -2780,8 +3072,9 @@ async def edit_feed(
     name: str = Form(...),
     url: str = Form(...),
     poll_interval: int = Form(15),
+    mute_keywords: str = Form(""),
 ):
-    """Update a feed's name, URL, or poll interval in place (issue #3).
+    """Update a feed's name, URL, poll interval, or mute keywords (issues #3, #11).
 
     Changing the URL invalidates the cursor: last_item_id belonged to the
     old feed, and comparing it against the new feed's item IDs could
@@ -2795,6 +3088,7 @@ async def edit_feed(
         raise HTTPException(status_code=400, detail="Feed name is required")
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
+    mute_keywords = (mute_keywords or "").strip()
     with get_db() as db:
         if settings.MULTI:
             # Clamp to the plan's floor, never reject: tightening an existing
@@ -2812,16 +3106,17 @@ async def edit_feed(
             db.execute(
                 """
                 UPDATE feeds
-                   SET name = ?, url = ?, poll_interval = ?, last_item_id = NULL
+                   SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?,
+                       last_item_id = NULL
                  WHERE id = ? AND deleted_at IS NULL AND user_id = ?
                 """,
-                (name, url, poll_interval, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, feed_id, uid),
             )
         else:
             db.execute(
-                "UPDATE feeds SET name = ?, url = ?, poll_interval = ? "
+                "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ? "
                 "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (name, url, poll_interval, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, feed_id, uid),
             )
     return RedirectResponse(url="/feeds", status_code=303)
 
@@ -2982,6 +3277,255 @@ async def give_up_post(request: Request, posted_id: int):
     return {"success": True, "message": "Post marked as given up"}
 
 
+# ── Reader ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/feeds/{feed_id}/reader-toggle")
+def toggle_reader_feed(request: Request, feed_id: int):
+    """Toggle whether a feed is ingested for reading (issue #11)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        result = db.execute(
+            "UPDATE feeds SET read_enabled = 1 - read_enabled"
+            " WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        row = db.execute("SELECT read_enabled FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+    return {"success": True, "read_enabled": bool(row["read_enabled"])}
+
+
+@app.post("/api/reader/{item_id}/read")
+def reader_toggle_read(request: Request, item_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        result = db.execute(
+            "UPDATE feed_items SET is_read = 1 - is_read"
+            " WHERE id = ? AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+            (item_id, uid),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Item not found")
+        row = db.execute("SELECT is_read FROM feed_items WHERE id = ?", (item_id,)).fetchone()
+    return {"success": True, "is_read": bool(row["is_read"])}
+
+
+@app.post("/api/reader/{item_id}/star")
+def reader_toggle_star(request: Request, item_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        result = db.execute(
+            "UPDATE feed_items SET starred = 1 - starred"
+            " WHERE id = ? AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+            (item_id, uid),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Item not found")
+        row = db.execute("SELECT starred FROM feed_items WHERE id = ?", (item_id,)).fetchone()
+    return {"success": True, "starred": bool(row["starred"])}
+
+
+@app.post("/api/reader/mark-all-read")
+def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        if feed_id is not None:
+            owns = db.execute(
+                "SELECT id FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                (feed_id, uid),
+            ).fetchone()
+            if not owns:
+                raise HTTPException(status_code=404, detail="Feed not found")
+            rows = db.execute(
+                "SELECT id FROM feed_items WHERE is_read = 0 AND feed_id = ?",
+                (feed_id,),
+            ).fetchall()
+            db.execute(
+                "UPDATE feed_items SET is_read = 1 WHERE feed_id = ?",
+                (feed_id,),
+            )
+        else:
+            rows = db.execute(
+                "SELECT id FROM feed_items WHERE is_read = 0 AND feed_id IN"
+                " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+                (uid,),
+            ).fetchall()
+            db.execute(
+                "UPDATE feed_items SET is_read = 1 WHERE feed_id IN"
+                " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+                (uid,),
+            )
+    ids = [r["id"] for r in rows]
+    return {"success": True, "count": len(ids), "ids": ids}
+
+
+@app.post("/api/reader/mark-unread")
+def reader_mark_unread(request: Request, ids: str = Form("")):
+    """Undo a mark-all-read: restore the given items to unread (issue #11).
+
+    Accepts a comma-separated list of feed_items ids; each id is validated and
+    the update is scoped to the caller's feeds.
+    """
+    uid = current_user_id(request)
+    id_list = []
+    for part in ids.split(","):
+        val = _filter_int(part.strip())
+        if val is not None:
+            id_list.append(val)
+    if not id_list:
+        raise HTTPException(status_code=400, detail="No valid item ids")
+    with get_db() as db:
+        _require_reader(db, uid)
+        placeholders = ", ".join("?" for _ in id_list)
+        result = db.execute(
+            f"UPDATE feed_items SET is_read = 0 WHERE id IN ({placeholders})"
+            " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+            (*id_list, uid),
+        )
+    return {"success": True, "count": result.rowcount}
+
+
+@app.post("/api/reader/mark-read")
+def reader_mark_read(request: Request, ids: str = Form("")):
+    """Bulk mark-as-read for a set of item ids (issue #11, auto-read-on-scroll).
+
+    Idempotent: sets is_read = 1 (never toggles), scoped to the caller's feeds.
+    Empty/invalid ids are a no-op rather than an error, since the auto-read
+    batching can send an empty set.
+    """
+    uid = current_user_id(request)
+    id_list = []
+    for part in ids.split(","):
+        val = _filter_int(part.strip())
+        if val is not None:
+            id_list.append(val)
+    if not id_list:
+        return {"success": True, "count": 0}
+    with get_db() as db:
+        _require_reader(db, uid)
+        placeholders = ", ".join("?" for _ in id_list)
+        result = db.execute(
+            f"UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND id IN ({placeholders})"
+            " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+            (*id_list, uid),
+        )
+    return {"success": True, "count": result.rowcount}
+
+
+@app.get("/api/reader/{item_id}/body")
+def reader_item_body(request: Request, item_id: int):
+    """Return an item's display body for lazy loading (issue #11, Tier 3)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT i.content_text, i.content, i.summary FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ? AND f.deleted_at IS NULL",
+            (item_id, uid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"content": row["content_text"] or row["content"] or row["summary"] or ""}
+
+
+@app.get("/api/reader/new-count")
+def reader_new_count(request: Request, since_id: int = 0):
+    """Count unread-capable items newer than since_id (poll-pill support)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE f.user_id = ? AND f.read_enabled = 1 AND f.deleted_at IS NULL AND i.id > ?",
+            (uid, since_id),
+        ).fetchone()
+    return {"count": row["c"]}
+
+
+@app.post("/api/reader/{item_id}/shout")
+def reader_shout(
+    request: Request,
+    item_id: int,
+    destination: str = Form(...),
+    template: str = Form("{{ title }} {{ link }}"),
+    visibility: str = Form("public"),
+):
+    """Shout: post one stored reader item to one account, once (issue #11).
+
+    Materializes a one-shot echo (enabled=0 + soft-deleted, so neither /echoes
+    nor the scheduler picks it up) and runs it through the normal
+    ``process_echo`` pipeline, so the result lands in /history unchanged.
+    """
+    uid = current_user_id(request)
+    dest_type, sep, raw_id = destination.partition(":")
+    if not sep or dest_type not in VALID_DEST_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid destination")
+    destination_id = _filter_int(raw_id)
+    if destination_id is None:
+        raise HTTPException(status_code=400, detail="Invalid destination")
+    if visibility not in VALID_VISIBILITY:
+        raise HTTPException(status_code=400, detail="Invalid visibility")
+    _validate_echo_template(template)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT i.*, f.name AS feed_name FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ?",
+            (item_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        dest_table = DESTINATION_TABLES_BY_TYPE[dest_type]
+        dest = db.execute(
+            f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
+            (destination_id, uid),
+        ).fetchone()
+        if not dest:
+            raise HTTPException(status_code=404, detail="Destination not found")
+
+        echo_id = db.execute(
+            """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                   visibility, enabled, one_shot, deleted_at, user_id)
+               VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id""",
+            (row["feed_id"], dest_type, destination_id, template, visibility, now, uid),
+        ).fetchone()["id"]
+        echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+
+    item = {
+        "id": row["item_id"],
+        "title": row["title"] or "",
+        "link": row["link"] or "",
+        "summary": row["summary"] or "",
+        "content": row["content"] or "",
+        "content_link": row["content_link"] or "",
+        "author": row["author"] or "",
+        "date": row["published_at"] or "",
+    }
+    ok = process_echo(echo, item, feed_name=row["feed_name"] or "")
+    with get_db() as db:
+        pi = db.execute(
+            "SELECT status, post_url, error_message FROM posted_items"
+            " WHERE echo_id = ? AND item_id = ?",
+            (echo_id, row["item_id"]),
+        ).fetchone()
+    return {
+        "success": bool(ok),
+        "status": pi["status"] if pi else "unknown",
+        "post_url": pi["post_url"] if pi else None,
+        "error_message": pi["error_message"] if pi else None,
+    }
+
+
 # ── API: Echoes ─────────────────────────────────────────────────────────────
 
 VALID_VISIBILITY = {"public", "unlisted", "private", "direct"}
@@ -3045,6 +3589,7 @@ async def add_echo(
     delivery_mode: str = Form("instant"),
     drip_limit: int = Form(0),
     enabled: str = Form(""),
+    return_to: str = Form("/echoes"),
 ):
     uid = current_user_id(request)
     if destination_type not in VALID_DEST_TYPES:
@@ -3130,7 +3675,12 @@ async def add_echo(
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
              delivery_mode, drip_limit, is_enabled, uid),
         )
-    return RedirectResponse(url="/echoes", status_code=303)
+    # Return to the originating surface. Allowlist rather than prefix checks:
+    # the WHATWG URL parser treats backslashes as slashes, so a prefix check
+    # that accepts "/\evil.com" would be an open redirect.
+    if return_to not in ("/echoes", "/reader"):
+        return_to = "/echoes"
+    return RedirectResponse(url=return_to, status_code=303)
 
 
 @app.post("/api/echoes/{echo_id}/toggle")

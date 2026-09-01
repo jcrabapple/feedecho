@@ -99,10 +99,10 @@ class TestFeedsPage:
             "badge may say 'click Initialize' but never the jargon 'click Init'"
         )
 
-    def test_plain_language_tracking_states(self):
+    def test_reading_toggle_present(self):
         page = _tpl("feeds.html")
-        assert "Tracking" in page
-        assert "Initialize" in page
+        assert "readerToggleFeed" in page
+        assert "Reading is" in page
 
     def test_add_feed_form_has_visible_labels(self):
         page = _tpl("feeds.html")
@@ -370,4 +370,4 @@ class TestAppJsP2:
 
     def test_asset_versions_bumped(self):
         base = _tpl("base.html")
-        assert 'style.css?v=27' in base and 'app.js?v=24' in base
+        assert 'style.css?v=40' in base and 'app.js?v=39' in base

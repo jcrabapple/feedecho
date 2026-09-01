@@ -136,24 +136,28 @@ TRUSTED_PROXIES = tuple(
 #                         feeds, they just poll less often
 #   max_destinations    — total connected accounts across all types (0 = unlimited)
 #   max_posts_per_hour  — drip ceiling for the plan (0 = unlimited)
+#   reader              — 1 when the plan includes the RSS reader (issue #11)
 DEFAULT_PLAN_LIMITS = {
     "trial": {
         "max_feeds": 5,
         "min_poll_interval": 15,
         "max_destinations": 5,
         "max_posts_per_hour": 60,
+        "reader": 0,
     },
     "beta": {
         "max_feeds": 25,
         "min_poll_interval": 5,
         "max_destinations": 15,
         "max_posts_per_hour": 240,
+        "reader": 0,
     },
     "paid": {
         "max_feeds": 100,
         "min_poll_interval": 1,
         "max_destinations": 50,
         "max_posts_per_hour": 1000,
+        "reader": 1,
     },
 }
 
@@ -215,6 +219,19 @@ except ValueError:
         "FEEDECHO_MAX_BACKDATED_ENTRY_DAYS is not a valid integer; using default of 3"
     )
     MAX_BACKDATED_ENTRY_DAYS = 3
+
+# ── Reader (RSS reading surface, issue #11) ──────────────────────────────────
+#
+# The reader persists feed items for reading; this caps how many are kept per
+# feed (oldest pruned on insert) so a shared hosted database cannot grow
+# without bound. Single mode uses the same default and may tune it via env.
+try:
+    READER_MAX_ITEMS_PER_FEED = int(env("READER_MAX_ITEMS_PER_FEED", "200"))
+except ValueError:
+    logging.getLogger("feedecho").warning(
+        "FEEDECHO_READER_MAX_ITEMS_PER_FEED is not a valid integer; using default of 200"
+    )
+    READER_MAX_ITEMS_PER_FEED = 200
 
 
 def validate_config() -> None:

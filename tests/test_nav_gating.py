@@ -21,7 +21,7 @@ import settings
 from _version import __version__ as VERSION
 from app import app
 
-APP_LINKS = ('href="/feeds"', 'href="/accounts"', 'href="/echoes"',
+APP_LINKS = ('href="/feeds"', 'href="/reader"', 'href="/accounts"', 'href="/echoes"',
              'href="/history"', 'href="/settings"', 'href="/howto"')
 
 

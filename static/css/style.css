@@ -84,7 +84,7 @@
 html { -webkit-text-size-adjust: 100%; }
 
 body {
-    font-family: 'Inter', -apple-system, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
     line-height: 1.6;
@@ -789,6 +789,7 @@ button:hover { background: var(--primary-hover); }
     background: var(--surface-light);
     border: 1px solid var(--border);
     color: var(--text);
+    text-decoration: none;
     margin-right: 0.25rem;
     margin-bottom: 0.25rem;
     min-height: 36px;
@@ -1214,3 +1215,199 @@ details.account-section > summary:focus-visible {
 .account-section-body { padding: 0 1rem 1rem; }
 .account-section-body > section { margin-top: 1rem; }
 .account-section-body h2 { margin-top: 1.25rem; }
+
+/* ── Reader (issue #11) ─────────────────────────────────────────────── */
+.reader { display: grid; grid-template-columns: 260px 1fr; gap: 1.25rem; align-items: start; }
+.reader-feeds { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+.reader-feeds h2 { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.reader-feeds-hint { font-size: 0.78rem; color: var(--text-muted); line-height: 1.45; margin: -0.45rem 0 0.75rem; }
+.reader-feed-list { list-style: none; margin: 0; padding: 0; }
+.reader-feed { border-bottom: 1px solid var(--border); }
+.reader-feed:last-child { border-bottom: 0; }
+.reader-feed-link { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--text); text-decoration: none; padding: 0.45rem 0.5rem; border-radius: 6px; }
+.reader-feed-link:hover { background: var(--surface-light); }
+.reader-feed.active .reader-feed-link { background: var(--primary-wash); }
+.reader-feed.active .reader-feed-name { color: var(--primary); }
+.reader-feed-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reader-feed-meta { display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.reader-feed-echo { color: var(--text-muted); font-size: 0.85rem; }
+.reader-feed-unread { background: var(--primary-wash); color: var(--primary); border-radius: 999px; min-width: 1.4rem; text-align: center; padding: 0 0.4rem; font-size: 0.75rem; font-weight: 600; line-height: 1.4; }
+.reader-main { min-width: 0; }
+.reader-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.reader-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.reader-tab { display: inline-flex; align-items: center; min-height: 44px; padding: 0.35rem 0.95rem; color: var(--text-muted); text-decoration: none; border-right: 1px solid var(--border); }
+.reader-tab:last-child { border-right: 0; }
+.reader-tab.active { background: var(--primary); color: var(--primary-contrast); font-weight: 600; }
+.reader-item-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.reader-item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.reader-item summary { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.8rem 1rem; cursor: pointer; list-style: none; }
+.reader-item summary::-webkit-details-marker { display: none; }
+.reader-item-title { font-family: Georgia, 'Iowan Old Style', 'Charter', 'Times New Roman', serif; font-size: 1.15rem; font-weight: 500; line-height: 1.3; }
+.reader-item.unread .reader-item-title { font-weight: 700; }
+.reader-item.unread .reader-item-title::before { content: ''; display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--primary); margin-right: 0.6rem; vertical-align: 0.08em; }
+.reader-item.reader-auto-read { opacity: 0.6; }
+.reader-item-meta { color: var(--text-muted); font-size: 0.82rem; }
+.reader-item-body { padding: 0 1rem 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.reader-item-content { color: var(--text); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reader-item-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+
+/* Hidden on desktop; the media query below re-enables it as the mobile drawer toggle. */
+.reader-feeds-toggle { display: none; }
+.reader-feeds-close { position: absolute; top: 0.75rem; right: 0.75rem; min-width: 44px; min-height: 44px; display: none; align-items: center; justify-content: center; background: transparent; border: none; color: var(--text-muted); font-size: 1.4rem; line-height: 1; cursor: pointer; border-radius: 6px; }
+.reader-feeds-close:hover { background: var(--surface-light); }
+@media (max-width: 720px) {
+    .reader { grid-template-columns: 1fr; }
+    .reader-feeds-toggle { display: inline-flex; }
+    .reader-feeds-close { display: inline-flex; }
+    .reader-feeds {
+        position: fixed; top: 0; left: 0; bottom: 0; z-index: 110;
+        width: min(85vw, 320px); overflow-y: auto; padding: 1rem;
+        background: var(--surface); border: none; border-radius: 0;
+        box-shadow: 2px 0 16px rgba(0, 0, 0, 0.25);
+        transform: translateX(-100%); transition: transform 0.2s ease;
+    }
+    .reader-feeds.open { transform: translateX(0); }
+}
+
+/* Shout (reader one-time post) */
+.reader-shout { display: inline-block; }
+.reader-shout summary { list-style: none; }
+.reader-shout summary::-webkit-details-marker { display: none; }
+.reader-shout-form { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem; padding: 0.75rem; background: var(--surface-light); border: 1px solid var(--border); border-radius: 8px; }
+.reader-shout-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--text-muted); }
+
+/* Reader full-text search */
+.reader-search { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 auto; max-width: 420px; }
+.reader-search input[type="search"] { flex: 1; min-width: 0; padding: 0.45rem 0.85rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 0.9rem; }
+.reader-search input[type="search"]:focus { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
+.reader-search-clear { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
+
+/* Reader article action row — one normalized class for <a>/<button>/<summary> */
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    padding: 0.35rem 0.6rem;
+    min-height: 44px;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1;
+    color: var(--text);
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    text-decoration: none;
+    cursor: pointer;
+    box-sizing: border-box;
+    list-style: none;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.action-btn::-webkit-details-marker { display: none; }
+.action-btn:hover { background: var(--surface); border-color: var(--text-muted); }
+.action-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.action-btn--primary { background: var(--primary); border-color: var(--primary); color: var(--primary-contrast); font-weight: 600; }
+.action-btn--primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.action-btn__star { color: var(--text-muted); }
+.action-btn--star.is-starred { border-color: var(--accent); }
+.action-btn--star.is-starred .action-btn__star { color: var(--accent); }
+
+/* Keep scrolled-to reader cards clear of the sticky navbar */
+.reader-entry { scroll-margin-top: 72px; }
+
+/* Tier 1 — readability typography */
+.reader-item-content { max-width: 65ch; font-size: 1rem; }
+.reader-item-content p { margin: 0 0 0.75rem; }
+.reader-item-content blockquote { margin: 0.5rem 0; padding: 0.25rem 0.9rem; border-left: 3px solid var(--border); color: var(--text-muted); }
+.reader-item-content pre { background: var(--surface); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; line-height: 1.45; }
+.reader-item-content code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--surface); padding: 0.1em 0.35em; border-radius: 3px; }
+.reader-item-content pre code { background: none; padding: 0; font-size: 1em; }
+.reader-item-content img { max-width: 100%; height: auto; border-radius: 6px; }
+.reader-item-content ul, .reader-item-content ol { margin: 0.25rem 0 0.75rem 1.6rem; }
+.reader-item-content li { margin-bottom: 0.25rem; }
+.reader-item-content h1, .reader-item-content h2, .reader-item-content h3, .reader-item-content h4 { margin: 1rem 0 0.4rem; line-height: 1.25; }
+
+/* Tier 1 — density toggle (compact) */
+.reader[data-density="compact"] .reader-item summary { padding: 0.5rem 0.75rem; }
+.reader[data-density="compact"] .reader-item-body { padding: 0 0.75rem 0.75rem; }
+.reader[data-density="compact"] .reader-item-title { font-size: 0.95rem; }
+.reader[data-density="compact"] .reader-item-content { font-size: 0.88rem; line-height: 1.5; }
+.reader[data-density="compact"] .reader-item-list { gap: 0.4rem; }
+
+/* Tier 1 — keyboard current-item highlight */
+.reader-entry.reader-current { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 10px; }
+
+/* Tier 1 — undo toast */
+.reader-undo-toast {
+    position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 0.75rem;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.6rem 0.9rem; font-size: 0.9rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); z-index: 100;
+}
+.reader-undo-toast button { font: inherit; font-size: 0.85rem; font-weight: 600; background: none; border: none; color: var(--primary); cursor: pointer; text-decoration: underline; padding: 0.1rem 0.25rem; }
+
+/* Tier 1 — keyboard shortcut overlay */
+.reader-shortcuts { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); padding: 1rem 1.25rem; max-width: 340px; }
+.reader-shortcuts::backdrop { background: rgba(0, 0, 0, 0.4); }
+.reader-shortcuts h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.reader-shortcuts h2:not(:first-child) { margin-top: 0.9rem; }
+.reader-shortcuts table { border-collapse: collapse; width: 100%; }
+.reader-shortcuts kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-light); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.8rem; }
+.reader-shortcuts code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-light); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.78rem; }
+.reader-shortcuts td { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
+.reader-shortcuts td:first-child { text-align: right; white-space: nowrap; }
+
+/* Tier 1 — toolbar right group */
+.reader-toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+/* Tier 2 — letter avatar + fetch-error badge */
+.reader-feed-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--primary-wash); color: var(--primary); font-size: 0.7rem; font-weight: 700; flex-shrink: 0; }
+.reader-feed-error { color: #d97706; flex-shrink: 0; }
+
+/* Tier 2 — toggle buttons show their pressed state */
+.reader-toolbar-right .btn-sm[aria-pressed="true"] { background: var(--primary-wash); border-color: var(--primary); color: var(--primary); }
+
+/* Compact density: title only, no feed/author/date meta line */
+.reader[data-density="compact"] .reader-item-meta { display: none; }
+
+/* Tier 2 — OPML import on the Feeds page */
+.opml-actions { display: flex; flex-direction: column; gap: 0.6rem; }
+.opml-import-form { display: flex; flex-direction: column; gap: 0.4rem; }
+.opml-import-form textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+
+/* Tier 3 — reader media, shouted badge, feeds drawer, poll pill */
+.reader-item-image { max-width: 100%; height: auto; border-radius: 8px; margin-bottom: 0.6rem; display: block; }
+.reader-item-audio { width: 100%; margin-bottom: 0.6rem; }
+.reader-item-shouted { color: var(--primary); font-weight: 600; }
+.reader-new-pill { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 110; background: var(--primary-wash); color: var(--primary); border: 1px solid var(--primary); border-radius: 999px; padding: 0.4rem 0.9rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
+@media (max-width: 720px) {
+    .reader-new-pill { top: 116px; }
+}
+
+/* ── Reader: bolder identity (impeccable critique fixes) ──────────────────── */
+.reader-heading { font-size: 1.8rem; font-weight: 800; letter-spacing: -0.01em; }
+.reader-heading::after { content: ''; display: block; width: 3rem; height: 3px; border-radius: 2px; background: var(--primary); margin-top: 0.4rem; }
+
+/* Touch targets: WCAG 2.5.8 AA + impeccable <44px ban */
+.reader-toolbar .btn-sm { min-height: 44px; }
+.reader-search input[type="search"] { min-height: 44px; }
+
+/* Action-row grouping: triage (read/star) vs cross-post (echo/shout) */
+.action-group { display: inline-flex; gap: 0.4rem; align-items: center; }
+.action-group--echo { margin-left: auto; padding-left: 0.6rem; border-left: 1px solid var(--border); }
+@media (max-width: 720px) {
+    .action-group--echo { margin-left: 0; padding-left: 0; border-left: none; }
+}
+
+/* Inline SVG icons (one stroke/weight, replaces emoji glyphs) */
+.icon { width: 0.95em; height: 0.95em; flex-shrink: 0; }
+
+/* Lazy-body loading shimmer */
+.reader-item-content.is-loading { position: relative; min-height: 3rem; }
+.reader-item-content.is-loading::after {
+    content: ''; position: absolute; inset: 0; border-radius: 4px;
+    background: linear-gradient(90deg, var(--surface-light) 25%, var(--surface) 50%, var(--surface-light) 75%);
+    background-size: 200% 100%; animation: reader-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes reader-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }

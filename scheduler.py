@@ -13,13 +13,14 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import settings
 import plans
-from database import get_db, timestamp_str
+from database import get_db, timestamp_str, prune_feed_items
 from email_sender import send_email
 from feed_parser import (
     fetch_feed,
     fetch_image,
     get_new_items,
     get_backdated_items,
+    _parse_item_date,
     truncate,
 )
 from filters import is_filtered
@@ -194,6 +195,22 @@ def _update_last_fetched(feed_id: int, lease_token: str) -> None:
         )
 
 
+def _set_feed_error(feed_id: int, lease_token: str, message: str) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE feeds SET last_error = ? WHERE id = ? AND lease_token = ?",
+            (message[:300], feed_id, lease_token),
+        )
+
+
+def _clear_feed_error(feed_id: int, lease_token: str) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE feeds SET last_error = NULL WHERE id = ? AND lease_token = ?",
+            (feed_id, lease_token),
+        )
+
+
 def _update_cursor(feed_id: int, lease_token: str, cursor_id: str) -> bool:
     """Advance a cursor only while the current worker still owns the lease."""
     with get_db() as db:
@@ -208,6 +225,73 @@ def _update_cursor(feed_id: int, lease_token: str, cursor_id: str) -> bool:
             (cursor_id, _now(), feed_id, lease_token),
         )
         return result.rowcount == 1
+
+
+def _store_feed_items(feed_id: int, items: list[dict]) -> None:
+    """Persist parsed feed items for the reader, idempotent per (feed_id, item_id).
+
+    Runs on every poll for read-enabled feeds, decoupled from echo delivery.
+    ``ON CONFLICT DO NOTHING`` (backed by the UNIQUE(feed_id, item_id) index)
+    skips already-stored rows; ``prune_feed_items`` then trims the feed to the
+    retention cap. Item dates are normalized to the canonical UTC string so
+    publish ordering is stable on both dialects.
+    """
+    rows = []
+    for item in items:
+        item_id = item.get("id")
+        if not item_id:
+            continue
+        parsed = _parse_item_date(item.get("date")) if item.get("date") else None
+        published_at = (
+            parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            if parsed is not None
+            else None
+        )
+        rows.append((
+            feed_id,
+            item_id,
+            item.get("title") or "",
+            item.get("link") or "",
+            item.get("summary") or "",
+            item.get("content") or "",
+            item.get("content_text") or "",
+            item.get("content_link") or "",
+            item.get("author") or "",
+            item.get("image_url") or "",
+            item.get("image_alt") or "",
+            item.get("enclosure_url") or "",
+            published_at,
+        ))
+
+    if not rows:
+        return
+
+    with get_db() as db:
+        for row in rows:
+            db.execute(
+                """
+                INSERT INTO feed_items (
+                    feed_id, item_id, title, link, summary, content,
+                    content_text, content_link, author,
+                    image_url, image_alt, enclosure_url, published_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(feed_id, item_id) DO UPDATE SET
+                    title = excluded.title,
+                    link = excluded.link,
+                    summary = excluded.summary,
+                    content = excluded.content,
+                    content_text = excluded.content_text,
+                    content_link = excluded.content_link,
+                    author = excluded.author,
+                    image_url = excluded.image_url,
+                    image_alt = excluded.image_alt,
+                    enclosure_url = excluded.enclosure_url,
+                    published_at = excluded.published_at
+                """,
+                row,
+            )
+        prune_feed_items(db, feed_id)
 
 
 def check_feed(feed_id: int) -> None:
@@ -262,22 +346,40 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
     feed_url = feed["url"]
     feed_name = feed["name"]
     last_seen_id = feed["last_item_id"]
+    read_enabled = bool(feed["read_enabled"] or 0)
 
-    if not echoes:
-        logger.info("Feed %s (%s): no enabled echoes", feed_id, feed_name)
+    if not echoes and not read_enabled:
+        logger.info(
+            "Feed %s (%s): no enabled echoes and reading disabled",
+            feed_id,
+            feed_name,
+        )
         _update_last_fetched(feed_id, lease_token)
         return
 
     try:
         feed_data = fetch_feed(feed_url)
-    except Exception:
+        _clear_feed_error(feed_id, lease_token)
+    except Exception as exc:
         logger.exception("Feed %s (%s): fetch failed", feed_id, feed_name)
+        _set_feed_error(feed_id, lease_token, str(exc))
         _update_last_fetched(feed_id, lease_token)
         return
 
     items = feed_data.get("items") or []
     if not items:
         logger.info("Feed %s (%s): no items", feed_id, feed_name)
+        _update_last_fetched(feed_id, lease_token)
+        return
+
+    # Reader ingestion is decoupled from echo delivery: store every parsed
+    # item regardless of echo config, so a read-enabled feed keeps its reading
+    # list even before (or without) any attached echo. The cursor/ordering
+    # logic below runs only when echoes exist and is otherwise unchanged.
+    if read_enabled:
+        _store_feed_items(feed_id, items)
+
+    if not echoes:
         _update_last_fetched(feed_id, lease_token)
         return
 

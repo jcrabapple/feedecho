@@ -57,7 +57,7 @@ ACCOUNT_TYPES = tuple(section for section, *_ in _ACCOUNTS)
 ACCOUNT_TABLES = {section: table for section, table, _, _ in _ACCOUNTS}
 _KEY_COLS = {section: keys for section, _, _, keys in _ACCOUNTS}
 
-_FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused"]
+_FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
 
 _ECHO_COLS = [
     "feed_id", "destination_type", "destination_id", "template", "visibility",
@@ -364,13 +364,18 @@ def import_data(db, uid: int, payload: dict) -> dict:
             sum(len(v) for v in new_account_keys.values()),
         )
 
+    # The reader is a paid capability in multi mode, so a feed's read_enabled
+    # flag must not be imported by a plan that doesn't include it (single mode
+    # is always allowed). Same clamp-on-import philosophy as poll/drip below.
+    reader_allowed = not settings.MULTI or plans.reader_enabled(_user_plan(db, uid))
+
     # ── Insert feeds ────────────────────────────────────────────────────────
     for url in new_feed_urls:
         feed = first_feed[url]
         poll = _clamp_poll(db, uid, feed.get("poll_interval"))
         row = db.execute(
             "INSERT INTO feeds (name, url, feed_type, poll_interval, last_item_id,"
-            " paused, user_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            " paused, read_enabled, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             (
                 str(feed.get("name") or "").strip(),
                 url,
@@ -378,6 +383,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 poll,
                 feed.get("last_item_id"),
                 1 if feed.get("paused") else 0,
+                1 if (feed.get("read_enabled") and reader_allowed) else 0,
                 uid,
             ),
         ).fetchone()

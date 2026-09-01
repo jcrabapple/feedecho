@@ -43,13 +43,6 @@
         <input type="search" name="q" value="{{ q }}" placeholder="Search…" aria-label="Search titles and articles" title="Operators: is:starred, is:unread, is:read, feed:NAME, in:title, in:body">
         {% if current_feed %}<input type="hidden" name="feed" value="{{ current_feed }}">{% endif %}
         <button type="submit" class="btn-sm">Search</button>
-        <details class="reader-search-help">
-          <summary title="Search operators">?</summary>
-          <div class="reader-search-help-body">
-            <code>is:starred</code> <code>is:unread</code> <code>is:read</code>
-            <code>feed:name</code> <code>in:title</code> <code>in:body</code>
-          </div>
-        </details>
         {% if q %}<a class="reader-search-clear" href="/reader{% if current_feed %}?feed={{ current_feed }}{% endif %}">Clear</a>{% endif %}
       </form>
       <div class="reader-toolbar-right">
@@ -146,6 +139,13 @@
     <tr><td><kbd>m</kbd></td><td>Mark read / unread</td></tr>
     <tr><td><kbd>s</kbd></td><td>Star / unstar</td></tr>
     <tr><td><kbd>?</kbd></td><td>Show / hide this help</td></tr>
+  </table>
+  <h2>Search operators</h2>
+  <table>
+    <tr><td><code>is:starred</code></td><td>Only starred items</td></tr>
+    <tr><td><code>is:unread</code> / <code>is:read</code></td><td>By read state</td></tr>
+    <tr><td><code>feed:name</code></td><td>Match a feed name</td></tr>
+    <tr><td><code>in:title</code> / <code>in:body</code></td><td>Scope the text search</td></tr>
   </table>
   <p><button class="btn-sm" type="button" onclick="document.getElementById('reader-shortcuts').close()">Close</button></p>
 </dialog>

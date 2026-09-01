@@ -701,6 +701,26 @@ function readerApplyStar(btn, starred) {
     btn.setAttribute('aria-pressed', starred ? 'true' : 'false');
 }
 
+function readerAdjustUnread(feedId, delta) {
+    if (!feedId || !delta) return;
+    const feed = document.querySelector(`li.reader-feed[data-feed-id="${feedId}"]`);
+    if (!feed) return;
+    const badge = feed.querySelector('.reader-feed-unread');
+    if (!badge) {
+        if (delta > 0) {
+            const meta = feed.querySelector('.reader-feed-meta');
+            const span = document.createElement('span');
+            span.className = 'reader-feed-unread';
+            span.textContent = '1';
+            (meta || feed).appendChild(span);
+        }
+        return;
+    }
+    const n = parseInt(badge.textContent, 10) + delta;
+    if (n <= 0) badge.remove();
+    else badge.textContent = String(n);
+}
+
 // Sticky-header offset: keep the next card just below the navbar.
 const READER_HEADER_OFFSET = 72;
 
@@ -729,6 +749,7 @@ async function readerToggleRead(itemId, btn) {
         const resp = await fetch(`/api/reader/${itemId}/read`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        readerAdjustUnread(entry.dataset.feedId, data.is_read ? -1 : 1);
         const list = readerList(entry);
         if (list && list.dataset.view === 'unread' && data.is_read) {
             readerRemoveAndAdvance(entry);

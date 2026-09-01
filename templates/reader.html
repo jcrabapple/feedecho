@@ -9,7 +9,7 @@
     {% if feeds %}
     <ul class="reader-feed-list">
       {% for f in feeds %}
-      <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}">
+      <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}" data-feed-id="{{ f.id }}">
         <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}">
           <span class="reader-feed-name">{{ f.name }}</span>
           <span class="reader-feed-meta">
@@ -46,7 +46,7 @@
     {% if items %}
     <ul class="reader-item-list" data-view="{{ view }}">
       {% for item in items %}
-      <li id="item-{{ item.id }}" class="reader-entry" data-item-id="{{ item.id }}">
+      <li id="item-{{ item.id }}" class="reader-entry" data-item-id="{{ item.id }}" data-feed-id="{{ item.feed_id }}">
         <details class="reader-item {% if not item.is_read %}unread{% endif %}">
           <summary>
             <span class="reader-item-title">{{ item.title or '(untitled)' }}{% if item.starred %} <span aria-label="Starred">★</span>{% endif %}</span>

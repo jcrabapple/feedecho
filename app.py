@@ -1816,6 +1816,26 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
     )
 
 
+def _parse_reader_query(q: str):
+    """Split a reader search query into operator filters and bare text terms.
+
+    Returns ``(filters, terms)``. Operators (lowercased) are:
+      is:starred | is:unread | is:read
+      feed:NAME   (substring match on the feed name)
+      in:title | in:body  (scope the free-text terms)
+    Anything without a recognized ``op:value`` shape becomes a bare term.
+    """
+    filters = []
+    terms = []
+    for token in q.split():
+        op, sep, val = token.partition(":")
+        if sep and op.lower() in ("is", "feed", "in") and val:
+            filters.append((op.lower(), val.lower()))
+        else:
+            terms.append(token.lower())
+    return filters, terms
+
+
 @app.get("/reader", response_class=HTMLResponse)
 async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = ""):
     """Consolidated RSS reading surface (issue #11).
@@ -1852,15 +1872,39 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
             where.append("i.feed_id = ?")
             params.append(feed_id)
         if q:
-            # Full-text search across title + body, case-insensitive. The
-            # unread/starred filter is skipped so a search surfaces everything
-            # cached, read or not. (% and _ in the query act as LIKE wildcards.)
-            like = f"%{q.lower()}%"
-            where.append(
-                "(LOWER(i.title) LIKE ? OR LOWER(i.content) LIKE ?"
-                " OR LOWER(i.summary) LIKE ?)"
-            )
-            params.extend([like, like, like])
+            # Full-text search with operators (issue #11, Tier 1). The
+            # unread/starred view filter is skipped so a search surfaces
+            # everything cached, read or not. (% and _ act as LIKE wildcards.)
+            filters, terms = _parse_reader_query(q)
+            text_scope = None  # None = title+body, else "title" or "body"
+            for op, val in filters:
+                if op == "is":
+                    if val == "starred":
+                        where.append("i.starred = 1")
+                    elif val == "unread":
+                        where.append("i.is_read = 0")
+                    elif val == "read":
+                        where.append("i.is_read = 1")
+                elif op == "feed":
+                    where.append("LOWER(f.name) LIKE ?")
+                    params.append(f"%{val}%")
+                elif op == "in":
+                    if val in ("title", "body"):
+                        text_scope = val
+            if terms:
+                like = f"%{' '.join(terms)}%"
+                if text_scope == "title":
+                    where.append("LOWER(i.title) LIKE ?")
+                    params.append(like)
+                elif text_scope == "body":
+                    where.append("(LOWER(i.content) LIKE ? OR LOWER(i.summary) LIKE ?)")
+                    params.extend([like, like])
+                else:
+                    where.append(
+                        "(LOWER(i.title) LIKE ? OR LOWER(i.content) LIKE ?"
+                        " OR LOWER(i.summary) LIKE ?)"
+                    )
+                    params.extend([like, like, like])
         elif view == "unread":
             where.append("i.is_read = 0")
         elif view == "starred":
@@ -3151,17 +3195,52 @@ def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
             ).fetchone()
             if not owns:
                 raise HTTPException(status_code=404, detail="Feed not found")
+            rows = db.execute(
+                "SELECT id FROM feed_items WHERE is_read = 0 AND feed_id = ?",
+                (feed_id,),
+            ).fetchall()
             db.execute(
                 "UPDATE feed_items SET is_read = 1 WHERE feed_id = ?",
                 (feed_id,),
             )
         else:
+            rows = db.execute(
+                "SELECT id FROM feed_items WHERE is_read = 0 AND feed_id IN"
+                " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+                (uid,),
+            ).fetchall()
             db.execute(
                 "UPDATE feed_items SET is_read = 1 WHERE feed_id IN"
                 " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
                 (uid,),
             )
-    return {"success": True}
+    ids = [r["id"] for r in rows]
+    return {"success": True, "count": len(ids), "ids": ids}
+
+
+@app.post("/api/reader/mark-unread")
+def reader_mark_unread(request: Request, ids: str = Form("")):
+    """Undo a mark-all-read: restore the given items to unread (issue #11).
+
+    Accepts a comma-separated list of feed_items ids; each id is validated and
+    the update is scoped to the caller's feeds.
+    """
+    uid = current_user_id(request)
+    id_list = []
+    for part in ids.split(","):
+        val = _filter_int(part.strip())
+        if val is not None:
+            id_list.append(val)
+    if not id_list:
+        raise HTTPException(status_code=400, detail="No valid item ids")
+    with get_db() as db:
+        placeholders = ", ".join("?" for _ in id_list)
+        result = db.execute(
+            f"UPDATE feed_items SET is_read = 0 WHERE id IN ({placeholders})"
+            " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
+            (*id_list, uid),
+        )
+    return {"success": True, "count": result.rowcount}
 
 
 @app.post("/api/reader/{item_id}/shout")

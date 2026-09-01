@@ -1294,3 +1294,48 @@ details.account-section > summary:focus-visible {
 
 /* Keep scrolled-to reader cards clear of the sticky navbar */
 .reader-entry { scroll-margin-top: 72px; }
+
+/* Tier 1 — readability typography */
+.reader-item-content { max-width: 65ch; font-size: 1rem; }
+.reader-item-content p { margin: 0 0 0.75rem; }
+.reader-item-content blockquote { margin: 0.5rem 0; padding: 0.25rem 0.9rem; border-left: 3px solid var(--border); color: var(--text-muted); }
+.reader-item-content pre { background: var(--surface); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; line-height: 1.45; }
+.reader-item-content code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--surface); padding: 0.1em 0.35em; border-radius: 3px; }
+.reader-item-content pre code { background: none; padding: 0; font-size: 1em; }
+.reader-item-content img { max-width: 100%; height: auto; border-radius: 6px; }
+.reader-item-content ul, .reader-item-content ol { margin: 0.25rem 0 0.75rem 1.6rem; }
+.reader-item-content li { margin-bottom: 0.25rem; }
+.reader-item-content h1, .reader-item-content h2, .reader-item-content h3, .reader-item-content h4 { margin: 1rem 0 0.4rem; line-height: 1.25; }
+
+/* Tier 1 — density toggle (compact) */
+.reader[data-density="compact"] .reader-item summary { padding: 0.5rem 0.75rem; }
+.reader[data-density="compact"] .reader-item-body { padding: 0 0.75rem 0.75rem; }
+.reader[data-density="compact"] .reader-item-title { font-size: 0.95rem; }
+.reader[data-density="compact"] .reader-item-content { font-size: 0.88rem; line-height: 1.5; }
+.reader[data-density="compact"] .reader-item-list { gap: 0.4rem; }
+
+/* Tier 1 — keyboard current-item highlight */
+.reader-entry.reader-current { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 10px; }
+
+/* Tier 1 — undo toast */
+.reader-undo-toast {
+    position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 0.75rem;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.6rem 0.9rem; font-size: 0.9rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); z-index: 100;
+}
+.reader-undo-toast button { font: inherit; font-size: 0.85rem; font-weight: 600; background: none; border: none; color: var(--primary); cursor: pointer; text-decoration: underline; padding: 0.1rem 0.25rem; }
+
+/* Tier 1 — keyboard shortcut overlay */
+.reader-shortcuts { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); padding: 1rem 1.25rem; max-width: 340px; }
+.reader-shortcuts::backdrop { background: rgba(0, 0, 0, 0.4); }
+.reader-shortcuts h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.reader-shortcuts table { border-collapse: collapse; width: 100%; }
+.reader-shortcuts kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-light); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.8rem; }
+.reader-shortcuts td { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
+.reader-shortcuts td:first-child { text-align: right; white-space: nowrap; }
+
+/* Tier 1 — toolbar right group */
+.reader-toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }

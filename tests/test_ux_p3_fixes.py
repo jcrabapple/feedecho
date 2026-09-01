@@ -141,15 +141,18 @@ class TestDashboardEmptyCell:
 
 class TestThemeToggleNaming:
     def test_aria_pressed_removed(self):
-        # The theme toggle abandoned aria-pressed for aria-label. Only two
-        # references may remain: the legacy removeAttribute cleanup, and the
-        # reader star toggle's legitimate setter (it IS a toggle button).
+        # The theme toggle (3-state) must not use aria-pressed; only 2-state
+        # toggles may: the reader star toggle and the reader density toggle,
+        # plus the one-time legacy removeAttribute cleanup.
         hits = [ln for ln in APP_JS.splitlines() if "aria-pressed" in ln]
         assert "btn.removeAttribute('aria-pressed');" in [h.strip() for h in hits]
         assert any("setAttribute('aria-pressed'" in h and "starred" in h for h in hits), (
             "the reader star toggle should set aria-pressed for its on/off state"
         )
-        assert len([h for h in hits if h.strip()]) == 2
+        assert any("setAttribute('aria-pressed'" in h and "density" in h for h in hits), (
+            "the reader density toggle should set aria-pressed for its on/off state"
+        )
+        assert len([h for h in hits if h.strip()]) == 3
 
     def test_state_dependent_label(self):
         assert "'Switch to dark theme'" in APP_JS

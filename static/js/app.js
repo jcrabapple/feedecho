@@ -727,8 +727,12 @@ const READER_HEADER_OFFSET = 72;
 function readerRemoveAndAdvance(entry) {
     const list = readerList(entry);
     const next = readerNextEntry(entry);
+    const wasCurrent = entry.classList.contains('reader-current');
     entry.remove();
     if (next) {
+        // Keep keyboard focus flowing: if the removed card was the "current"
+        // one, the next card inherits the highlight.
+        if (wasCurrent) next.classList.add('reader-current');
         // The next card slides up into the removed one's place. Only nudge the
         // viewport if its top ended up hidden under the sticky header.
         const top = next.getBoundingClientRect().top;
@@ -793,6 +797,8 @@ async function readerToggleFeed(feedId, btn) {
 }
 
 async function readerMarkAllRead(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
     const params = new URLSearchParams(window.location.search);
     const feedId = params.get('feed');
     const body = feedId ? new URLSearchParams({ feed_id: feedId }) : new URLSearchParams();
@@ -800,8 +806,12 @@ async function readerMarkAllRead(btn) {
         const resp = await fetch('/api/reader/mark-all-read', { method: 'POST', body });
         const data = await resp.json();
         if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        if (data.count > 0) {
+            sessionStorage.setItem('feedecho-reader-undo', JSON.stringify({ ids: data.ids, at: Date.now() }));
+        }
         reloadPreservingScroll();
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
 }
 
 async function readerShout(itemId, form) {
@@ -823,3 +833,116 @@ async function readerShout(itemId, form) {
     finally { btn.disabled = false; }
     return false;
 }
+
+// ── Reader keyboard shortcuts ────────────────────────────────────────────────
+function readerCurrent() {
+    return document.querySelector('.reader-entry.reader-current') || document.querySelector('.reader-entry') || null;
+}
+
+function readerMove(dir) {
+    const entries = Array.from(document.querySelectorAll('.reader-entry'));
+    if (!entries.length) return;
+    const cur = document.querySelector('.reader-entry.reader-current');
+    const idx = cur ? entries.indexOf(cur) : -1;
+    const next = entries[idx + dir];
+    if (!next) return;
+    if (cur) cur.classList.remove('reader-current');
+    next.classList.add('reader-current');
+    next.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    next.querySelector('summary')?.focus({ preventScroll: true });
+}
+
+function readerShowShortcuts() {
+    const d = document.getElementById('reader-shortcuts');
+    if (!d) return;
+    if (d.open) d.close(); else d.showModal();
+}
+
+document.addEventListener('keydown', (e) => {
+    if (!document.querySelector('.reader-entry')) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '?') { e.preventDefault(); readerShowShortcuts(); return; }
+    const k = e.key.toLowerCase();
+    if (k === 'j') { readerMove(1); }
+    else if (k === 'k') { readerMove(-1); }
+    else if (k === 'o' || k === 'enter') {
+        const cur = readerCurrent(); if (!cur) return;
+        const d = cur.querySelector('details.reader-item');
+        if (d) { e.preventDefault(); d.open = !d.open; }
+    } else if (k === 'm') {
+        const cur = readerCurrent(); if (!cur) return;
+        const btn = cur.querySelector('button[onclick*="readerToggleRead"]');
+        if (btn) { e.preventDefault(); btn.click(); }
+    } else if (k === 's') {
+        const cur = readerCurrent(); if (!cur) return;
+        const btn = cur.querySelector('button[onclick*="readerToggleStar"]');
+        if (btn) { e.preventDefault(); btn.click(); }
+    }
+});
+
+// ── Reader density toggle ────────────────────────────────────────────────────
+function readerApplyDensity() {
+    const container = document.querySelector('.reader');
+    if (!container) return;
+    if (localStorage.getItem('feedecho-reader-density') === 'compact') {
+        container.dataset.density = 'compact';
+    }
+    const btn = document.getElementById('reader-density-btn');
+    if (btn) {
+        btn.setAttribute('aria-pressed', container.dataset.density === 'compact' ? 'true' : 'false');
+    }
+}
+
+function readerToggleDensity() {
+    const container = document.querySelector('.reader');
+    if (!container) return;
+    const compact = container.dataset.density === 'compact';
+    container.dataset.density = compact ? 'comfortable' : 'compact';
+    localStorage.setItem('feedecho-reader-density', compact ? 'comfortable' : 'compact');
+    readerApplyDensity();
+}
+
+// ── Reader mark-all-read undo ────────────────────────────────────────────────
+function readerUndoToast(ids) {
+    const toast = document.createElement('div');
+    toast.className = 'reader-undo-toast';
+    toast.setAttribute('role', 'status');
+    toast.appendChild(document.createTextNode('Marked as read'));
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Undo';
+    btn.onclick = () => readerUndo(ids);
+    toast.appendChild(btn);
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.remove(); sessionStorage.removeItem('feedecho-reader-undo'); }, 5000);
+}
+
+async function readerUndo(ids) {
+    sessionStorage.removeItem('feedecho-reader-undo');
+    const body = new URLSearchParams({ ids: ids.join(',') });
+    try {
+        await fetch('/api/reader/mark-unread', { method: 'POST', body });
+    } catch (e) { /* ignore; the reload below reflects whatever state took */ }
+    location.reload();
+}
+
+// ── Reader page init ─────────────────────────────────────────────────────────
+(function () {
+    if (!document.querySelector('.reader')) return;
+    readerApplyDensity();
+    const raw = sessionStorage.getItem('feedecho-reader-undo');
+    if (raw) {
+        try {
+            const undo = JSON.parse(raw);
+            if (Date.now() - undo.at > 5000) {
+                sessionStorage.removeItem('feedecho-reader-undo');
+            } else {
+                readerUndoToast(undo.ids);
+            }
+        } catch (e) {
+            sessionStorage.removeItem('feedecho-reader-undo');
+        }
+    }
+})();

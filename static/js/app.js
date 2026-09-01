@@ -1046,13 +1046,12 @@ function readerToggleFeeds() {
 }
 
 function readerStartPolling() {
-    let max = 0;
-    document.querySelectorAll('.reader-entry').forEach((el) => {
-        const id = parseInt(el.dataset.itemId, 10);
-        if (id > max) max = id;
-    });
-    readerMaxItemId = max;
-    // Empty list has no "since" baseline; skip polling until items exist.
+    // Baseline comes from the server (data-max-item-id on the .reader
+    // container) = the newest item id across ALL read-enabled feeds, not the
+    // subset currently on screen. Otherwise the "N new" count is inflated by
+    // already-read items that the current view filters out.
+    const container = document.querySelector('.reader');
+    readerMaxItemId = container ? (parseInt(container.dataset.maxItemId, 10) || 0) : 0;
     if (readerMaxItemId === 0) return;
     if (readerPollTimer) clearInterval(readerPollTimer);
     readerPollTimer = setInterval(readerPoll, 60000);

@@ -1963,11 +1963,23 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
             """,
             tuple(params),
         ).fetchall()
+
+        # Baseline for the "N new" poll: the newest item id across ALL the
+        # user's read-enabled feeds (independent of the current view/filter),
+        # so the client counts only items that arrive after this page load —
+        # not already-read items the current view happens to hide.
+        max_row = db.execute(
+            "SELECT COALESCE(MAX(i.id), 0) AS m FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE f.user_id = ? AND f.read_enabled = 1 AND f.deleted_at IS NULL",
+            (uid,),
+        ).fetchone()
     return render(
         "reader.html",
         request,
         feeds=feeds,
         items=items,
+        max_item_id=max_row["m"] if max_row else 0,
         current_feed=str(feed_id) if feed_id is not None else "",
         view=view,
         q=q,

@@ -1936,7 +1936,11 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
 
         items = db.execute(
             f"""
-            SELECT i.*, f.name AS feed_name
+            SELECT i.*, f.name AS feed_name,
+                   (SELECT COUNT(*) FROM posted_items p
+                     JOIN echoes e ON p.echo_id = e.id
+                    WHERE e.one_shot = 1 AND p.item_id = i.item_id
+                      AND p.status = 'success') AS shouted
               FROM feed_items i
               JOIN feeds f ON i.feed_id = f.id
              WHERE {" AND ".join(where)}
@@ -3370,6 +3374,36 @@ def reader_mark_read(request: Request, ids: str = Form("")):
             (*id_list, uid),
         )
     return {"success": True, "count": result.rowcount}
+
+
+@app.get("/api/reader/{item_id}/body")
+def reader_item_body(request: Request, item_id: int):
+    """Return an item's display body for lazy loading (issue #11, Tier 3)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        row = db.execute(
+            "SELECT i.content_text, i.content, i.summary FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ? AND f.deleted_at IS NULL",
+            (item_id, uid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"content": row["content_text"] or row["content"] or row["summary"] or ""}
+
+
+@app.get("/api/reader/new-count")
+def reader_new_count(request: Request, since_id: int = 0):
+    """Count unread-capable items newer than since_id (poll-pill support)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE f.user_id = ? AND f.read_enabled = 1 AND i.id > ?",
+            (uid, since_id),
+        ).fetchone()
+    return {"count": row["c"]}
 
 
 @app.post("/api/reader/{item_id}/shout")

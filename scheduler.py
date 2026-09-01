@@ -257,6 +257,9 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
             item.get("content_text") or "",
             item.get("content_link") or "",
             item.get("author") or "",
+            item.get("image_url") or "",
+            item.get("image_alt") or "",
+            item.get("enclosure_url") or "",
             published_at,
         ))
 
@@ -269,9 +272,10 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                 """
                 INSERT INTO feed_items (
                     feed_id, item_id, title, link, summary, content,
-                    content_text, content_link, author, published_at
+                    content_text, content_link, author,
+                    image_url, image_alt, enclosure_url, published_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(feed_id, item_id) DO UPDATE SET
                     title = excluded.title,
                     link = excluded.link,
@@ -280,6 +284,9 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                     content_text = excluded.content_text,
                     content_link = excluded.content_link,
                     author = excluded.author,
+                    image_url = excluded.image_url,
+                    image_alt = excluded.image_alt,
+                    enclosure_url = excluded.enclosure_url,
                     published_at = excluded.published_at
                 """,
                 row,

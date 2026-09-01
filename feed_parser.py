@@ -421,6 +421,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "tags": [tag.get("term", "") for tag in entry.get("tags", []) if tag.get("term")],
             "image_url": _extract_rss_image(entry),
             "image_alt": _extract_rss_image_alt(entry),
+            "enclosure_url": _extract_audio_enclosure(entry),
             "raw": {k: v for k, v in entry.items()},
         }
         items.append(item)
@@ -459,6 +460,7 @@ def parse_json_feed(data: dict) -> dict:
             "tags": entry.get("tags", []),
             "image_url": _extract_json_feed_image(entry),
             "image_alt": _extract_json_feed_image_alt(entry),
+            "enclosure_url": _extract_json_feed_audio(entry),
             "raw": entry,
         }
         items.append(item)
@@ -801,6 +803,22 @@ def _extract_rss_image_alt(entry: dict) -> str:
         return ""
     alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
     return alt.group(1).strip() if alt else ""
+
+
+def _extract_audio_enclosure(entry: dict) -> str:
+    """First audio enclosure URL (podcasts), or ''."""
+    for enc in entry.get("enclosures", []):
+        if isinstance(enc, dict) and enc.get("type", "").startswith("audio/") and enc.get("href"):
+            return enc["href"]
+    return ""
+
+
+def _extract_json_feed_audio(entry: dict) -> str:
+    """First audio attachment URL from a JSON Feed item, or ''."""
+    for att in entry.get("attachments") or []:
+        if isinstance(att, dict) and str(att.get("mime_type", "")).startswith("audio/") and att.get("url"):
+            return att["url"]
+    return ""
 
 
 def _extract_json_feed_image(entry: dict) -> str:

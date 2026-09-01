@@ -29,6 +29,7 @@
 
   <section class="reader-main" aria-label="Items">
     <div class="reader-toolbar">
+      <button class="btn-sm reader-feeds-toggle" type="button" onclick="readerToggleFeeds()" title="Show feeds">☰ Feeds</button>
       <div class="reader-tabs" role="tablist" aria-label="Filter">
         <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}">Unread</a>
         <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">All</a>
@@ -62,11 +63,18 @@
               {{ item.feed_name }}
               {% if item.author %} · {{ item.author }}{% endif %}
               {% if item.published_at %} · <time class="local-time" datetime="{{ item.published_at | iso_utc }}">{{ item.published_at | utc_text }} UTC</time>{% endif %}
+              {% if item.shouted %} · <span class="reader-item-shouted" title="Shouted to an account">📣 Shouted</span>{% endif %}
             </span>
           </summary>
           <div class="reader-item-body">
-            {% if item.content_text or item.content or item.summary %}
-            <div class="reader-item-content">{{ item.content_text or item.content or item.summary }}</div>
+            {% if item.image_url | safe_url %}
+            <img class="reader-item-image" src="{{ item.image_url | safe_url }}" alt="{{ item.image_alt }}" loading="lazy">
+            {% endif %}
+            <div class="reader-item-content" data-item-id="{{ item.id }}">
+              {% if item.summary %}{{ item.summary }}{% endif %}
+            </div>
+            {% if item.enclosure_url | safe_url %}
+            <audio class="reader-item-audio" controls preload="none" src="{{ item.enclosure_url | safe_url }}"></audio>
             {% endif %}
             <div class="reader-item-actions">
               {% if item.link | safe_url %}

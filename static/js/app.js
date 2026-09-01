@@ -1002,11 +1002,72 @@ function readerToggleAutoRead() {
     readerApplyAutoRead();
 }
 
+// ── Reader lazy body + feeds drawer + poll pill ──────────────────────────────
+let readerMaxItemId = 0;
+let readerPollTimer = null;
+
+function readerLoadBody(details) {
+    const content = details.querySelector('.reader-item-content');
+    if (!content || content.dataset.loaded === '1') return;
+    const itemId = content.dataset.itemId;
+    if (!itemId) return;
+    content.dataset.loaded = '1';
+    fetch(`/api/reader/${itemId}/body`)
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((d) => { content.textContent = d.content || ''; })
+        .catch(() => { content.dataset.loaded = '0'; });
+}
+
+document.addEventListener('toggle', (e) => {
+    const details = e.target;
+    if (details && details.matches && details.matches('details.reader-item') && details.open) {
+        readerLoadBody(details);
+    }
+});
+
+function readerToggleFeeds() {
+    const feeds = document.querySelector('.reader-feeds');
+    if (feeds) feeds.classList.toggle('open');
+}
+
+function readerStartPolling() {
+    let max = 0;
+    document.querySelectorAll('.reader-entry').forEach((el) => {
+        const id = parseInt(el.dataset.itemId, 10);
+        if (id > max) max = id;
+    });
+    readerMaxItemId = max;
+    if (readerPollTimer) clearInterval(readerPollTimer);
+    readerPollTimer = setInterval(readerPoll, 60000);
+}
+
+async function readerPoll() {
+    try {
+        const resp = await fetch(`/api/reader/new-count?since_id=${readerMaxItemId}`);
+        const data = await resp.json();
+        if (data.count > 0) readerShowNewPill(data.count);
+    } catch (e) { /* network hiccup; next tick retries */ }
+}
+
+function readerShowNewPill(n) {
+    let pill = document.getElementById('reader-new-pill');
+    if (!pill) {
+        pill = document.createElement('button');
+        pill.id = 'reader-new-pill';
+        pill.className = 'reader-new-pill';
+        pill.type = 'button';
+        pill.addEventListener('click', () => reloadPreservingScroll());
+        document.body.appendChild(pill);
+    }
+    pill.textContent = `${n} new — Load`;
+}
+
 // ── Reader page init ─────────────────────────────────────────────────────────
 (function () {
     if (!document.querySelector('.reader')) return;
     readerApplyDensity();
     readerApplyAutoRead();
+    readerStartPolling();
     const raw = sessionStorage.getItem('feedecho-reader-undo');
     if (raw) {
         try {

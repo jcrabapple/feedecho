@@ -322,6 +322,9 @@ def init_db_sqlite() -> None:
                 content_text TEXT,
                 content_link TEXT,
                 author TEXT,
+                image_url TEXT,
+                image_alt TEXT,
+                enclosure_url TEXT,
                 published_at TIMESTAMP,
                 is_read INTEGER NOT NULL DEFAULT 0,
                 starred INTEGER NOT NULL DEFAULT 0,
@@ -342,6 +345,9 @@ def init_db_sqlite() -> None:
             ON feed_items(feed_id, is_read)
         """)
         _add_column_if_missing(db, "feed_items", "content_text", "TEXT")
+        _add_column_if_missing(db, "feed_items", "image_url", "TEXT")
+        _add_column_if_missing(db, "feed_items", "image_alt", "TEXT")
+        _add_column_if_missing(db, "feed_items", "enclosure_url", "TEXT")
 
         echo_columns = _column_names(db, "echoes")
         if (
@@ -892,6 +898,9 @@ def init_db_postgres() -> None:
                 content_text TEXT,
                 content_link TEXT,
                 author TEXT,
+                image_url TEXT,
+                image_alt TEXT,
+                enclosure_url TEXT,
                 published_at TIMESTAMP,
                 is_read INTEGER NOT NULL DEFAULT 0,
                 starred INTEGER NOT NULL DEFAULT 0,
@@ -912,6 +921,9 @@ def init_db_postgres() -> None:
             ON feed_items(feed_id, is_read)
         """)
         _add_column_if_missing(db, "feed_items", "content_text", "TEXT")
+        _add_column_if_missing(db, "feed_items", "image_url", "TEXT")
+        _add_column_if_missing(db, "feed_items", "image_alt", "TEXT")
+        _add_column_if_missing(db, "feed_items", "enclosure_url", "TEXT")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS echoes (

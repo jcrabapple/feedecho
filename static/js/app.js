@@ -975,20 +975,16 @@ function readerEnableAutoRead() {
             if (e.boundingClientRect.bottom > READER_HEADER_OFFSET) continue;
             const details = entry.querySelector('details.reader-item');
             if (!details || !details.classList.contains('unread')) continue;
-            if (entry.dataset.itemId) {
-                readerAutoReadQueue.add(entry.dataset.itemId);
-                readerAutoReadObserver.unobserve(entry);
-            }
-            if (view === 'unread') {
-                // Same behaviour as clicking Mark read in the Unread view.
-                readerAdjustUnread(entry.dataset.feedId, -1);
-                readerRemoveAndAdvance(entry);
-            } else {
-                details.classList.remove('unread');
-                const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
-                if (btn) btn.textContent = 'Mark unread';
-                readerAdjustUnread(entry.dataset.feedId, -1);
-            }
+            readerAutoReadObserver.unobserve(entry);
+            if (entry.dataset.itemId) readerAutoReadQueue.add(entry.dataset.itemId);
+            // Mark read only — never remove the card. Auto-read is passive and
+            // layout-neutral; removing DOM under a moving viewport causes the
+            // cascade + jump. The card stays (dimmed) until the next reload.
+            details.classList.remove('unread');
+            details.classList.add('reader-auto-read');
+            const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
+            if (btn) btn.textContent = 'Mark unread';
+            readerAdjustUnread(entry.dataset.feedId, -1);
         }
         if (readerAutoReadQueue.size && !readerAutoReadTimer) {
             readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);

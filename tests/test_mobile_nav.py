@@ -103,4 +103,4 @@ class TestNavTemplate:
         assert BASE_HTML.count('action="/logout"') == 2
 
     def test_cache_buster_bumped(self):
-        assert 'style.css?v=38' in BASE_HTML
+        assert 'style.css?v=39' in BASE_HTML

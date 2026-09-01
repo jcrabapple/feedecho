@@ -130,6 +130,12 @@ def reader_enabled(plan: str) -> bool:
     """Whether the plan includes the RSS reader (issue #11).
 
     Single mode never consults this — callers gate on ``settings.MULTI``.
-    Unknown plans and plans without the key read as disabled (fail closed).
+    Unknown plans read as disabled (fail closed): a plan must explicitly
+    carry a truthy ``reader`` key to enable the reader. (Not via
+    ``limit_for``, whose unknown-plan fallback to trial would now leak the
+    reader to typos/new plans.)
     """
-    return bool(limit_for(plan, "reader"))
+    limits = settings.PLAN_LIMITS.get(plan)
+    if limits is None:
+        return False
+    return bool(limits.get("reader", 0))

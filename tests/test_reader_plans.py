@@ -34,17 +34,17 @@ def _as(client, uid, email):
 
 
 class TestReaderPlanGating:
-    def test_trial_user_cannot_open_reader(self, multi_env):
+    def test_trial_user_opens_reader(self, multi_env):
         with TestClient(app) as c:
             _as(c, 11, "trial@example.com")
-            assert c.get("/reader").status_code == 402
+            assert c.get("/reader").status_code == 200
 
-    def test_beta_user_cannot_open_reader(self, multi_env):
+    def test_beta_user_opens_reader(self, multi_env):
         with database.get_db() as db:
             db.execute("UPDATE users SET plan = 'beta' WHERE id = 11")
         with TestClient(app) as c:
             _as(c, 11, "trial@example.com")
-            assert c.get("/reader").status_code == 402
+            assert c.get("/reader").status_code == 200
 
     def test_paid_user_opens_reader(self, multi_env):
         with TestClient(app) as c:
@@ -53,11 +53,11 @@ class TestReaderPlanGating:
         assert resp.status_code == 200
         assert "Item A" in resp.text
 
-    def test_trial_user_cannot_shout(self, multi_env):
+    def test_trial_user_shout_not_gated(self, multi_env):
         with TestClient(app) as c:
             _as(c, 11, "trial@example.com")
             r = c.post("/api/reader/1/shout", data={"destination": "mastodon:1"})
-        assert r.status_code == 402
+        assert r.status_code != 402  # reader plan gate removed for trial
 
     def test_single_mode_reader_not_gated(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "MULTI", False)
@@ -74,14 +74,14 @@ class TestReaderEnabled:
         import plans
 
         assert plans.reader_enabled("paid") is True
-        assert plans.reader_enabled("trial") is False
-        assert plans.reader_enabled("beta") is False
+        assert plans.reader_enabled("trial") is True
+        assert plans.reader_enabled("beta") is True
         assert plans.reader_enabled("unknown-plan") is False
 
 
 
 class TestReaderImportEntitlement:
-    def test_trial_import_clamps_read_enabled(self, multi_env):
+    def test_trial_import_keeps_read_enabled(self, multi_env):
         import import_export
 
         payload = {
@@ -96,7 +96,7 @@ class TestReaderImportEntitlement:
             row = db.execute(
                 "SELECT read_enabled FROM feeds WHERE url = ?", ("https://e.com/f",)
             ).fetchone()
-        assert row["read_enabled"] == 0
+        assert row["read_enabled"] == 1
 
     def test_paid_import_keeps_read_enabled(self, multi_env):
         import import_export

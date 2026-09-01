@@ -143,14 +143,14 @@ DEFAULT_PLAN_LIMITS = {
         "min_poll_interval": 15,
         "max_destinations": 5,
         "max_posts_per_hour": 60,
-        "reader": 0,
+        "reader": 1,
     },
     "beta": {
         "max_feeds": 25,
         "min_poll_interval": 5,
         "max_destinations": 15,
         "max_posts_per_hour": 240,
-        "reader": 0,
+        "reader": 1,
     },
     "paid": {
         "max_feeds": 100,

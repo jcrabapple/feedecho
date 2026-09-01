@@ -87,3 +87,28 @@ class TestSummaryOnlyContentText:
         assert "\n" in item["content_text"]  # structured, not a flat run
         assert "What emo is" in item["content_text"]
         assert "• First wave" in item["content_text"]  # bullets preserved
+
+
+class TestFullTextView:
+    def test_fulltext_renders_full_body_inline(self, env):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, summary, content_text, is_read) "
+                "VALUES (1, 'ft1', 'Full text item', 'Short teaser.', 'Full article body with paragraph breaks.', 0)"
+            )
+        with TestClient(app) as c:
+            page = c.get("/reader", params={"view": "all", "fulltext": "1"}).text
+        assert "Full article body" in page          # full text rendered inline
+        assert "Short teaser." not in page          # teaser replaced, not shown
+        assert 'data-loaded="1"' in page            # lazy-load bypassed
+
+    def test_teaser_by_default(self, env):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, summary, content_text, is_read) "
+                "VALUES (1, 'ft2', 'Teaser item', 'Short teaser.', 'Full article body.', 0)"
+            )
+        with TestClient(app) as c:
+            page = c.get("/reader", params={"view": "all"}).text
+        assert "Short teaser." in page              # teaser shown
+        assert "Full article body." not in page     # full text not inline by default

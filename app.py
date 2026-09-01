@@ -1849,13 +1849,14 @@ def _escape_like(term: str) -> str:
 
 
 @app.get("/reader", response_class=HTMLResponse)
-async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = ""):
+async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = "", fulltext: str = ""):
     """Consolidated RSS reading surface (issue #11).
 
     Server-rendered list of stored feed items, newest first, scoped to the
-    viewer's feeds. ``view`` is one of all|unread|starred; ``feed`` narrows to
-    a single feed. Read/star toggles and the per-feed reading switch live in
-    the reader API routes below.
+    viewer's feeds. ``view`` is one of all|unread|starred|today; ``feed``
+    narrows to a single feed; ``fulltext`` renders the full article body
+    inline instead of the summary teaser. Read/star toggles and the per-feed
+    reading switch live in the reader API routes below.
     """
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
@@ -1983,6 +1984,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
         current_feed=str(feed_id) if feed_id is not None else "",
         view=view,
         q=q,
+        fulltext=bool(fulltext),
         shout_destinations=_shout_destinations(uid),
         default_template="{{ title }} {{ link }}",
     )

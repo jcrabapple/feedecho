@@ -1016,6 +1016,18 @@ function readerToggleAutoRead() {
     readerApplyAutoRead();
 }
 
+function readerToggleFullText() {
+    // Full-text view is server-rendered via the ?fulltext=1 param (the page
+    // reloads with full article bodies inline). Toggle the param and reload.
+    const url = new URL(window.location);
+    if (url.searchParams.get('fulltext')) {
+        url.searchParams.delete('fulltext');
+    } else {
+        url.searchParams.set('fulltext', '1');
+    }
+    window.location = url.toString();
+}
+
 // ── Reader lazy body + feeds drawer + poll pill ──────────────────────────────
 let readerMaxItemId = 0;
 let readerPollTimer = null;

@@ -15,7 +15,7 @@
     <ul class="reader-feed-list">
       {% for f in feeds %}
       <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}" data-feed-id="{{ f.id }}">
-        <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}">
+        <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}{% if fulltext %}&fulltext=1{% endif %}">
           <span class="reader-feed-avatar" aria-hidden="true">{{ f.name[:1] | upper }}</span>
           <span class="reader-feed-name">{{ f.name }}</span>
           <span class="reader-feed-meta">
@@ -36,16 +36,17 @@
     <div class="reader-toolbar">
       <button class="btn-sm reader-feeds-toggle" type="button" onclick="readerToggleFeeds()" title="Show feeds">☰ Feeds</button>
       <div class="reader-tabs" role="tablist" aria-label="Filter">
-        <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}">Unread</a>
-        <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">All</a>
-        <a class="reader-tab {% if not q and view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}">Starred</a>
-        <a class="reader-tab {% if not q and view == 'today' %}active{% endif %}" href="/reader?view=today{% if current_feed %}&feed={{ current_feed }}{% endif %}">Today</a>
+        <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Unread</a>
+        <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">All</a>
+        <a class="reader-tab {% if not q and view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Starred</a>
+        <a class="reader-tab {% if not q and view == 'today' %}active{% endif %}" href="/reader?view=today{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Today</a>
       </div>
       <form method="get" action="/reader" class="reader-search" role="search">
         <input type="search" name="q" value="{{ q }}" placeholder="Search…" aria-label="Search titles and articles" title="Operators: is:starred, is:unread, is:read, feed:NAME, in:title, in:body">
         {% if current_feed %}<input type="hidden" name="feed" value="{{ current_feed }}">{% endif %}
+        {% if fulltext %}<input type="hidden" name="fulltext" value="1">{% endif %}
         <button type="submit" class="btn-sm">Search</button>
-        {% if q %}<a class="reader-search-clear" href="/reader{% if current_feed %}?feed={{ current_feed }}{% endif %}">Clear</a>{% endif %}
+        {% if q %}<a class="reader-search-clear" href="/reader{% if current_feed or fulltext %}?{% endif %}{% if current_feed %}feed={{ current_feed }}{% endif %}{% if current_feed and fulltext %}&{% endif %}{% if fulltext %}fulltext=1{% endif %}">Clear</a>{% endif %}
       </form>
       <div class="reader-toolbar-right">
         {% if items and not q %}
@@ -53,6 +54,7 @@
         {% endif %}
         <button class="btn-sm" type="button" id="reader-density-btn" onclick="readerToggleDensity()" title="Toggle list density" aria-pressed="false">Compact</button>
         <button class="btn-sm" type="button" id="reader-autoread-btn" onclick="readerToggleAutoRead()" title="Mark items read as you scroll past them" aria-pressed="false">Auto-read</button>
+        <button class="btn-sm" type="button" id="reader-fulltext-btn" onclick="readerToggleFullText()" title="Show the full article text instead of the summary teaser" aria-pressed="{{ 'true' if fulltext else 'false' }}">{% if fulltext %}Teaser{% else %}Full text{% endif %}</button>
         <button class="btn-sm" type="button" onclick="readerShowShortcuts()" title="Keyboard shortcuts">?</button>
       </div>
     </div>
@@ -61,7 +63,7 @@
     <ul class="reader-item-list" data-view="{{ view }}">
       {% for item in items %}
       <li id="item-{{ item.id }}" class="reader-entry" data-item-id="{{ item.id }}" data-feed-id="{{ item.feed_id }}">
-        <details class="reader-item {% if not item.is_read %}unread{% endif %}">
+        <details class="reader-item {% if not item.is_read %}unread{% endif %}"{% if fulltext %} open{% endif %}>
           <summary>
             <span class="reader-item-title">{{ item.title or '(untitled)' }}{% if item.starred %} <span class="reader-item-title-star" aria-label="Starred">{{ star_icon(true) }}</span>{% endif %}</span>
             <span class="reader-item-meta">
@@ -75,7 +77,11 @@
             {% if item.image_url | safe_url %}
             <img class="reader-item-image" src="{{ item.image_url | safe_url }}" alt="{{ item.image_alt }}" loading="lazy" referrerpolicy="no-referrer">
             {% endif %}
+            {% if fulltext %}
+            <div class="reader-item-content" data-item-id="{{ item.id }}" data-loaded="1">{{ item.content_text or item.content or item.summary }}</div>
+            {% else %}
             <div class="reader-item-content" data-item-id="{{ item.id }}">{% if item.summary %}{{ item.summary }}{% elif item.content %}{{ item.content | truncate(280) }}{% endif %}</div>
+            {% endif %}
             {% if item.enclosure_url | safe_url %}
             <audio class="reader-item-audio" controls preload="none" src="{{ item.enclosure_url | safe_url }}"></audio>
             {% endif %}
@@ -122,7 +128,7 @@
       {% if q %}No results for "{{ q }}".
       {% elif view == 'starred' %}No starred items. Star an item to keep it here.
       {% elif view == 'all' %}No items stored yet. Enable reading on a feed, then it fills in on the next poll.
-      {% else %}No unread items. <a href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}">View all</a>.
+      {% else %}No unread items. <a href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">View all</a>.
       {% endif %}
     </p>
     {% endif %}

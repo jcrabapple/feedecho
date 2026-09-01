@@ -949,21 +949,28 @@ function readerEnableAutoRead() {
     if (readerAutoReadObserver) return;
     const list = document.querySelector('.reader-item-list');
     const view = list && list.dataset.view;
-    // Only in All/Today, where marking read leaves the item in the list.
-    if (view !== 'all' && view !== 'today') return;
+    // Not in Starred view — that's a curated list, not a triage queue.
+    if (view === 'starred') return;
     if (!('IntersectionObserver' in window)) return;
     readerAutoReadObserver = new IntersectionObserver((entries) => {
         for (const e of entries) {
             if (e.isIntersecting) continue;
             const entry = e.target;
+            if (!entry.isConnected) continue;
             const details = entry.querySelector('details.reader-item');
             if (!details || !details.classList.contains('unread')) continue;
-            details.classList.remove('unread');
-            const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
-            if (btn) btn.textContent = 'Mark unread';
-            readerAdjustUnread(entry.dataset.feedId, -1);
             readerAutoReadQueue.add(entry.dataset.itemId);
             readerAutoReadObserver.unobserve(entry);
+            if (view === 'unread') {
+                // Same behaviour as clicking Mark read in the Unread view.
+                readerAdjustUnread(entry.dataset.feedId, -1);
+                readerRemoveAndAdvance(entry);
+            } else {
+                details.classList.remove('unread');
+                const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
+                if (btn) btn.textContent = 'Mark unread';
+                readerAdjustUnread(entry.dataset.feedId, -1);
+            }
         }
         if (readerAutoReadQueue.size && !readerAutoReadTimer) {
             readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);
@@ -981,7 +988,10 @@ function readerDisableAutoRead() {
 function readerApplyAutoRead() {
     const btn = document.getElementById('reader-autoread-btn');
     const on = localStorage.getItem('feedecho-reader-autoread') === '1';
-    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (btn) {
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.textContent = on ? 'Auto-read ✓' : 'Auto-read';
+    }
     if (on) readerEnableAutoRead();
 }
 

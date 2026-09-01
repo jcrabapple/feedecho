@@ -80,4 +80,4 @@ class TestAdminMobileActions:
 
     def test_cache_buster_bumped(self):
         base = (REPO_ROOT / "templates" / "base.html").read_text(encoding="utf-8")
-        assert 'style.css?v=32' in base
+        assert 'style.css?v=33' in base

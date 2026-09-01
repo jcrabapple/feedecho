@@ -1344,6 +1344,12 @@ details.account-section > summary:focus-visible {
 .reader-feed-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--primary-wash); color: var(--primary); font-size: 0.7rem; font-weight: 700; flex-shrink: 0; }
 .reader-feed-error { color: #d97706; flex-shrink: 0; }
 
+/* Tier 2 — toggle buttons show their pressed state */
+.reader-toolbar-right .btn-sm[aria-pressed="true"] { background: var(--primary-wash); border-color: var(--primary); color: var(--primary); }
+
+/* Compact density: title only, no feed/author/date meta line */
+.reader[data-density="compact"] .reader-item-meta { display: none; }
+
 /* Tier 2 — OPML import on the Feeds page */
 .opml-actions { display: flex; flex-direction: column; gap: 0.6rem; }
 .opml-import-form { display: flex; flex-direction: column; gap: 0.4rem; }

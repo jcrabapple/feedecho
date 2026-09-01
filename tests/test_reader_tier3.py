@@ -63,3 +63,27 @@ class TestEnclosureStorage:
         assert row["image_url"] == "https://example.com/img.jpg"
         assert row["image_alt"] == "pic"
         assert row["enclosure_url"] == "https://example.com/ep.mp3"
+
+
+class TestSummaryOnlyContentText:
+    def test_falls_back_to_summary_html_for_structure(self):
+        # Feeds without <content:encoded> (plain WordPress <description>) ship
+        # the full body in summary; content_text must stay structured, not empty.
+        from feed_parser import parse_rss_feed
+
+        entry = {
+            "id": "x",
+            "title": "Emo piece",
+            "link": "https://example.com/emo",
+            "summary": (
+                "<div>Opening paragraph.</div>"
+                "<h2>What emo is</h2>"
+                "<ul><li>First wave</li><li>Second wave</li></ul>"
+            ),
+            # no "content" key
+        }
+        result = parse_rss_feed({"feed": {}, "entries": [entry]}, "https://example.com/feed")
+        item = result["items"][0]
+        assert "\n" in item["content_text"]  # structured, not a flat run
+        assert "What emo is" in item["content_text"]
+        assert "• First wave" in item["content_text"]  # bullets preserved

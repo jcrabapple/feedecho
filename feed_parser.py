@@ -408,13 +408,16 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
         # stripped text, {{ content_link }} is the first outbound link
         # inside it (recovered before strip_html drops the href).
         content_html = entry.get("content", [{}])[0].get("value", "") if entry.get("content") else ""
+        # Feeds without <content:encoded> (plain WordPress <description>) put
+        # the full body in summary; use it so the reader text stays structured.
+        display_html = content_html or entry.get("summary", "")
         item = {
             "id": _get_item_id(entry),
             "title": clean_text(entry.get("title", "")),
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
             "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
-            "content_text": html_to_text(content_html) if content_html else "",
+            "content_text": html_to_text(display_html) if display_html else "",
             "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
             "date": _parse_date_struct(entry),

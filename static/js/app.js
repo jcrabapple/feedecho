@@ -935,9 +935,10 @@ async function readerUndo(ids) {
 }
 
 // ── Reader auto-read-on-scroll ───────────────────────────────────────────────
-let readerAutoReadObserver = null;
+let readerAutoReadActive = false;
 let readerAutoReadQueue = new Set();
 let readerAutoReadTimer = null;
+let readerAutoScrollTick = false;
 
 function readerAutoReadFlush() {
     readerAutoReadTimer = null;
@@ -949,52 +950,55 @@ function readerAutoReadFlush() {
         .catch(() => { reloadPreservingScroll(); });
 }
 
+function readerAutoReadMark(entry) {
+    const details = entry.querySelector('details.reader-item');
+    if (!details || !details.classList.contains('unread')) return;
+    entry.dataset.autoDone = '1';
+    if (entry.dataset.itemId) readerAutoReadQueue.add(entry.dataset.itemId);
+    // Mark read only — never remove the card (layout stays anchored).
+    details.classList.remove('unread');
+    details.classList.add('reader-auto-read');
+    const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
+    if (btn) btn.textContent = 'Mark unread';
+    readerAdjustUnread(entry.dataset.feedId, -1);
+}
+
+function readerAutoReadScroll() {
+    if (readerAutoScrollTick) return;
+    readerAutoScrollTick = true;
+    requestAnimationFrame(() => {
+        readerAutoScrollTick = false;
+        // Mark any item whose TOP has crossed the header. This also covers tall
+        // expanded articles — their top crosses while still on screen, which the
+        // IntersectionObserver enter/leave model could not detect.
+        document.querySelectorAll('.reader-entry').forEach((entry) => {
+            if (entry.dataset.autoDone === '1') return;
+            if (entry.getBoundingClientRect().top > READER_HEADER_OFFSET) return;
+            readerAutoReadMark(entry);
+        });
+        if (readerAutoReadQueue.size && !readerAutoReadTimer) {
+            readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);
+        }
+    });
+}
+
 function readerEnableAutoRead() {
-    if (readerAutoReadObserver) return;
+    if (readerAutoReadActive) return;
     const list = document.querySelector('.reader-item-list');
     const view = list && list.dataset.view;
     // Not in Starred view — that's a curated list, not a triage queue.
     if (view === 'starred') return;
-    if (!('IntersectionObserver' in window)) return;
-    readerAutoReadObserver = new IntersectionObserver((entries) => {
-        for (const e of entries) {
-            const entry = e.target;
-            if (!entry.isConnected) continue;
-            if (e.isIntersecting) {
-                // Remember that this item entered the viewport, so we only mark
-                // it read after it has actually been seen and then scrolled up
-                // past the header — never items still below the fold.
-                entry.dataset.autoSeen = '1';
-                continue;
-            }
-            // Not intersecting. Only act if it was seen AND has scrolled up
-            // past the header (its bottom is above the sticky header). Items
-            // merely below the fold are also non-intersecting and must be left
-            // alone until the user reaches them.
-            if (entry.dataset.autoSeen !== '1') continue;
-            if (e.boundingClientRect.bottom > READER_HEADER_OFFSET) continue;
-            const details = entry.querySelector('details.reader-item');
-            if (!details || !details.classList.contains('unread')) continue;
-            readerAutoReadObserver.unobserve(entry);
-            if (entry.dataset.itemId) readerAutoReadQueue.add(entry.dataset.itemId);
-            // Mark read only — never remove the card. Auto-read is passive and
-            // layout-neutral; removing DOM under a moving viewport causes the
-            // cascade + jump. The card stays (dimmed) until the next reload.
-            details.classList.remove('unread');
-            details.classList.add('reader-auto-read');
-            const btn = entry.querySelector('button[onclick*="readerToggleRead"]');
-            if (btn) btn.textContent = 'Mark unread';
-            readerAdjustUnread(entry.dataset.feedId, -1);
-        }
-        if (readerAutoReadQueue.size && !readerAutoReadTimer) {
-            readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);
-        }
-    }, { rootMargin: `-${READER_HEADER_OFFSET}px 0px 0px 0px` });
-    document.querySelectorAll('.reader-entry').forEach((el) => readerAutoReadObserver.observe(el));
+    readerAutoReadActive = true;
+    window.addEventListener('scroll', readerAutoReadScroll, { passive: true });
+    window.addEventListener('resize', readerAutoReadScroll, { passive: true });
+    readerAutoReadScroll(); // mark anything already past the header
 }
 
 function readerDisableAutoRead() {
-    if (readerAutoReadObserver) { readerAutoReadObserver.disconnect(); readerAutoReadObserver = null; }
+    if (!readerAutoReadActive) return;
+    readerAutoReadActive = false;
+    window.removeEventListener('scroll', readerAutoReadScroll);
+    window.removeEventListener('resize', readerAutoReadScroll);
     if (readerAutoReadTimer) { clearTimeout(readerAutoReadTimer); readerAutoReadTimer = null; }
     readerAutoReadQueue.clear();
 }

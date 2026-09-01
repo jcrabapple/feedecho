@@ -810,7 +810,7 @@ async function readerMarkAllRead(btn) {
         const resp = await fetch('/api/reader/mark-all-read', { method: 'POST', body });
         const data = await resp.json();
         if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
-        if (data.count > 0) {
+        if (data.count > 0 && Array.isArray(data.ids) && data.ids.length) {
             sessionStorage.setItem('feedecho-reader-undo', JSON.stringify({ ids: data.ids, at: Date.now() }));
         }
         reloadPreservingScroll();
@@ -865,7 +865,7 @@ function readerShowShortcuts() {
 document.addEventListener('keydown', (e) => {
     if (!document.querySelector('.reader-entry')) return;
     const tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === '?') { e.preventDefault(); readerShowShortcuts(); return; }
     const k = e.key.toLowerCase();
@@ -925,6 +925,7 @@ function readerUndoToast(ids) {
 
 async function readerUndo(ids) {
     sessionStorage.removeItem('feedecho-reader-undo');
+    if (!Array.isArray(ids) || !ids.length) { reloadPreservingScroll(); return; }
     const body = new URLSearchParams({ ids: ids.join(',') });
     try {
         await fetch('/api/reader/mark-unread', { method: 'POST', body });
@@ -942,7 +943,9 @@ function readerAutoReadFlush() {
     const ids = Array.from(readerAutoReadQueue);
     readerAutoReadQueue.clear();
     if (!ids.length) return;
-    fetch('/api/reader/mark-read', { method: 'POST', body: new URLSearchParams({ ids: ids.join(',') }) }).catch(() => {});
+    // On failure, reload to resync — the DOM was already mutated optimistically.
+    fetch('/api/reader/mark-read', { method: 'POST', body: new URLSearchParams({ ids: ids.join(',') }) })
+        .catch(() => { reloadPreservingScroll(); });
 }
 
 function readerEnableAutoRead() {
@@ -959,8 +962,10 @@ function readerEnableAutoRead() {
             if (!entry.isConnected) continue;
             const details = entry.querySelector('details.reader-item');
             if (!details || !details.classList.contains('unread')) continue;
-            readerAutoReadQueue.add(entry.dataset.itemId);
-            readerAutoReadObserver.unobserve(entry);
+            if (entry.dataset.itemId) {
+                readerAutoReadQueue.add(entry.dataset.itemId);
+                readerAutoReadObserver.unobserve(entry);
+            }
             if (view === 'unread') {
                 // Same behaviour as clicking Mark read in the Unread view.
                 readerAdjustUnread(entry.dataset.feedId, -1);
@@ -1037,6 +1042,8 @@ function readerStartPolling() {
         if (id > max) max = id;
     });
     readerMaxItemId = max;
+    // Empty list has no "since" baseline; skip polling until items exist.
+    if (readerMaxItemId === 0) return;
     if (readerPollTimer) clearInterval(readerPollTimer);
     readerPollTimer = setInterval(readerPoll, 60000);
 }

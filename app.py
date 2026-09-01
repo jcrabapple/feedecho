@@ -1838,6 +1838,16 @@ def _parse_reader_query(q: str):
     return filters, terms
 
 
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so user text matches literally.
+
+    Patterns built from this are used with ``LIKE ... ESCAPE '!'`` on both
+    dialects (Postgres defaults to backslash, sqlite has none — so we pick an
+    explicit, dialect-neutral escape character).
+    """
+    return term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
 @app.get("/reader", response_class=HTMLResponse)
 async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = ""):
     """Consolidated RSS reading surface (issue #11).
@@ -1888,23 +1898,27 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
                     elif val == "read":
                         where.append("i.is_read = 1")
                 elif op == "feed":
-                    where.append("LOWER(f.name) LIKE ?")
-                    params.append(f"%{val}%")
+                    where.append("LOWER(f.name) LIKE ? ESCAPE '!'")
+                    params.append(f"%{_escape_like(val)}%")
                 elif op == "in":
                     if val in ("title", "body"):
                         text_scope = val
             if terms:
-                like = f"%{' '.join(terms)}%"
+                like = f"%{_escape_like(' '.join(terms))}%"
                 if text_scope == "title":
-                    where.append("LOWER(i.title) LIKE ?")
+                    where.append("LOWER(i.title) LIKE ? ESCAPE '!'")
                     params.append(like)
                 elif text_scope == "body":
-                    where.append("(LOWER(i.content) LIKE ? OR LOWER(i.summary) LIKE ?)")
+                    where.append(
+                        "(LOWER(i.content) LIKE ? ESCAPE '!'"
+                        " OR LOWER(i.summary) LIKE ? ESCAPE '!')"
+                    )
                     params.extend([like, like])
                 else:
                     where.append(
-                        "(LOWER(i.title) LIKE ? OR LOWER(i.content) LIKE ?"
-                        " OR LOWER(i.summary) LIKE ?)"
+                        "(LOWER(i.title) LIKE ? ESCAPE '!'"
+                        " OR LOWER(i.content) LIKE ? ESCAPE '!'"
+                        " OR LOWER(i.summary) LIKE ? ESCAPE '!')"
                     )
                     params.extend([like, like, like])
         elif view == "unread":
@@ -1926,11 +1940,11 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
         ).fetchall()
         for mf in mutes:
             for kw in [k.strip() for k in (mf["mute_keywords"] or "").split(",") if k.strip()]:
-                like = f"%{kw.lower()}%"
+                like = f"%{_escape_like(kw.lower())}%"
                 where.append(
-                    "NOT (i.feed_id = ? AND (LOWER(COALESCE(i.title, '')) LIKE ?"
-                    " OR LOWER(COALESCE(i.content, '')) LIKE ?"
-                    " OR LOWER(COALESCE(i.summary, '')) LIKE ?))"
+                    "NOT (i.feed_id = ? AND (LOWER(COALESCE(i.title, '')) LIKE ? ESCAPE '!'"
+                    " OR LOWER(COALESCE(i.content, '')) LIKE ? ESCAPE '!'"
+                    " OR LOWER(COALESCE(i.summary, '')) LIKE ? ESCAPE '!'))"
                 )
                 params.extend([mf["id"], like, like, like])
 
@@ -1939,8 +1953,8 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
             SELECT i.*, f.name AS feed_name,
                    (SELECT COUNT(*) FROM posted_items p
                      JOIN echoes e ON p.echo_id = e.id
-                    WHERE e.one_shot = 1 AND p.item_id = i.item_id
-                      AND p.status = 'success') AS shouted
+                    WHERE e.one_shot = 1 AND e.feed_id = i.feed_id
+                      AND p.item_id = i.item_id AND p.status = 'success') AS shouted
               FROM feed_items i
               JOIN feeds f ON i.feed_id = f.id
              WHERE {" AND ".join(where)}
@@ -2988,6 +3002,11 @@ def export_opml(request: Request):
 async def import_opml(request: Request, opml: str = Form("")):
     """Bulk-add feeds from an OPML document (issue #11, Tier 2)."""
     uid = current_user_id(request)
+    # Reject DTD/entity declarations before parsing: ElementTree doesn't fetch
+    # external entities, but a <!DOCTYPE> subset can still trigger entity
+    # expansion (billion-laughs) DoS.
+    if "<!DOCTYPE" in opml.upper() or "<!ENTITY" in opml.upper():
+        raise HTTPException(status_code=400, detail="OPML must not contain a DOCTYPE or entity declarations")
     try:
         root = ElementTree.fromstring(opml)
     except ElementTree.ParseError:
@@ -3019,8 +3038,9 @@ async def import_opml(request: Request, opml: str = Form("")):
                 ).fetchone()["c"]
                 try:
                     plans.check_feed_allowance(count, _user_plan(db, uid))
-                except PlanError as e:
-                    raise HTTPException(status_code=402, detail=str(e))
+                except PlanError:
+                    skipped += 1
+                    continue
             title = (o.get("title") or o.get("text") or "").strip() or url
             db.execute(
                 "INSERT INTO feeds (name, url, read_enabled, user_id) VALUES (?, ?, ?, ?)",
@@ -3265,6 +3285,7 @@ def toggle_reader_feed(request: Request, feed_id: int):
 def reader_toggle_read(request: Request, item_id: int):
     uid = current_user_id(request)
     with get_db() as db:
+        _require_reader(db, uid)
         result = db.execute(
             "UPDATE feed_items SET is_read = 1 - is_read"
             " WHERE id = ? AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
@@ -3280,6 +3301,7 @@ def reader_toggle_read(request: Request, item_id: int):
 def reader_toggle_star(request: Request, item_id: int):
     uid = current_user_id(request)
     with get_db() as db:
+        _require_reader(db, uid)
         result = db.execute(
             "UPDATE feed_items SET starred = 1 - starred"
             " WHERE id = ? AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
@@ -3295,6 +3317,7 @@ def reader_toggle_star(request: Request, item_id: int):
 def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
     uid = current_user_id(request)
     with get_db() as db:
+        _require_reader(db, uid)
         if feed_id is not None:
             owns = db.execute(
                 "SELECT id FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
@@ -3341,6 +3364,7 @@ def reader_mark_unread(request: Request, ids: str = Form("")):
     if not id_list:
         raise HTTPException(status_code=400, detail="No valid item ids")
     with get_db() as db:
+        _require_reader(db, uid)
         placeholders = ", ".join("?" for _ in id_list)
         result = db.execute(
             f"UPDATE feed_items SET is_read = 0 WHERE id IN ({placeholders})"
@@ -3367,6 +3391,7 @@ def reader_mark_read(request: Request, ids: str = Form("")):
     if not id_list:
         return {"success": True, "count": 0}
     with get_db() as db:
+        _require_reader(db, uid)
         placeholders = ", ".join("?" for _ in id_list)
         result = db.execute(
             f"UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND id IN ({placeholders})"
@@ -3381,6 +3406,7 @@ def reader_item_body(request: Request, item_id: int):
     """Return an item's display body for lazy loading (issue #11, Tier 3)."""
     uid = current_user_id(request)
     with get_db() as db:
+        _require_reader(db, uid)
         row = db.execute(
             "SELECT i.content_text, i.content, i.summary FROM feed_items i"
             " JOIN feeds f ON i.feed_id = f.id"
@@ -3397,10 +3423,11 @@ def reader_new_count(request: Request, since_id: int = 0):
     """Count unread-capable items newer than since_id (poll-pill support)."""
     uid = current_user_id(request)
     with get_db() as db:
+        _require_reader(db, uid)
         row = db.execute(
             "SELECT COUNT(*) AS c FROM feed_items i"
             " JOIN feeds f ON i.feed_id = f.id"
-            " WHERE f.user_id = ? AND f.read_enabled = 1 AND i.id > ?",
+            " WHERE f.user_id = ? AND f.read_enabled = 1 AND f.deleted_at IS NULL AND i.id > ?",
             (uid, since_id),
         ).fetchone()
     return {"count": row["c"]}

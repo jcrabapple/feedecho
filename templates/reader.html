@@ -68,10 +68,12 @@
           </summary>
           <div class="reader-item-body">
             {% if item.image_url | safe_url %}
-            <img class="reader-item-image" src="{{ item.image_url | safe_url }}" alt="{{ item.image_alt }}" loading="lazy">
+            <img class="reader-item-image" src="{{ item.image_url | safe_url }}" alt="{{ item.image_alt }}" loading="lazy" referrerpolicy="no-referrer">
             {% endif %}
             <div class="reader-item-content" data-item-id="{{ item.id }}">
-              {% if item.summary %}{{ item.summary }}{% endif %}
+              {% if item.summary %}{{ item.summary }}
+              {% elif item.content %}{{ item.content | truncate(280) }}
+              {% endif %}
             </div>
             {% if item.enclosure_url | safe_url %}
             <audio class="reader-item-audio" controls preload="none" src="{{ item.enclosure_url | safe_url }}"></audio>

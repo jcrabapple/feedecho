@@ -47,7 +47,7 @@
             data-name="{{ feed.name | e }}"
             data-url="{{ feed.url | e }}"
             data-poll-interval="{{ feed.poll_interval }}"
-            data-mute-keywords="{{ feed.mute_keywords or '' | e }}">
+            data-mute-keywords="{{ (feed.mute_keywords or '') | e }}">
             <td data-label="Name">
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}

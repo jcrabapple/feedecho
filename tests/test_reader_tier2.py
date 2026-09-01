@@ -56,6 +56,11 @@ class TestOpml:
         assert len(urls) == 3  # news added; dup + ftp skipped
         assert row["read_enabled"] == 1  # single mode: reading on by default
 
+    def test_import_rejects_doctype(self, env):
+        opml = '<!DOCTYPE opml [<!ENTITY a "x">]><opml><body></body></opml>'
+        with TestClient(app) as c:
+            assert c.post("/api/feeds/opml", data={"opml": opml}).status_code == 400
+
     def test_import_invalid_xml_is_400(self, env):
         with TestClient(app) as c:
             r = c.post("/api/feeds/opml", data={"opml": "not xml at all"})

@@ -92,6 +92,21 @@ class TestSearchOperators:
         assert "Banana" in page
         assert "Apple" not in page
 
+    def test_search_escapes_like_wildcards(self, env):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, is_read)"
+                " VALUES (1, 'p1', '50% off sale', 0)"
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, is_read)"
+                " VALUES (1, 'p2', '50 dollars', 0)"
+            )
+        with TestClient(app) as c:
+            page = c.get("/reader", params={"q": "50%", "view": "all"}).text
+        assert "50% off sale" in page
+        assert "50 dollars" not in page
+
     def test_bare_term_still_searches_title_and_body(self, env):
         with TestClient(app) as c:
             page = c.get("/reader", params={"q": "fruit", "view": "all"}).text

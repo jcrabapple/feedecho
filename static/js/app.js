@@ -958,9 +958,21 @@ function readerEnableAutoRead() {
     if (!('IntersectionObserver' in window)) return;
     readerAutoReadObserver = new IntersectionObserver((entries) => {
         for (const e of entries) {
-            if (e.isIntersecting) continue;
             const entry = e.target;
             if (!entry.isConnected) continue;
+            if (e.isIntersecting) {
+                // Remember that this item entered the viewport, so we only mark
+                // it read after it has actually been seen and then scrolled up
+                // past the header — never items still below the fold.
+                entry.dataset.autoSeen = '1';
+                continue;
+            }
+            // Not intersecting. Only act if it was seen AND has scrolled up
+            // past the header (its bottom is above the sticky header). Items
+            // merely below the fold are also non-intersecting and must be left
+            // alone until the user reaches them.
+            if (entry.dataset.autoSeen !== '1') continue;
+            if (e.boundingClientRect.bottom > READER_HEADER_OFFSET) continue;
             const details = entry.querySelector('details.reader-item');
             if (!details || !details.classList.contains('unread')) continue;
             if (entry.dataset.itemId) {
@@ -981,7 +993,7 @@ function readerEnableAutoRead() {
         if (readerAutoReadQueue.size && !readerAutoReadTimer) {
             readerAutoReadTimer = setTimeout(readerAutoReadFlush, 1500);
         }
-    }, { rootMargin: '-80px 0px 0px 0px' });
+    }, { rootMargin: `-${READER_HEADER_OFFSET}px 0px 0px 0px` });
     document.querySelectorAll('.reader-entry').forEach((el) => readerAutoReadObserver.observe(el));
 }
 

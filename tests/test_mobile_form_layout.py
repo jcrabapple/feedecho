@@ -83,7 +83,7 @@ class TestMobileFormLayout:
 
     def test_cache_buster_bumped(self):
         base = (REPO_ROOT / "templates" / "base.html").read_text(encoding="utf-8")
-        assert 'style.css?v=37' in base, "CSS changed; bump the cache-buster so phones pick it up"
+        assert 'style.css?v=38' in base, "CSS changed; bump the cache-buster so phones pick it up"
 
     def test_smtp_test_email_label_is_visible(self):
         page = (REPO_ROOT / "templates" / "settings.html").read_text(encoding="utf-8")

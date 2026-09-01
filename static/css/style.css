@@ -1394,6 +1394,9 @@ details.account-section > summary:focus-visible {
 /* Action-row grouping: triage (read/star) vs cross-post (echo/shout) */
 .action-group { display: inline-flex; gap: 0.4rem; align-items: center; }
 .action-group--echo { margin-left: auto; padding-left: 0.6rem; border-left: 1px solid var(--border); }
+@media (max-width: 720px) {
+    .action-group--echo { margin-left: 0; padding-left: 0; border-left: none; }
+}
 
 /* Inline SVG icons (one stroke/weight, replaces emoji glyphs) */
 .icon { width: 0.95em; height: 0.95em; flex-shrink: 0; }

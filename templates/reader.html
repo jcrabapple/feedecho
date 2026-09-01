@@ -89,15 +89,15 @@
               <span class="action-group">
                 <button class="action-btn" type="button" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
                 <button class="action-btn action-btn--star{% if item.starred %} is-starred{% endif %}" type="button"
-                        onclick="readerToggleStar({{ item.id }}, this)" aria-pressed="{{ 'true' if item.starred else 'false' }}">
-                  <span class="action-btn__star" aria-hidden="true">{{ star_icon(item.starred) }}</span> Star
+                        onclick="readerToggleStar({{ item.id }}, this)" aria-pressed="{{ 'true' if item.starred else 'false' }}" aria-label="{{ 'Unstar' if item.starred else 'Star' }}">
+                  <span class="action-btn__star" aria-hidden="true">{{ star_icon(item.starred) }}</span>
                 </button>
               </span>
               <span class="action-group action-group--echo">
                 <a class="action-btn" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo</a>
                 {% if shout_destinations %}
                 <details class="reader-shout">
-                  <summary class="action-btn">Shout…</summary>
+                  <summary class="action-btn">Shout</summary>
                   <form class="reader-shout-form" onsubmit="readerShout({{ item.id }}, this); return false">
                     <label>Destination
                       <select name="destination" required>

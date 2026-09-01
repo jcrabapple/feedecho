@@ -700,9 +700,10 @@ function readerList(entry) {
 
 function readerApplyStar(btn, starred) {
     btn.classList.toggle('is-starred', starred);
-    const glyph = btn.querySelector('.action-btn__star');
-    if (glyph) glyph.textContent = starred ? '★' : '☆';
+    const svg = btn.querySelector('.action-btn__star svg');
+    if (svg) svg.setAttribute('fill', starred ? 'currentColor' : 'none');
     btn.setAttribute('aria-pressed', starred ? 'true' : 'false');
+    btn.setAttribute('aria-label', starred ? 'Unstar' : 'Star');
 }
 
 function readerAdjustUnread(feedId, delta) {

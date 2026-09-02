@@ -339,6 +339,28 @@ def unpinned_client(*, timeout: float = 30) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=False)
 
 
+# Headers that must never follow a cross-origin redirect. httpx strips these
+# when the redirect target's origin differs; a hand-rolled loop must too, or a
+# hostile homeserver/PDS can bounce a request — and the tenant's Bearer token —
+# to an arbitrary public address it chose.
+_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+# Headers that describe a request body; dropped when a redirect downgrades the
+# method to GET (mirrors httpx's redirect handling).
+_ENTITY_HEADERS = frozenset({"content-type", "content-length"})
+
+
+def _strip_headers(headers: dict | None, drop: frozenset) -> dict | None:
+    """Return ``headers`` with the named (case-insensitive) headers removed."""
+    if not headers:
+        return headers
+    return {k: v for k, v in headers.items() if k.lower() not in drop}
+
+
+def _url_origin(url: str) -> tuple:
+    u = httpx.URL(url)
+    return (u.scheme, u.host, u.port)
+
+
 def pinned_request(
     method: str,
     url: str,
@@ -360,7 +382,9 @@ def pinned_request(
     and re-pinned before being followed, so a redirect to an internal
     address is refused instead of dialed. Redirect semantics match httpx:
     303 -> GET; 301/302 on a POST -> GET with the body dropped; 307/308
-    preserve method and body.
+    preserve method and body. Credential headers (Authorization, Cookie,
+    Proxy-Authorization) are stripped on cross-origin hops, and entity
+    headers on GET downgrades, exactly as httpx's own redirect handling.
 
     Raises SSRFError if the URL (or any followed redirect hop) is unsafe or
     unresolvable. Returns the final (non-redirect) response.
@@ -370,9 +394,10 @@ def pinned_request(
         current_url = url
         current_method = method.upper()
         current_kwargs = dict(kwargs)
+        hop_headers = headers
         for _ in range(MAX_REDIRECTS + 1):
             resp = client.request(
-                current_method, current_url, headers=headers, **current_kwargs
+                current_method, current_url, headers=hop_headers, **current_kwargs
             )
             if not follow_redirects or not resp.is_redirect:
                 return resp
@@ -385,13 +410,20 @@ def pinned_request(
             validate_outbound_url(next_url)
             for key, addr in _pins_for_urls([next_url]).items():
                 backend.set_pin(key, addr)
+            if _url_origin(current_url) != _url_origin(next_url):
+                # Cross-origin: drop credentials before re-issuing (from the
+                # already-stripped hop headers, so a later re-cross keeps
+                # them stripped).
+                hop_headers = _strip_headers(hop_headers, _CREDENTIAL_HEADERS)
             current_url = next_url
             if resp.status_code == 303:
                 current_method = "GET"
                 current_kwargs = {}
+                hop_headers = _strip_headers(hop_headers, _ENTITY_HEADERS)
             elif resp.status_code in (301, 302) and current_method == "POST":
                 current_method = "GET"
                 current_kwargs = {}
+                hop_headers = _strip_headers(hop_headers, _ENTITY_HEADERS)
         raise SSRFError(f"Too many redirects (max {MAX_REDIRECTS}) for {url}")
     finally:
         client.close()

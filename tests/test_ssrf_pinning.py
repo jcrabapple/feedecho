@@ -14,6 +14,7 @@ address after validation passed. These tests pin the seams:
 Network-adjacent pieces use fakes; only the pin-bookkeeping logic is real.
 """
 
+import re
 import socket
 from pathlib import Path
 from unittest import mock
@@ -383,6 +384,143 @@ class TestPinnedRequest:
         assert resp is redirect
         assert not backend._pins
 
+    def test_cross_origin_redirect_strips_authorization(self):
+        """A hop to another origin must not carry the tenant's credentials."""
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        final = mock.MagicMock()
+        final.is_redirect = False
+        fake_client.request.side_effect = [
+            self._redirect("https://other.example/collect", 307),
+            final,
+        ]
+
+        with mock.patch.object(
+            feed_parser.socket,
+            "getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))],
+        ), mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            pinned_request(
+                "GET",
+                "https://origin.example/api",
+                headers={"Authorization": "Bearer tok"},
+                follow_redirects=True,
+            )
+
+        second = fake_client.request.call_args_list[1]
+        assert "Authorization" not in second.kwargs["headers"]
+
+    def test_same_origin_redirect_keeps_authorization(self):
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        final = mock.MagicMock()
+        final.is_redirect = False
+        fake_client.request.side_effect = [
+            self._redirect("https://origin.example/other", 307),
+            final,
+        ]
+
+        with mock.patch.object(
+            feed_parser.socket,
+            "getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))],
+        ), mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            pinned_request(
+                "GET",
+                "https://origin.example/api",
+                headers={"Authorization": "Bearer tok"},
+                follow_redirects=True,
+            )
+
+        second = fake_client.request.call_args_list[1]
+        assert second.kwargs["headers"]["Authorization"] == "Bearer tok"
+
+    def test_307_preserves_method_and_body(self):
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        final = mock.MagicMock()
+        final.is_redirect = False
+        fake_client.request.side_effect = [
+            self._redirect("https://origin.example/next", 307),
+            final,
+        ]
+
+        with mock.patch.object(
+            feed_parser.socket,
+            "getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))],
+        ), mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            pinned_request(
+                "POST",
+                "https://origin.example/api",
+                json={"a": 1},
+                follow_redirects=True,
+            )
+
+        second = fake_client.request.call_args_list[1]
+        assert second.args[0] == "POST"
+        assert second.kwargs.get("json") == {"a": 1}
+
+    def test_302_after_post_drops_body_and_entity_headers(self):
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        final = mock.MagicMock()
+        final.is_redirect = False
+        fake_client.request.side_effect = [
+            self._redirect("https://origin.example/next", 302),
+            final,
+        ]
+
+        with mock.patch.object(
+            feed_parser.socket,
+            "getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))],
+        ), mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            pinned_request(
+                "POST",
+                "https://origin.example/api",
+                headers={
+                    "Authorization": "Bearer tok",
+                    "Content-Type": "application/json",
+                },
+                json={"a": 1},
+                follow_redirects=True,
+            )
+
+        second = fake_client.request.call_args_list[1]
+        assert second.args[0] == "GET"
+        assert "json" not in second.kwargs
+        headers = second.kwargs["headers"]
+        assert "Content-Type" not in headers
+        assert headers.get("Authorization") == "Bearer tok"
+
+    def test_too_many_redirects_raises(self):
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        fake_client.request.return_value = self._redirect(
+            "https://origin.example/loop", 302
+        )
+
+        with mock.patch.object(
+            feed_parser.socket,
+            "getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))],
+        ), mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            with pytest.raises(SSRFError, match="Too many redirects"):
+                pinned_request(
+                    "GET", "https://origin.example/feed", follow_redirects=True
+                )
+
 
 class TestClientFactoriesDisableRedirects:
     def test_unpinned_client_disables_redirects(self):
@@ -411,21 +549,44 @@ class TestNoBareHttpxClientOutsideFeedParser:
     re-opening the DNS-rebinding TOCTOU window that the pinned transport
     closes. This is the outbound-HTTP sibling of
     test_no_async_route_performs_blocking_io.
+
+    Matches every evasion spelling: ``httpx.Client(``, ``httpx.AsyncClient(``,
+    and ``from httpx import Client`` (which lets a module build a bare client
+    under a short alias). Scans the whole repo (rglob), excluding tests/.
     """
 
-    def test_bare_httpx_client_only_in_feed_parser(self):
+    CONSTRUCTION = re.compile(r"\bhttpx\.(?:Async)?Client\s*\(")
+    IMPORTED = re.compile(r"\bfrom\s+httpx\s+import\s+[^\n]*\b(?:Async)?Client\b")
+
+    def _offenders(self) -> dict:
         repo = Path(__file__).resolve().parent.parent
         offenders = {}
-        for py in repo.glob("*.py"):
-            lines = [
-                i + 1
-                for i, line in enumerate(py.read_text().splitlines())
-                if "httpx.Client(" in line
-            ]
-            if lines and py.name != "feed_parser.py":
-                offenders[py.name] = lines
+        for py in repo.rglob("*.py"):
+            rel = py.relative_to(repo)
+            # Skip the test tree, hidden dirs (.venv, .git, ...), and the
+            # SSRF machinery itself.
+            if py.name == "feed_parser.py":
+                continue
+            if rel.parts and (rel.parts[0] == "tests" or any(
+                part.startswith(".") for part in rel.parts
+            )):
+                continue
+            lines = sorted(
+                {
+                    i + 1
+                    for i, line in enumerate(py.read_text().splitlines())
+                    if self.CONSTRUCTION.search(line) or self.IMPORTED.search(line)
+                }
+            )
+            if lines:
+                offenders[str(rel)] = lines
+        return offenders
+
+    def test_bare_httpx_client_only_in_feed_parser(self):
+        offenders = self._offenders()
         assert offenders == {}, (
-            "bare httpx.Client( found outside feed_parser.py — route outbound "
-            "requests through pinned_request/ssrf_client/unpinned_client. "
+            "bare httpx.Client/AsyncClient (or `from httpx import Client`) found"
+            " outside feed_parser.py — route outbound requests through"
+            " pinned_request/ssrf_client/unpinned_client. "
             f"Offenders: {offenders}"
         )

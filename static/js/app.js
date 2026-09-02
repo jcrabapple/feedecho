@@ -828,12 +828,26 @@ function readerOpenShout(itemId) {
     dlg.showModal();
 }
 
-// Toggle the variables tooltip (tap/click/Enter on the ⓘ trigger). Desktop
-// hover still reveals it via CSS; this makes it usable on touch devices.
+// Toggle the variables tooltip (tap/click/Enter on the ⓘ trigger). On touch
+// devices there is no :hover; this is the sole reveal path. The document-level
+// click listener below dismisses if the user taps/clicks outside the trigger.
 function readerToggleVars(btn) {
     const open = btn.classList.toggle('is-open');
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
+
+// Dismiss any open variables tooltip when the user taps/clicks outside its
+// trigger. This is the primary close mechanism on touch (where :hover is
+// disabled and re-tapping the small trigger is unreliable).
+document.addEventListener('click', function (e) {
+    var btns = document.querySelectorAll('.reader-shout-vars.is-open');
+    for (var i = 0; i < btns.length; i++) {
+        if (!btns[i].contains(e.target)) {
+            btns[i].classList.remove('is-open');
+            btns[i].setAttribute('aria-expanded', 'false');
+        }
+    }
+});
 
 // Transient toast (role=status) for overlay actions whose dialog has closed.
 function readerToast(text) {

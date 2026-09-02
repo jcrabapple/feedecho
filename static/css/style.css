@@ -1354,8 +1354,13 @@ details.account-section > summary:focus-visible {
     white-space: nowrap;
     display: inline-block;
 }
-.reader-shout-vars:hover .reader-shout-vars-tip,
-.reader-shout-vars:focus-visible .reader-shout-vars-tip,
+/* Reveal: hover only on devices with a real hover-capable fine pointer — touch
+   devices get a sticky simulated :hover after a tap, which traps the tooltip
+   open. On touch, the .is-open toggle is the only reveal path, and a tap
+   outside the trigger dismisses it (JS document-level click listener). */
+@media (hover: hover) and (pointer: fine) {
+    .reader-shout-vars:hover .reader-shout-vars-tip { opacity: 1; }
+}
 .reader-shout-vars.is-open .reader-shout-vars-tip { opacity: 1; }
 
 /* Reader toast (Shout success, after the overlay closes) */

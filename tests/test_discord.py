@@ -160,32 +160,28 @@ class TestInspectWebhook:
             "channel_id": "1112223334445556667",
             "guild_id": "9998887776665554443",
         }
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(payload)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp(payload)
             info = discord.inspect_webhook(WEBHOOK_URL)
         assert info == {"name": "Feed Bot", "channel_id": "1112223334445556667"}
 
     def test_missing_name_is_empty_string(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({"channel_id": "1"})
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({"channel_id": "1"})
             info = discord.inspect_webhook(WEBHOOK_URL)
         assert info == {"name": "", "channel_id": "1"}
 
     def test_401_is_auth_error(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp(
                 {"message": "Invalid Webhook Token", "code": 50027}, 401
             )
             with pytest.raises(discord.DiscordAuthError):
                 discord.inspect_webhook(WEBHOOK_URL)
 
     def test_404_is_not_found(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp(
                 {"message": "Unknown Webhook", "code": 10015}, 404
             )
             with pytest.raises(discord.DiscordNotFoundError):
@@ -194,9 +190,8 @@ class TestInspectWebhook:
     def test_network_error_is_discord_error(self):
         import httpx as _httpx
 
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.side_effect = _httpx.ConnectError("boom")
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.side_effect = _httpx.ConnectError("boom")
             with pytest.raises(discord.DiscordError):
                 discord.inspect_webhook(WEBHOOK_URL)
 
@@ -219,29 +214,26 @@ class TestConnect:
 
 class TestSendWebhook:
     def test_posts_content(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({}, 204)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({}, 204)
             discord.send_webhook(WEBHOOK_URL, "Hello Discord")
-        _, kwargs = client.post.call_args
+        _, kwargs = req.call_args
         assert kwargs["json"] == {"content": "Hello Discord"}
 
     def test_posts_embed_when_given(self):
         embed = {"title": "T", "url": "https://example.com"}
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({}, 204)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({}, 204)
             discord.send_webhook(WEBHOOK_URL, "Hello", embed=embed)
-        _, kwargs = client.post.call_args
+        _, kwargs = req.call_args
         assert kwargs["json"] == {"content": "Hello", "embeds": [embed]}
 
     def test_content_truncated_to_2000(self):
         long_text = "x" * 5000
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({}, 204)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({}, 204)
             discord.send_webhook(WEBHOOK_URL, long_text)
-        _, kwargs = client.post.call_args
+        _, kwargs = req.call_args
         sent = kwargs["json"]["content"]
         assert len(sent) <= discord.MAX_CONTENT_CHARS
         assert sent.endswith("…")
@@ -256,38 +248,33 @@ class TestSendWebhook:
             discord.send_webhook("http://127.0.0.1:8080/", "hi")
 
     def test_401_is_auth_error(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({"message": "Invalid Webhook Token"}, 401)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({"message": "Invalid Webhook Token"}, 401)
             with pytest.raises(discord.DiscordAuthError):
                 discord.send_webhook(WEBHOOK_URL, "hi")
 
     def test_404_is_not_found(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({"message": "Unknown Webhook"}, 404)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({"message": "Unknown Webhook"}, 404)
             with pytest.raises(discord.DiscordNotFoundError):
                 discord.send_webhook(WEBHOOK_URL, "hi")
 
     def test_400_is_bad_request(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({"message": "Bad payload"}, 400)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({"message": "Bad payload"}, 400)
             with pytest.raises(discord.DiscordBadRequestError):
                 discord.send_webhook(WEBHOOK_URL, "hi")
 
     def test_redirect_is_error(self):
         # Webhook endpoints never redirect; a 3xx must not be followed.
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({}, 307)
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp({}, 307)
             with pytest.raises(discord.DiscordError):
                 discord.send_webhook(WEBHOOK_URL, "hi")
 
     def test_429_carries_retry_after_from_body(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp(
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp(
                 {"message": "You are being rate limited.", "retry_after": 100}, 429
             )
             with pytest.raises(discord.DiscordRateLimitError) as exc_info:
@@ -295,9 +282,8 @@ class TestSendWebhook:
         assert exc_info.value.retry_after == 100.0
 
     def test_429_carries_retry_after_from_header(self):
-        with mock.patch.object(discord.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp(
+        with mock.patch.object(discord, "pinned_request") as req:
+            req.return_value = _resp(
                 {"message": "You are being rate limited."}, 429,
                 headers={"Retry-After": "60"},
             )

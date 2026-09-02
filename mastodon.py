@@ -2,7 +2,7 @@
 
 import httpx
 from typing import Optional
-from feed_parser import validate_outbound_url
+from feed_parser import pinned_request, validate_outbound_url
 
 
 def upload_media(
@@ -44,13 +44,15 @@ def upload_media(
         data["description"] = description[:1500]  # Mastodon caps alt text at 1500 chars
 
     try:
-        with httpx.Client(timeout=60) as client:
-            response = client.post(url, headers=headers, files=files, data=data)
-            response.raise_for_status()
-            return response.json()
+        response = pinned_request(
+            "POST", url, timeout=60, headers=headers, files=files, data=data
+        )
+        response.raise_for_status()
+        return response.json()
     # ValueError covers a 200 with a non-JSON body (an instance behind an
     # HTML-returning proxy), which otherwise escaped the documented
-    # "None on failure" contract and crashed the caller.
+    # "None on failure" contract and crashed the caller. SSRFError is a
+    # ValueError subclass, so a refused address returns None the same way.
     except (httpx.HTTPStatusError, httpx.RequestError, ValueError):
         return None
 
@@ -96,10 +98,11 @@ def post_status(
     if media_ids:
         data["media_ids[]"] = media_ids
 
-    with httpx.Client(timeout=30) as client:
-        response = client.post(url, headers=headers, data=data)
-        response.raise_for_status()
-        return response.json()
+    response = pinned_request(
+        "POST", url, timeout=30, headers=headers, data=data
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def verify_credentials(instance: str, access_token: str) -> dict:
@@ -112,10 +115,9 @@ def verify_credentials(instance: str, access_token: str) -> dict:
     url = f"{instance}/api/v1/accounts/verify_credentials"
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    with httpx.Client(timeout=30) as client:
-        response = client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    response = pinned_request("GET", url, timeout=30, headers=headers)
+    response.raise_for_status()
+    return response.json()
 
 
 def test_connection(instance: str, access_token: str) -> tuple[bool, str]:

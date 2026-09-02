@@ -22,7 +22,7 @@ import httpx
 
 import settings as app_settings
 from database import get_db
-from feed_parser import SSRFError, validate_outbound_url
+from feed_parser import SSRFError, pinned_request, unpinned_client, validate_outbound_url
 
 logger = logging.getLogger("feedecho.alt_text")
 
@@ -157,24 +157,40 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
-                response = client.post(endpoint, headers=headers, json=body)
-                response.raise_for_status()
-                parsed = response.json()
+            if app_settings.MULTI:
+                # Hosted: the endpoint is tenant-supplied. validate_outbound_url
+                # already refused internal addresses above; pinned_request dials
+                # the exact IP it approved (no DNS re-resolution window).
+                response = pinned_request(
+                    "POST",
+                    endpoint,
+                    timeout=TIMEOUT_SECONDS,
+                    headers=headers,
+                    json=body,
+                )
+            else:
+                # Single mode: the operator owns both the app and the endpoint
+                # address (often a LAN vision server), so there is no privilege
+                # boundary to cross — keep an unpinned client, matching the
+                # MULTI-gated validate_outbound_url check above.
+                with unpinned_client(timeout=TIMEOUT_SECONDS) as client:
+                    response = client.post(endpoint, headers=headers, json=body)
+            response.raise_for_status()
+            parsed = response.json()
 
-                # Defensive unpacking: "never raises" is part of this
-                # function's contract, and OpenAI-compatible endpoints do
-                # return empty choices lists and null messages (content
-                # filters, proxies). Indexing [{}] only helps when the key
-                # is absent, not when it is an empty list.
-                choices = parsed.get("choices") if isinstance(parsed, dict) else None
-                if not isinstance(choices, list) or not choices:
-                    return ""
-                message = choices[0].get("message") if isinstance(choices[0], dict) else None
-                if not isinstance(message, dict):
-                    return ""
-                content = message.get("content") or message.get("reasoning_content")
-                return content.strip() if isinstance(content, str) else ""
+            # Defensive unpacking: "never raises" is part of this
+            # function's contract, and OpenAI-compatible endpoints do
+            # return empty choices lists and null messages (content
+            # filters, proxies). Indexing [{}] only helps when the key
+            # is absent, not when it is an empty list.
+            choices = parsed.get("choices") if isinstance(parsed, dict) else None
+            if not isinstance(choices, list) or not choices:
+                return ""
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            if not isinstance(message, dict):
+                return ""
+            content = message.get("content") or message.get("reasoning_content")
+            return content.strip() if isinstance(content, str) else ""
         except (
             httpx.HTTPStatusError,
             httpx.RequestError,

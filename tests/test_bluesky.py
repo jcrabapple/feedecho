@@ -770,9 +770,7 @@ class TestBlueskyApiErrors:
     def test_create_post_plain_400_is_not_auth_error(self, monkeypatch):
         import bluesky
 
-        monkeypatch.setattr(
-            bluesky.httpx, "Client", lambda **kw: _FakeClient(_FakeResponse(400, {"message": "InvalidText"}))
-        )
+        monkeypatch.setattr(bluesky, "pinned_request", lambda *a, **kw: _FakeResponse(400, {"message": "InvalidText"}))
         with pytest.raises(bluesky.BlueskyError) as excinfo:
             bluesky.create_post(
                 "https://bsky.social", "tok", "did:plc:x", "text"
@@ -783,9 +781,7 @@ class TestBlueskyApiErrors:
     def test_create_post_expired_token_400_is_auth_error(self, monkeypatch):
         import bluesky
 
-        monkeypatch.setattr(
-            bluesky.httpx, "Client", lambda **kw: _FakeClient(_FakeResponse(400, {"message": "ExpiredToken"}))
-        )
+        monkeypatch.setattr(bluesky, "pinned_request", lambda *a, **kw: _FakeResponse(400, {"message": "ExpiredToken"}))
         with pytest.raises(bluesky.BlueskyAuthError):
             bluesky.create_post(
                 "https://bsky.social", "tok", "did:plc:x", "text"
@@ -794,9 +790,7 @@ class TestBlueskyApiErrors:
     def test_create_post_401_is_auth_error(self, monkeypatch):
         import bluesky
 
-        monkeypatch.setattr(
-            bluesky.httpx, "Client", lambda **kw: _FakeClient(_FakeResponse(401, {"message": "nope"}))
-        )
+        monkeypatch.setattr(bluesky, "pinned_request", lambda *a, **kw: _FakeResponse(401, {"message": "nope"}))
         with pytest.raises(bluesky.BlueskyAuthError):
             bluesky.create_post(
                 "https://bsky.social", "tok", "did:plc:x", "text"
@@ -806,11 +800,9 @@ class TestBlueskyApiErrors:
         import bluesky
 
         monkeypatch.setattr(
-            bluesky.httpx,
-            "Client",
-            lambda **kw: _FakeClient(
-                _FakeResponse(200, {"did": "did:plc:x", "accessJwt": "aj"})
-            ),
+            bluesky,
+            "pinned_request",
+            lambda *a, **kw: _FakeResponse(200, {"did": "did:plc:x", "accessJwt": "aj"}),
         )
         with pytest.raises(bluesky.BlueskyError) as excinfo:
             bluesky.refresh_session("https://bsky.social", "old-rj")
@@ -835,29 +827,17 @@ class TestBlueskyApiErrors:
     def test_upload_blob_auth_failure_raises(self, monkeypatch):
         import bluesky
 
-        monkeypatch.setattr(
-            bluesky.httpx, "Client", lambda **kw: _FakeClient(_FakeResponse(401, {"message": "ExpiredToken"}))
-        )
+        monkeypatch.setattr(bluesky, "pinned_request", lambda *a, **kw: _FakeResponse(401, {"message": "ExpiredToken"}))
         with pytest.raises(bluesky.BlueskyAuthError):
             bluesky.upload_blob("https://bsky.social", "tok", b"x", "image/jpeg")
 
     def test_upload_blob_network_failure_returns_none(self, monkeypatch):
         import bluesky
 
-        class Boom:
-            def __init__(self, **kw):
-                pass
+        def _boom(*a, **kw):
+            raise bluesky.httpx.RequestError("down")
 
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, *a, **kw):
-                raise bluesky.httpx.RequestError("down")
-
-        monkeypatch.setattr(bluesky.httpx, "Client", Boom)
+        monkeypatch.setattr(bluesky, "pinned_request", _boom)
         assert bluesky.upload_blob("https://bsky.social", "tok", b"x", "image/jpeg") is None
 
     def test_test_connection_cleans_up_session(self, monkeypatch):

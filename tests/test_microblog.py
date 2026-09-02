@@ -118,16 +118,15 @@ class TestListDestinations:
                 {"uid": "https://other.micro.blog/", "name": "Other Blog"},
             ]
         }
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _config_response(payload)
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response(payload)
             blogs = microblog.list_destinations("token-123")
 
         assert blogs == [
             {"uid": "https://myblog.micro.blog/", "name": "My Blog"},
             {"uid": "https://other.micro.blog/", "name": "Other Blog"},
         ]
-        _, kwargs = client.get.call_args
+        _, kwargs = req.call_args
         assert kwargs["params"] == {"q": "config"}
         assert kwargs["headers"]["Authorization"] == "Bearer token-123"
 
@@ -142,9 +141,8 @@ class TestListDestinations:
                 {"uid": "https://b.micro.blog/"},  # name falls back to uid
             ]
         }
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _config_response(payload)
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response(payload)
             blogs = microblog.list_destinations("t")
 
         assert blogs == [
@@ -153,33 +151,29 @@ class TestListDestinations:
         ]
 
     def test_auth_error_on_401(self):
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _config_response({"error": "forbidden"}, 403)
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response({"error": "forbidden"}, 403)
             with pytest.raises(microblog.MicroblogAuthError):
                 microblog.list_destinations("bad-token")
 
     def test_generic_error_on_500(self):
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _config_response({}, 500)
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response({}, 500)
             with pytest.raises(microblog.MicroblogError) as exc:
                 microblog.list_destinations("t")
         assert "500" in str(exc.value)
 
     def test_error_when_no_destination_key(self):
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _config_response({"q": "config"})
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response({"q": "config"})
             with pytest.raises(microblog.MicroblogError):
                 microblog.list_destinations("t")
 
     def test_network_error_wrapped(self):
         import httpx as _httpx
 
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.side_effect = _httpx.ConnectError("boom")
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.side_effect = _httpx.ConnectError("boom")
             with pytest.raises(microblog.MicroblogError):
                 microblog.list_destinations("t")
 
@@ -187,9 +181,8 @@ class TestListDestinations:
         resp = mock.Mock()
         resp.status_code = 200
         resp.json.side_effect = ValueError("nope")
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = resp
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = resp
             with pytest.raises(microblog.MicroblogError):
                 microblog.list_destinations("t")
 
@@ -198,14 +191,13 @@ class TestCreatePost:
     def _post(self, **kwargs):
         kwargs.setdefault("token", "token-123")
         kwargs.setdefault("content", "Hello world")
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _config_response(
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response(
                 {}, 201
             )  # json() may be called; harmless
-            client.post.return_value.headers = {"Location": "https://myblog.micro.blog/2026/08/hello.html"}
+            req.return_value.headers = {"Location": "https://myblog.micro.blog/2026/08/hello.html"}
             result = microblog.create_post(**kwargs)
-        return client.post.call_args, result
+        return req.call_args, result
 
     def test_form_fields_include_h_entry_and_destination(self):
         (args, kwargs), result = self._post(
@@ -229,33 +221,29 @@ class TestCreatePost:
         assert "mp-photo-alt" not in data
 
     def test_202_accepted(self):
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
+        with mock.patch.object(microblog, "pinned_request") as req:
             resp = _config_response({}, 202)
             resp.headers = {"Location": "https://x.micro.blog/1"}
-            client.post.return_value = resp
+            req.return_value = resp
             result = microblog.create_post(token="t", content="hi")
         assert result["location"] == "https://x.micro.blog/1"
 
     def test_401_raises_auth_error(self):
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _config_response({"error": "unauthorized"}, 401)
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response({"error": "unauthorized"}, 401)
             with pytest.raises(microblog.MicroblogAuthError):
                 microblog.create_post(token="revoked", content="hi")
 
     def test_500_raises_generic_error(self):
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _config_response({"error": "boom"}, 500)
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response({"error": "boom"}, 500)
             with pytest.raises(microblog.MicroblogError):
                 microblog.create_post(token="t", content="hi")
 
     def test_500_with_unauthorized_body_is_not_auth_error(self):
         """A server error mentioning 'unauthorized' must stay retryable."""
-        with mock.patch.object(microblog.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _config_response(
+        with mock.patch.object(microblog, "pinned_request") as req:
+            req.return_value = _config_response(
                 {"error": "unauthorized request id 123"}, 500
             )
             with pytest.raises(microblog.MicroblogError) as exc:
@@ -268,9 +256,8 @@ class TestCreatePost:
 
 
 def test_test_connection_reports_blog_names():
-    with mock.patch.object(microblog.httpx, "Client") as client_cls:
-        client = client_cls.return_value.__enter__.return_value
-        client.get.return_value = _config_response(
+    with mock.patch.object(microblog, "pinned_request") as req:
+        req.return_value = _config_response(
             {"destination": [{"uid": "https://myblog.micro.blog/", "name": "My Blog"}]}
         )
         ok, message = microblog.test_connection("token-123")

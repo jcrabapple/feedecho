@@ -37,6 +37,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from feed_parser import SSRFError, pinned_request
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 30
@@ -193,9 +195,8 @@ def inspect_webhook(webhook_url: str) -> dict:
         # bare ValueError from deep inside the pipeline.
         raise DiscordError(f"Stored webhook URL is malformed: {e}") from e
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
-            resp = client.get(webhook_url)
-    except httpx.HTTPError as e:
+        resp = pinned_request("GET", webhook_url, timeout=REQUEST_TIMEOUT)
+    except (httpx.HTTPError, SSRFError) as e:
         # httpx exception text embeds the request URL, which carries the
         # webhook token — never interpolate it into logs or user messages.
         raise DiscordError(f"Could not reach Discord ({type(e).__name__})") from e
@@ -277,9 +278,10 @@ def send_webhook(
     if embed:
         payload["embeds"] = [embed]
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
-            resp = client.post(webhook_url, json=payload)
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "POST", webhook_url, timeout=REQUEST_TIMEOUT, json=payload
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         # See inspect_webhook: httpx exception text embeds the webhook token.
         raise DiscordError(f"Could not reach Discord ({type(e).__name__})") from e
     _raise_for_status(resp, "message send")

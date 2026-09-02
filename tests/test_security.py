@@ -64,6 +64,70 @@ class TestSSRFProtection:
         assert validate_feed_url("https://example.com/feed.xml") == "https://example.com/feed.xml"
 
 
+class TestBlockedIpRanges:
+    """The exact evasion-candidate set the blocklist must reject.
+
+    Pinned per-address so a refactor that widens or narrows the blocklist
+    fails loudly instead of silently shipping a hole. Includes 100.64.0.0/10
+    (CGNAT — the range that motivated the explicit check; is_global would
+    miss multicast/NAT64, so these stay explicit).
+    """
+
+    BLOCKED = [
+        "127.0.0.1",          # loopback
+        "::1",                # loopback v6
+        "10.0.0.1",           # RFC1918
+        "172.16.0.1",         # RFC1918
+        "172.31.255.255",     # RFC1918 edge
+        "192.168.1.1",        # RFC1918
+        "169.254.169.254",    # link-local (cloud metadata)
+        "100.64.0.1",         # CGNAT low edge (the gap this closes)
+        "100.64.255.255",     # CGNAT high edge
+        "0.0.0.0",            # unspecified
+        "::",                 # unspecified v6
+        "224.0.0.1",          # multicast
+        "ff02::1",            # multicast v6
+        "240.0.0.1",          # reserved (class E)
+        "fe80::1",            # link-local v6
+        "fc00::1",            # unique-local v6
+        "::ffff:127.0.0.1",   # IPv4-mapped loopback
+        "::ffff:10.0.0.1",    # IPv4-mapped private
+        "64:ff9b::1",         # NAT64
+        "198.18.0.1",         # benchmarking
+        "192.0.2.1",          # TEST-NET-1 documentation
+        "2001:db8::1",        # documentation v6
+    ]
+
+    ALLOWED = [
+        "8.8.8.8",
+        "93.184.216.34",
+        "2606:2800:220:1::1",
+        "2001:4860:4860::8888",
+    ]
+
+    def test_blocked_ranges(self):
+        import ipaddress as _ipa
+        from feed_parser import _is_blocked_ip
+
+        for addr in self.BLOCKED:
+            assert _is_blocked_ip(_ipa.ip_address(addr)), (
+                f"{addr} must be blocked, but passed"
+            )
+
+    def test_allowed_ranges(self):
+        import ipaddress as _ipa
+        from feed_parser import _is_blocked_ip
+
+        for addr in self.ALLOWED:
+            assert not _is_blocked_ip(_ipa.ip_address(addr)), (
+                f"{addr} must be allowed, but was blocked"
+            )
+
+    def test_cgnat_is_blocked_end_to_end(self):
+        with pytest.raises(SSRFError, match="private"):
+            validate_outbound_url("http://100.64.0.1/internal")
+
+
 class TestSSRFRedirectProtection:
     """Every redirect hop is validated before it is followed.
 

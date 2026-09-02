@@ -279,7 +279,7 @@ class TestSendWebhook:
         monkeypatch.setattr(settings, "MULTI", False)
 
     def test_posts_json_with_headers(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 204)
             webhook.send_webhook(
@@ -288,59 +288,60 @@ class TestSendWebhook:
         _, kwargs = client.post.call_args
         assert kwargs["json"] == {"text": "hi"}
         assert kwargs["headers"] == {"Authorization": "Bearer xyz"}
-        # Redirects are disabled on the client itself.
-        assert client_cls.call_args.kwargs["follow_redirects"] is False
+        # Redirect-following is disabled inside feed_parser.unpinned_client
+        # (pinned by test_ssrf_pinning.py).
+        assert client_cls.call_args.kwargs["timeout"] == webhook.REQUEST_TIMEOUT
 
     def test_2xx_success(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 200)
             webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})  # no raise
 
     def test_3xx_is_error(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 302)
             with pytest.raises(webhook.WebhookError):
                 webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})
 
     def test_401_is_auth_error(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 401)
             with pytest.raises(webhook.WebhookAuthError):
                 webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})
 
     def test_403_is_auth_error(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 403)
             with pytest.raises(webhook.WebhookAuthError):
                 webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})
 
     def test_404_is_not_found(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 404)
             with pytest.raises(webhook.WebhookNotFoundError):
                 webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})
 
     def test_400_is_rejected(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 400)
             with pytest.raises(webhook.WebhookRejectedError):
                 webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})
 
     def test_other_4xx_is_permanent(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 405)
             with pytest.raises(webhook.WebhookRejectedError):
                 webhook.send_webhook(HOOK_URL, {}, {"text": "hi"})
 
     def test_429_carries_retry_after(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 429, headers={"Retry-After": "45"})
             with pytest.raises(webhook.WebhookRateLimitError) as exc_info:
@@ -348,7 +349,7 @@ class TestSendWebhook:
         assert exc_info.value.retry_after == 45.0
 
     def test_429_malformed_retry_after_is_none(self):
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.return_value = _resp({}, 429, headers={"Retry-After": "never"})
             with pytest.raises(webhook.WebhookRateLimitError) as exc_info:
@@ -358,7 +359,7 @@ class TestSendWebhook:
     def test_network_error_is_scrubbed(self):
         import httpx as _httpx
 
-        with mock.patch.object(webhook.httpx, "Client") as client_cls:
+        with mock.patch.object(webhook, "unpinned_client") as client_cls:
             client = client_cls.return_value.__enter__.return_value
             client.post.side_effect = _httpx.ConnectError("boom", request=mock.Mock())
             with pytest.raises(webhook.WebhookError) as exc_info:

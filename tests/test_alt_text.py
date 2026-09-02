@@ -132,7 +132,7 @@ class TestGenerateAltText:
             def post(self, url, headers=None, json=None):
                 return FakeResponse()
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == "A red sports car on a mountain road."
 
@@ -164,7 +164,7 @@ class TestGenerateAltText:
             def post(self, url, headers=None, json=None):
                 return FakeResponse()
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == "Padded description"
 
@@ -187,7 +187,7 @@ class TestGenerateAltText:
                     "500 Server Error", request=None, response=None
                 )
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         # Should retry and ultimately return empty string, not raise
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
@@ -209,7 +209,7 @@ class TestGenerateAltText:
             def post(self, url, headers=None, json=None):
                 raise alt_text.httpx.RequestError("Network down")
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
@@ -237,7 +237,7 @@ class TestGenerateAltText:
             def post(self, url, headers=None, json=None):
                 return FakeResponse()
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
@@ -265,7 +265,7 @@ class TestGenerateAltText:
             def post(self, url, headers=None, json=None):
                 return FakeResponse()
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
@@ -298,7 +298,7 @@ class TestGenerateAltText:
                 captured["body"] = json
                 return FakeResponse()
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         alt_text.generate_alt_text(b"fake-image", "image/png")
 
         assert captured["url"] == "https://api.openai.com/v1/chat/completions"
@@ -341,7 +341,7 @@ class TestGenerateAltText:
             def post(self, url, headers=None, json=None):
                 return FakeResponse()
 
-        monkeypatch.setattr(alt_text.httpx, "Client", FakeClient)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == "A blue sky over the ocean."
 

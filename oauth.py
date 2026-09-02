@@ -12,7 +12,7 @@ import httpx
 
 import settings
 from database import get_db
-from feed_parser import SSRFError, validate_outbound_url
+from feed_parser import SSRFError, pinned_request, validate_outbound_url
 from settings import AUTH_TOKEN, STATE_SECRET
 
 SCOPES = "read write"
@@ -198,13 +198,11 @@ def get_or_create_app(instance: str, allow_refresh: bool = True) -> dict:
     }
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(30.0),
-            follow_redirects=False,
-        ) as client:
-            response = client.post(f"{instance}/api/v1/apps", data=data)
-            response.raise_for_status()
-            result = response.json()
+        response = pinned_request(
+            "POST", f"{instance}/api/v1/apps", timeout=30.0, data=data
+        )
+        response.raise_for_status()
+        result = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError("Unable to register OAuth application with instance") from exc
 
@@ -273,13 +271,11 @@ def exchange_code(instance: str, code: str) -> dict:
     }
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(30.0),
-            follow_redirects=False,
-        ) as client:
-            response = client.post(f"{instance}/oauth/token", data=data)
-            response.raise_for_status()
-            result = response.json()
+        response = pinned_request(
+            "POST", f"{instance}/oauth/token", timeout=30.0, data=data
+        )
+        response.raise_for_status()
+        result = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError("OAuth token exchange failed") from exc
 

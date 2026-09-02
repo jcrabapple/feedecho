@@ -15,6 +15,7 @@ Network-adjacent pieces use fakes; only the pin-bookkeeping logic is real.
 """
 
 import socket
+from pathlib import Path
 from unittest import mock
 
 import httpx
@@ -27,7 +28,9 @@ from feed_parser import (
     _hostname_pin_key,
     _pins_for_urls,
     _fetch_with_redirect_validation,
+    pinned_request,
     ssrf_client,
+    unpinned_client,
 )
 
 
@@ -310,3 +313,119 @@ class TestRealPinnedTransport:
             assert "example.com" in backend._pins
         finally:
             client.close()
+
+
+# ── pinned_request: the one-call entry point modules now use ────────────────
+
+
+class TestPinnedRequest:
+    def _redirect(self, location, status=302):
+        resp = mock.MagicMock()
+        resp.is_redirect = True
+        resp.status_code = status
+        resp.headers = {"location": location}
+        return resp
+
+    def test_redirect_to_private_ip_is_refused(self):
+        """S1: a redirect hop to an internal address must not be dialed."""
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        fake_client.request.return_value = self._redirect(
+            "http://169.254.169.254/latest/meta-data/"
+        )
+
+        with mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            with pytest.raises(SSRFError, match="private"):
+                pinned_request(
+                    "GET", "https://origin.example/feed", follow_redirects=True
+                )
+        assert not backend._pins
+
+    def test_redirect_to_public_ip_is_validated_and_pinned(self):
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        final = mock.MagicMock()
+        final.is_redirect = False
+        fake_client.request.side_effect = [
+            self._redirect("https://cdn.example/feed.xml"),
+            final,
+        ]
+
+        with mock.patch.object(
+            feed_parser.socket,
+            "getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))],
+        ), mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            resp = pinned_request(
+                "GET", "https://origin.example/feed", follow_redirects=True
+            )
+
+        assert resp is final
+        assert backend._pins.get("cdn.example") == "93.184.216.34"
+
+    def test_redirects_not_followed_by_default(self):
+        fake_client = mock.MagicMock()
+        backend = _ExposedBackend()
+        redirect = self._redirect("http://169.254.169.254/latest/meta-data/")
+        fake_client.request.return_value = redirect
+
+        with mock.patch.object(
+            feed_parser, "ssrf_client", return_value=(fake_client, backend)
+        ):
+            resp = pinned_request("GET", "https://origin.example/feed")
+
+        # follow_redirects defaults False: the redirect comes back unvalidated,
+        # exactly like a bare httpx.Client(follow_redirects=False) would.
+        assert resp is redirect
+        assert not backend._pins
+
+
+class TestClientFactoriesDisableRedirects:
+    def test_unpinned_client_disables_redirects(self):
+        client = unpinned_client(timeout=5)
+        try:
+            assert client.follow_redirects is False
+        finally:
+            client.close()
+
+    def test_ssrf_client_disables_redirects(self):
+        client, backend = ssrf_client(["https://example.com/"], timeout=5)
+        try:
+            assert client.follow_redirects is False
+        finally:
+            client.close()
+
+
+# ── S2 enforcement: no bare httpx.Client outside the machinery ──────────────
+
+
+class TestNoBareHttpxClientOutsideFeedParser:
+    """Outbound modules must route through pinned_request/ssrf_client/
+    unpinned_client — never construct httpx.Client themselves.
+
+    A bare httpx.Client re-resolves the hostname at connect time, silently
+    re-opening the DNS-rebinding TOCTOU window that the pinned transport
+    closes. This is the outbound-HTTP sibling of
+    test_no_async_route_performs_blocking_io.
+    """
+
+    def test_bare_httpx_client_only_in_feed_parser(self):
+        repo = Path(__file__).resolve().parent.parent
+        offenders = {}
+        for py in repo.glob("*.py"):
+            lines = [
+                i + 1
+                for i, line in enumerate(py.read_text().splitlines())
+                if "httpx.Client(" in line
+            ]
+            if lines and py.name != "feed_parser.py":
+                offenders[py.name] = lines
+        assert offenders == {}, (
+            "bare httpx.Client( found outside feed_parser.py — route outbound "
+            "requests through pinned_request/ssrf_client/unpinned_client. "
+            f"Offenders: {offenders}"
+        )

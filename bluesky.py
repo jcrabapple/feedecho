@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import httpx
 
-from feed_parser import validate_outbound_url
+from feed_parser import SSRFError, pinned_request, validate_outbound_url
 
 PUBLIC_API = "https://public.api.bsky.app"
 PLC_DIRECTORY = "https://plc.directory"
@@ -105,15 +105,14 @@ def resolve_pds(handle: str) -> tuple[str, str]:
     validate_outbound_url(PUBLIC_API)
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(15.0), follow_redirects=False
-        ) as client:
-            response = client.get(
-                f"{PUBLIC_API}/xrpc/com.atproto.identity.resolveHandle",
-                params={"handle": handle},
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = pinned_request(
+            "GET",
+            f"{PUBLIC_API}/xrpc/com.atproto.identity.resolveHandle",
+            timeout=15.0,
+            params={"handle": handle},
+        )
+        response.raise_for_status()
+        data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise BlueskyError(f"Could not resolve handle '{handle}'") from exc
 
@@ -128,23 +127,19 @@ def resolve_pds(handle: str) -> tuple[str, str]:
         # before fetching, like every other outbound hop.
         validate_outbound_url(doc_url)
         try:
-            with httpx.Client(
-                timeout=httpx.Timeout(15.0), follow_redirects=False
-            ) as client:
-                response = client.get(doc_url)
-                response.raise_for_status()
-                doc = response.json()
+            response = pinned_request("GET", doc_url, timeout=15.0)
+            response.raise_for_status()
+            doc = response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise BlueskyError(f"Could not fetch DID document for '{handle}'") from exc
     else:
         # did:plc:... -> query the PLC directory for the PDS service endpoint.
         try:
-            with httpx.Client(
-                timeout=httpx.Timeout(15.0), follow_redirects=False
-            ) as client:
-                response = client.get(f"{PLC_DIRECTORY}/{quote(did, safe='')}")
-                response.raise_for_status()
-                doc = response.json()
+            response = pinned_request(
+                "GET", f"{PLC_DIRECTORY}/{quote(did, safe='')}", timeout=15.0
+            )
+            response.raise_for_status()
+            doc = response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise BlueskyError(f"Could not fetch DID document for '{handle}'") from exc
 
@@ -196,14 +191,13 @@ def create_session(pds: str, handle: str, app_password: str) -> dict:
     validate_outbound_url(pds)
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(30.0), follow_redirects=False
-        ) as client:
-            response = client.post(
-                f"{pds}/xrpc/com.atproto.server.createSession",
-                json={"identifier": handle, "password": app_password},
-            )
-    except httpx.RequestError as exc:
+        response = pinned_request(
+            "POST",
+            f"{pds}/xrpc/com.atproto.server.createSession",
+            timeout=30.0,
+            json={"identifier": handle, "password": app_password},
+        )
+    except (httpx.RequestError, SSRFError) as exc:
         raise BlueskyError(f"Could not reach PDS {pds}") from exc
 
     if response.status_code in (400, 401):
@@ -234,14 +228,13 @@ def refresh_session(pds: str, refresh_jwt: str) -> dict:
     validate_outbound_url(pds)
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(30.0), follow_redirects=False
-        ) as client:
-            response = client.post(
-                f"{pds}/xrpc/com.atproto.server.refreshSession",
-                headers={"Authorization": f"Bearer {refresh_jwt}"},
-            )
-    except httpx.RequestError as exc:
+        response = pinned_request(
+            "POST",
+            f"{pds}/xrpc/com.atproto.server.refreshSession",
+            timeout=30.0,
+            headers={"Authorization": f"Bearer {refresh_jwt}"},
+        )
+    except (httpx.RequestError, SSRFError) as exc:
         raise BlueskyError(f"Could not reach PDS {pds}") from exc
 
     if response.status_code in (400, 401):
@@ -275,13 +268,12 @@ def delete_session(pds: str, refresh_jwt: str) -> None:
     pds = pds.rstrip("/")
     try:
         validate_outbound_url(pds)
-        with httpx.Client(
-            timeout=httpx.Timeout(15.0), follow_redirects=False
-        ) as client:
-            client.post(
-                f"{pds}/xrpc/com.atproto.server.deleteSession",
-                headers={"Authorization": f"Bearer {refresh_jwt}"},
-            )
+        pinned_request(
+            "POST",
+            f"{pds}/xrpc/com.atproto.server.deleteSession",
+            timeout=15.0,
+            headers={"Authorization": f"Bearer {refresh_jwt}"},
+        )
     except Exception:
         # SSRF validation failure or network error — cleanup is best-effort.
         pass
@@ -445,18 +437,17 @@ def upload_blob(
         raise BlueskyError("Image exceeds the 1 MB Bluesky blob limit")
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(60.0), follow_redirects=False
-        ) as client:
-            response = client.post(
-                f"{pds}/xrpc/com.atproto.repo.uploadBlob",
-                headers={
-                    "Authorization": f"Bearer {access_jwt}",
-                    "Content-Type": content_type,
-                },
-                content=image_bytes,
-            )
-    except httpx.RequestError:
+        response = pinned_request(
+            "POST",
+            f"{pds}/xrpc/com.atproto.repo.uploadBlob",
+            timeout=60.0,
+            headers={
+                "Authorization": f"Bearer {access_jwt}",
+                "Content-Type": content_type,
+            },
+            content=image_bytes,
+        )
+    except (httpx.RequestError, SSRFError):
         return None
 
     detail = _error_detail(response)
@@ -501,15 +492,14 @@ def create_post(
     payload = {"repo": repo, "collection": POST_COLLECTION, "record": record}
 
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(30.0), follow_redirects=False
-        ) as client:
-            response = client.post(
-                f"{pds}/xrpc/com.atproto.repo.createRecord",
-                headers={"Authorization": f"Bearer {access_jwt}"},
-                json=payload,
-            )
-    except httpx.RequestError as exc:
+        response = pinned_request(
+            "POST",
+            f"{pds}/xrpc/com.atproto.repo.createRecord",
+            timeout=30.0,
+            headers={"Authorization": f"Bearer {access_jwt}"},
+            json=payload,
+        )
+    except (httpx.RequestError, SSRFError) as exc:
         raise BlueskyError(f"Could not reach PDS {pds}") from exc
 
     detail = _error_detail(response)

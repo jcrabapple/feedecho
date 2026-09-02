@@ -191,9 +191,8 @@ class TestDiscoverBaseURL:
         monkeypatch.setattr(matrix, "validate_outbound_url", lambda url: url)
 
     def test_no_well_known_falls_back_to_homeserver(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({}, 404)
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({}, 404)
             base = matrix.discover_base_url("https://matrix.org")
         assert base == "https://matrix.org"
 
@@ -201,18 +200,16 @@ class TestDiscoverBaseURL:
         well_known = {
             "m.homeserver": {"base_url": "https://federated.matrix.org"}
         }
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(well_known)
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp(well_known)
             base = matrix.discover_base_url("https://matrix.org")
         assert base == "https://federated.matrix.org"
 
     def test_network_error_falls_back(self):
         import httpx as _httpx
 
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.side_effect = _httpx.ConnectError("boom")
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.side_effect = _httpx.ConnectError("boom")
             base = matrix.discover_base_url("https://matrix.org")
         assert base == "https://matrix.org"
 
@@ -224,9 +221,8 @@ class TestDiscoverBaseURL:
         # *missing base_url* paths fall back; for an unreachable hostname the
         # real SSRF guard catches it at connection time.
         well_known = {"m.homeserver": {"base_url": "http://127.0.0.1:8443"}}
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(well_known)
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp(well_known)
             base = matrix.discover_base_url("https://matrix.org")
         # 127.0.0.1 is a private IP → validate_outbound_url blocks it → fallback
         # (but with the bypass active, it's accepted). Restore real validation
@@ -236,9 +232,8 @@ class TestDiscoverBaseURL:
 
     def test_non_dict_delegation_ignored(self):
         well_known = {"m.homeserver": "https://matrix.org"}
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(well_known)
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp(well_known)
             base = matrix.discover_base_url("https://matrix.org")
         assert base == "https://matrix.org"
 
@@ -252,23 +247,20 @@ class TestWhoami:
         monkeypatch.setattr(matrix, "validate_outbound_url", lambda url: url)
 
     def test_returns_user_id(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({"user_id": "@bot:example.org"})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"user_id": "@bot:example.org"})
             uid = matrix.whoami("https://matrix.org", "token")
         assert uid == "@bot:example.org"
 
     def test_missing_user_id_is_error(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({})
             with pytest.raises(matrix.MatrixError):
                 matrix.whoami("https://matrix.org", "token")
 
     def test_401_is_auth_error(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp(
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp(
                 {"errcode": "M_UNKNOWN_TOKEN", "error": "Unknown token"}, 401
             )
             with pytest.raises(matrix.MatrixAuthError):
@@ -284,16 +276,14 @@ class TestResolveRoom:
         assert matrix.resolve_room("https://matrix.org", "t", "!abc:example.org") == "!abc:example.org"
 
     def test_alias_resolved(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({"room_id": "!abc:example.org"})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"room_id": "!abc:example.org"})
             rid = matrix.resolve_room("https://matrix.org", "t", "#feeds:example.org")
         assert rid == "!abc:example.org"
 
     def test_alias_404_is_error(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({"errcode": "M_NOT_FOUND"}, 404)
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"errcode": "M_NOT_FOUND"}, 404)
             with pytest.raises(matrix.MatrixError):
                 matrix.resolve_room("https://matrix.org", "t", "#nope:example.org")
 
@@ -304,16 +294,14 @@ class TestJoinedRooms:
         monkeypatch.setattr(matrix, "validate_outbound_url", lambda url: url)
 
     def test_returns_set(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({"joined_rooms": ["!a:org", "!b:org"]})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"joined_rooms": ["!a:org", "!b:org"]})
             joined = matrix.joined_rooms("https://matrix.org", "t")
         assert joined == {"!a:org", "!b:org"}
 
     def test_empty_list_ok(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.get.return_value = _resp({"joined_rooms": []})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"joined_rooms": []})
             joined = matrix.joined_rooms("https://matrix.org", "t")
         assert joined == set()
 
@@ -371,44 +359,40 @@ class TestSendMessage:
         monkeypatch.setattr(matrix, "validate_outbound_url", lambda url: url)
 
     def test_sends_text_event(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.put.return_value = _resp({"event_id": "$evt:example.org"})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"event_id": "$evt:example.org"})
             eid = matrix.send_message(
                 "https://matrix.org", "tok", "!room:example.org", "Hello", "txn-1"
             )
         assert eid == "$evt:example.org"
-        _, kwargs = client.put.call_args
+        _, kwargs = req.call_args
         body = kwargs["json"]
         assert body["msgtype"] == "m.text"
         assert body["body"] == "Hello"
 
     def test_url_in_text_adds_formatted_body(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.put.return_value = _resp({"event_id": "$evt:example.org"})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"event_id": "$evt:example.org"})
             matrix.send_message(
                 "https://matrix.org", "tok", "!room:example.org",
                 "See https://example.com/post", "txn-1"
             )
-        _, kwargs = client.put.call_args
+        _, kwargs = req.call_args
         body = kwargs["json"]
         assert body["format"] == "org.matrix.custom.html"
         assert '<a href="https://example.com/post">https://example.com/post</a>' in body["formatted_body"]
 
     def test_auth_error_on_401(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.put.return_value = _resp(
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp(
                 {"errcode": "M_UNKNOWN_TOKEN", "error": "Unknown"}, 401
             )
             with pytest.raises(matrix.MatrixAuthError):
                 matrix.send_message("https://matrix.org", "tok", "!room:example.org", "Hi", "txn-1")
 
     def test_permission_error_on_forbidden(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.put.return_value = _resp(
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp(
                 {"errcode": "M_FORBIDDEN", "error": "Not in room"}, 403
             )
             with pytest.raises(matrix.MatrixPermissionError):
@@ -440,9 +424,8 @@ class TestUploadMedia:
         monkeypatch.setattr(matrix, "validate_outbound_url", lambda url: url)
 
     def test_returns_mxc_uri(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({"content_uri": "mxc://matrix.org/abc123"})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"content_uri": "mxc://matrix.org/abc123"})
             uri = matrix.upload_media("https://matrix.org", "tok", b"\x89PNG", "image/png")
         assert uri == "mxc://matrix.org/abc123"
 
@@ -456,9 +439,8 @@ class TestUploadMedia:
             matrix.upload_media("https://matrix.org", "tok", big, "image/png")
 
     def test_missing_content_uri_is_error(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.post.return_value = _resp({})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({})
             with pytest.raises(matrix.MatrixError):
                 matrix.upload_media("https://matrix.org", "tok", b"\x89PNG", "image/png")
 
@@ -469,15 +451,14 @@ class TestSendImage:
         monkeypatch.setattr(matrix, "validate_outbound_url", lambda url: url)
 
     def test_sends_image_event(self):
-        with mock.patch.object(matrix.httpx, "Client") as client_cls:
-            client = client_cls.return_value.__enter__.return_value
-            client.put.return_value = _resp({"event_id": "$img:example.org"})
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"event_id": "$img:example.org"})
             eid = matrix.send_image(
                 "https://matrix.org", "tok", "!room:example.org",
                 "mxc://matrix.org/abc", "A photo", "image/png", 1024, "txn-img"
             )
         assert eid == "$img:example.org"
-        _, kwargs = client.put.call_args
+        _, kwargs = req.call_args
         body = kwargs["json"]
         assert body["msgtype"] == "m.image"
         assert body["body"] == "A photo"

@@ -19,6 +19,8 @@ import logging
 
 import httpx
 
+from feed_parser import SSRFError, pinned_request
+
 logger = logging.getLogger(__name__)
 
 MICROPUB_ENDPOINT = "https://micro.blog/micropub"
@@ -69,14 +71,15 @@ def fetch_config(token: str) -> dict:
     non-JSON body, unexpected status).
     """
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-            resp = client.get(
-                MICROPUB_ENDPOINT,
-                params={"q": "config"},
-                headers={"Authorization": _bearer(token)},
-                follow_redirects=True,
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "GET",
+            MICROPUB_ENDPOINT,
+            timeout=REQUEST_TIMEOUT,
+            params={"q": "config"},
+            headers={"Authorization": _bearer(token)},
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MicroblogError(f"Could not reach micro.blog: {e}") from e
 
     detail = _error_detail(resp)
@@ -168,14 +171,15 @@ def create_post(
         data["name"] = name
 
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-            resp = client.post(
-                MICROPUB_ENDPOINT,
-                data=data,
-                headers={"Authorization": _bearer(token)},
-                follow_redirects=True,
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "POST",
+            MICROPUB_ENDPOINT,
+            timeout=REQUEST_TIMEOUT,
+            data=data,
+            headers={"Authorization": _bearer(token)},
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MicroblogError(f"Could not reach micro.blog: {e}") from e
 
     detail = _error_detail(resp)

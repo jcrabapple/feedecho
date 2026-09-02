@@ -88,6 +88,14 @@ class TestSmtpSaveSsrFGuard:
         r = _save(c, host="smtp.gmail.com", port="587")
         assert r.status_code == 303
 
+    def test_malformed_host_returns_400_not_500(self, multi_client):
+        _, c = multi_client
+        # Unbracketed IPv6 makes urlparse raise ValueError on .hostname —
+        # the guard must catch it and return 400, not a 500.
+        r = _save(c, host="::1")
+        assert r.status_code == 400
+        assert "public hostname" in r.text
+
     def test_private_ip_not_reached_by_the_guard_passthrough(self, multi_client, monkeypatch):
         """The SSRF rejection happens before any DB write; a rejected save
         must not persist a partial row."""
@@ -138,6 +146,24 @@ class TestSmtpTestRoute:
         body = r.json()
         assert body["success"] is True
         assert "x@example.com" in body["message"]
+
+    def test_dial_time_revalidation_rejects_now_private_host(self, multi_client, monkeypatch):
+        """Save-time validation passes (public), but at dial time the host
+        resolves private — _send_via must refuse rather than dial it."""
+        import email_sender
+
+        app_module, c = multi_client
+        monkeypatch.setattr(app_module, "validate_outbound_url", lambda u: u)
+        _save(c, host="smtp.gmail.com", port="587")
+
+        def _now_private(url):
+            raise SSRFError("Blocked: private/reserved")
+
+        monkeypatch.setattr(email_sender, "validate_outbound_url", _now_private)
+        r = c.post("/api/settings/smtp/test", data={"test_email": "x@example.com"})
+        body = r.json()
+        assert body["success"] is False
+        assert "SMTP connection failed" in body["message"]
 
 
 class TestSingleModeUnchanged:

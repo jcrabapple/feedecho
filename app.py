@@ -2811,22 +2811,36 @@ _smtp_test_lock = threading.Lock()
 _smtp_test_attempts: dict[str, list[float]] = {}
 _SMTP_TEST_LIMIT = 10
 _SMTP_TEST_WINDOW = 600  # seconds
+_SMTP_TEST_MAX_IPS = 10_000  # hard cap on tracked buckets
 
 
-def _smtp_test_throttled(ip: str) -> bool:
+def _check_and_record_smtp_test(ip: str) -> bool:
+    """Atomically rate-limit one SMTP test attempt.
+
+    Returns True when the attempt must be refused (limit reached); otherwise
+    records the attempt and returns False. Check-and-append happen under one
+    lock so concurrent requests cannot all slip past the limit. A global sweep
+    runs when the bucket count crosses _SMTP_TEST_MAX_IPS, so a source-IP
+    spray cannot leave an unbounded number of stale buckets behind.
+    """
     with _smtp_test_lock:
         now = time.monotonic()
+        if len(_smtp_test_attempts) >= _SMTP_TEST_MAX_IPS:
+            for key in list(_smtp_test_attempts):
+                recent = [t for t in _smtp_test_attempts[key] if now - t < _SMTP_TEST_WINDOW]
+                if recent:
+                    _smtp_test_attempts[key] = recent
+                else:
+                    _smtp_test_attempts.pop(key, None)
         recent = [t for t in _smtp_test_attempts.get(ip, []) if now - t < _SMTP_TEST_WINDOW]
         if recent:
             _smtp_test_attempts[ip] = recent
         else:
             _smtp_test_attempts.pop(ip, None)
-        return len(recent) >= _SMTP_TEST_LIMIT
-
-
-def _record_smtp_test(ip: str) -> None:
-    with _smtp_test_lock:
-        _smtp_test_attempts.setdefault(ip, []).append(time.monotonic())
+        if len(recent) >= _SMTP_TEST_LIMIT:
+            return True
+        _smtp_test_attempts.setdefault(ip, []).append(now)
+        return False
 
 
 @app.post("/api/settings/smtp")
@@ -2859,7 +2873,9 @@ async def save_smtp_settings(
             )
         try:
             validate_outbound_url(f"http://{smtp_host.strip()}")
-        except SSRFError:
+        except (SSRFError, ValueError):
+            # ValueError: a malformed host (unbracketed IPv6, embedded port,
+            # stray whitespace) that urlparse chokes on — reject the same way.
             return render(
                 "error.html", request, status_code=400, code=400,
                 message="SMTP host must be a public hostname or IP address",
@@ -2915,13 +2931,11 @@ def test_smtp(
     if settings.MULTI:
         # Rate-limit the outbound SMTP connection attempt, and scrub the raw
         # smtplib error text below (it is a port/banner oracle to a tenant).
-        ip = auth._client_ip(request)
-        if _smtp_test_throttled(ip):
+        if _check_and_record_smtp_test(auth._client_ip(request)):
             return {
                 "success": False,
                 "message": "Too many test attempts. Please wait before trying again.",
             }
-        _record_smtp_test(ip)
     success, message = test_smtp_connection(
         test_email, user_id=current_user_id(request)
     )

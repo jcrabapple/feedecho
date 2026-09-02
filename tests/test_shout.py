@@ -97,8 +97,10 @@ class TestShout:
         assert "return false" in resp.text
         assert 'name="destination"' in resp.text
         # Overlay dialog + variables tooltip, not the old inline <details> form
-        assert 'class="reader-shout"' in resp.text
+        assert '<dialog class="reader-shout"' in resp.text
+        assert '<details class="reader-shout"' not in resp.text
         assert 'role="tooltip"' in resp.text
+        assert 'aria-describedby="shout-vars-' in resp.text
         assert "{{ title }}" in resp.text
 
 

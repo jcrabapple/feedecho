@@ -821,11 +821,16 @@ async function readerMarkAllRead(btn) {
 
 function readerOpenShout(itemId) {
     const dlg = document.getElementById('shout-' + itemId);
-    if (dlg) dlg.showModal();
+    if (!dlg) return;
+    // Every open starts from the defaults; Cancel/Esc therefore discards edits.
+    const form = dlg.querySelector('form');
+    if (form) form.reset();
+    dlg.showModal();
 }
 
 // Transient toast (role=status) for overlay actions whose dialog has closed.
 function readerToast(text) {
+    document.querySelector('.reader-toast')?.remove();
     const toast = document.createElement('div');
     toast.className = 'reader-toast';
     toast.setAttribute('role', 'status');

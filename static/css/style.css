@@ -1307,7 +1307,7 @@ details.account-section > summary:focus-visible {
 .reader-shout-actions .action-status { flex: 1 1 auto; margin-right: auto; }
 
 /* Variables tooltip (hover/focus) next to the Template label */
-.reader-shout-tpl-label { flex-direction: row; align-items: center; }
+.reader-shout-tpl-head { display: flex; flex-direction: row; align-items: center; gap: 0.35rem; }
 .reader-shout-vars { position: relative; display: inline-flex; align-items: center; cursor: help; }
 .reader-shout-vars-trigger {
     display: inline-flex; align-items: center; justify-content: center;

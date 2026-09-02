@@ -111,13 +111,13 @@
                         {% endfor %}
                       </select>
                     </label>
-                    <label for="shout-tpl-{{ item.id }}" class="reader-shout-tpl-label">
-                      Template
-                      <span class="reader-shout-vars" tabindex="0" aria-label="Available template variables">
+                    <div class="reader-shout-tpl-head">
+                      <label for="shout-tpl-{{ item.id }}">Template</label>
+                      <span class="reader-shout-vars" tabindex="0" aria-label="Available template variables" aria-describedby="shout-vars-{{ item.id }}">
                         <span class="reader-shout-vars-trigger" aria-hidden="true">?</span>
-                        <span class="reader-shout-vars-tip" role="tooltip">{% for v in template_vars %}<code>{{ v.var }}</code>{% if not loop.last %} {% endif %}{% endfor %}</span>
+                        <span class="reader-shout-vars-tip" id="shout-vars-{{ item.id }}" role="tooltip">{% for v in template_vars %}<code>{{ v.var }}</code>{% if not loop.last %} {% endif %}{% endfor %}</span>
                       </span>
-                    </label>
+                    </div>
                     <textarea name="template" id="shout-tpl-{{ item.id }}" rows="3" spellcheck="false">{{ default_template }}</textarea>
                     <div class="reader-shout-actions">
                       <button type="button" class="btn-sm" onclick="this.closest('dialog').close()">Cancel</button>

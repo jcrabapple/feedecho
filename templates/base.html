@@ -87,8 +87,8 @@
         {% if posting_paused %}
         <div class="flash flash-warn" role="status">
             <strong>Posting paused:</strong> your trial has ended, so FeedEcho has stopped
-            checking your feeds. Nothing was deleted — upgrade or contact the operator to
-            resume, and your feeds pick up exactly where they left off.
+            checking your feeds. Nothing was deleted — {% if billing_enabled %}<a href="/settings#billing">subscribe to continue</a>{% else %}upgrade or contact the operator{% endif %} and
+            your feeds pick up exactly where they left off.
         </div>
         {% endif %}
         {% block content %}{% endblock %}

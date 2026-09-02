@@ -142,4 +142,26 @@
         <button type="submit">Import</button>
     </form>
 </section>
+
+{% if billing_enabled %}
+<section id="billing">
+    <h2>Billing</h2>
+    {% if plan == 'trial' %}
+    <p class="hint">You're on the free trial{% if trial_ends_date %} — it ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>{% endif %}. Subscribe to unlock higher limits and keep posting.</p>
+    <form method="post" action="/api/billing/checkout" class="inline-form">
+        <input type="hidden" name="interval" value="monthly">
+        <button type="submit">Subscribe — $4/month</button>
+    </form>
+    <form method="post" action="/api/billing/checkout" class="inline-form">
+        <input type="hidden" name="interval" value="yearly">
+        <button type="submit">Subscribe — $40/year</button>
+    </form>
+    {% elif plan == 'paid' %}
+    <div class="alert alert-success" role="status">You're on the paid plan.</div>
+    <form method="post" action="/api/billing/portal" class="inline-form">
+        <button type="submit">Manage subscription</button>
+    </form>
+    {% endif %}
+</section>
+{% endif %}
 {% endblock %}

@@ -536,6 +536,9 @@ def _trial_context(request: Request) -> dict:
         # agree with reality, not just the dashboard's).
         "posting_paused": plans.posting_paused(plan, row["trial_ends_at"]),
         "plan_limits": settings.PLAN_LIMITS.get(plan) or settings.PLAN_LIMITS["trial"],
+        # True only when the hosted deployment has mounted its private billing
+        # module — templates gate the "Subscribe"/"Manage" UI on this flag.
+        "billing_enabled": settings.BILLING_ENABLED,
     }
     # Trial users see their limits and where they stand against them on the
     # dashboard (the banner lives in dashboard.html). One cheap count query

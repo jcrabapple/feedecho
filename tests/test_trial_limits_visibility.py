@@ -128,3 +128,79 @@ class TestTrialLimitsOnDashboard:
             encoding="utf-8"
         )
         assert 'style.css?v=47' in base
+
+
+class TestBillingCtaSeam:
+    """The billing UI is gated on settings.BILLING_ENABLED (set by the hosted
+    deployment). Disabled = the "launch soon" copy; enabled = a Subscribe CTA."""
+
+    def test_subscribe_cta_when_enabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        page = _dashboard(monkeypatch, tmp_path)
+        assert "Subscribe" in page
+
+    def test_launch_soon_copy_when_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        page = _dashboard(monkeypatch, tmp_path)
+        assert "Paid plans launch soon" in page
+
+    def test_settings_billing_section_when_enabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(USER_ID, "trial@example.com", 0))
+            page = c.get("/settings").text
+        assert 'id="billing"' in page
+        assert "$4/month" in page
+        assert "$40/year" in page
+
+    def test_settings_billing_section_hidden_when_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(USER_ID, "trial@example.com", 0))
+            page = c.get("/settings").text
+        assert 'id="billing"' not in page
+
+
+class TestBillingRegister:
+    """Card-gated trial: with billing on, a fresh signup redirects into Stripe
+    Checkout and its trial clock stays PAUSED (past trial_ends_at) until the
+    card is collected. Without billing, the original flow is unchanged."""
+
+    def _register(self, c, email):
+        import auth as auth_mod
+
+        auth_mod._register_attempts.clear()
+        return c.post(
+            "/register",
+            data={"email": email, "password": "hunter222", "confirm": "hunter222"},
+            follow_redirects=False,
+        )
+
+    def test_billing_register_redirects_to_checkout_and_pauses_trial(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            r = self._register(c, "new@example.com")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/api/billing/checkout?interval=monthly"
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT trial_ends_at FROM users WHERE email = ?", ("new@example.com",)
+            ).fetchone()
+        assert row["trial_ends_at"] == "2000-01-01 00:00:00"  # paused until card
+
+    def test_no_billing_register_redirects_home_with_active_trial(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            r = self._register(c, "new2@example.com")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/"
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT trial_ends_at FROM users WHERE email = ?", ("new2@example.com",)
+            ).fetchone()
+        assert row["trial_ends_at"] != "2000-01-01 00:00:00"  # clock running
+        assert row["trial_ends_at"] > "2026-01-01 00:00:00"

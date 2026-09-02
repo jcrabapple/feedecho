@@ -56,7 +56,7 @@ let
     type = "github";
     owner = "jcrabapple";
     repo = "feedecho";
-    rev = "v1.35.2";
+    rev = "v1.35.3";
   };
   feedechoPkg = pkgs.callPackage (feedechoSrc + "/nix/package.nix") { src = feedechoSrc; };
 in {
@@ -80,7 +80,7 @@ fetching from GitHub and needs its `fetchFromGitHub` hash set — it is
 `lib.fakeHash` by default. Replace it after the first build:
 
 ```bash
-nix-prefetch-url --unpack https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.35.2.tar.gz
+nix-prefetch-url --unpack https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.35.3.tar.gz
 ```
 
 ## Auth token

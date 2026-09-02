@@ -277,13 +277,20 @@ def register_submit(
                 )
 
             _record_register(ip)
+            # Card-gated trial (hosted billing): the trial clock does NOT start
+            # at registration — a past trial_ends_at pauses posting through the
+            # existing expired-trial path until the card is collected, when the
+            # billing webhook sets the real trial_end from Stripe.
+            trial_end = (
+                "2000-01-01 00:00:00" if settings.BILLING_ENABLED else _trial_end()
+            )
             try:
                 db.execute(
                     """
                     INSERT INTO users (email, password_hash, plan, trial_ends_at, email_verified)
                     VALUES (?, ?, 'trial', ?, 0)
                     """,
-                    (email, hash_password(password), _trial_end()),
+                    (email, hash_password(password), trial_end),
                 )
             except Exception as e:
                 # Duplicate-email race between SELECT and INSERT: the UNIQUE
@@ -353,7 +360,11 @@ def register_submit(
             "Verification email for %s failed: %s", email, exc
         )
 
-    response = RedirectResponse(url="/", status_code=302)
+    # Card-gated trial: send a freshly registered user straight into Stripe
+    # Checkout to collect the card (the billing GET checkout route). Without
+    # billing, the original landing redirect is unchanged.
+    url = "/api/billing/checkout?interval=monthly" if settings.BILLING_ENABLED else "/"
+    response = RedirectResponse(url=url, status_code=302)
     _set_session_cookie(response, user["id"], email, request)
     return response
 

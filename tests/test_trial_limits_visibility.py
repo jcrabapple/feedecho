@@ -161,3 +161,46 @@ class TestBillingCtaSeam:
             c.cookies.set("feedecho_session", security.sign_session(USER_ID, "trial@example.com", 0))
             page = c.get("/settings").text
         assert 'id="billing"' not in page
+
+
+class TestBillingRegister:
+    """Card-gated trial: with billing on, a fresh signup redirects into Stripe
+    Checkout and its trial clock stays PAUSED (past trial_ends_at) until the
+    card is collected. Without billing, the original flow is unchanged."""
+
+    def _register(self, c, email):
+        import auth as auth_mod
+
+        auth_mod._register_attempts.clear()
+        return c.post(
+            "/register",
+            data={"email": email, "password": "hunter222", "confirm": "hunter222"},
+            follow_redirects=False,
+        )
+
+    def test_billing_register_redirects_to_checkout_and_pauses_trial(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            r = self._register(c, "new@example.com")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/api/billing/checkout?interval=monthly"
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT trial_ends_at FROM users WHERE email = ?", ("new@example.com",)
+            ).fetchone()
+        assert row["trial_ends_at"] == "2000-01-01 00:00:00"  # paused until card
+
+    def test_no_billing_register_redirects_home_with_active_trial(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            r = self._register(c, "new2@example.com")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/"
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT trial_ends_at FROM users WHERE email = ?", ("new2@example.com",)
+            ).fetchone()
+        assert row["trial_ends_at"] != "2000-01-01 00:00:00"  # clock running
+        assert row["trial_ends_at"] > "2026-01-01 00:00:00"

@@ -188,7 +188,12 @@ class TestHistoryIsolation:
 
 
 class TestSettingsIsolation:
-    def test_smtp_settings_are_per_user(self, env, client_a, client_b):
+    def test_smtp_settings_are_per_user(self, env, client_a, client_b, monkeypatch):
+        import app as app_module
+
+        # This test is about tenant isolation, not the SSRF guard; the
+        # placeholder host does not resolve, so bypass the address check.
+        monkeypatch.setattr(app_module, "validate_outbound_url", lambda u: u)
         client_a.post(
             "/api/settings/smtp",
             data={

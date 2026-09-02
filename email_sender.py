@@ -9,7 +9,10 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+import settings
 from database import get_db
+from feed_parser import SSRFError, validate_outbound_url
 
 
 def get_smtp_settings(user_id: int = 1) -> dict | None:
@@ -62,6 +65,18 @@ def _normalize(settings: dict) -> dict | None:
 
 def _send_via(cfg: dict, to_email: str, subject: str, body: str) -> None:
     """Send one email through the given SMTP config. Raises on failure."""
+    if settings.MULTI:
+        # Re-validate the relay at dial time, not just save time. smtplib
+        # re-resolves the hostname when it connects, so a save-time check
+        # alone is TOCTOU-vulnerable to a low-TTL/attacker-controlled DNS
+        # answer changing between save and send. This narrows the window and
+        # catches a relay whose address has since become private. (Full IP
+        # pinning for SMTP is deferred — no pinned smtplib transport exists;
+        # the save-time check + port allowlist bound the residual.)
+        try:
+            validate_outbound_url(f"http://{cfg['host']}")
+        except (SSRFError, ValueError) as exc:
+            raise ValueError("SMTP host is not a public address") from exc
     from_email = cfg["from_email"] or cfg["username"]
     from_name = cfg["from_name"]
 

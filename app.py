@@ -14,6 +14,7 @@ import json
 import os
 import re
 import logging
+import threading
 import time
 import uuid
 import secrets as _secrets
@@ -2798,6 +2799,58 @@ def delete_webhook_account(request: Request, account_id: int):
 
 # ── API: Settings ───────────────────────────────────────────────────────────
 
+# Hosted-mode SMTP restrictions: the relay is tenant-supplied, and because it
+# is dialed with raw smtplib (not the pinned httpx transport) none of the SSRF
+# machinery applies. A tenant could otherwise aim it at cloud metadata or an
+# internal service and use the connection result as a port/banner oracle.
+_SMTP_ALLOWED_PORTS = {25, 465, 587, 2525}
+
+# Per-IP throttle on the SMTP test button (hosted mode): caps outbound SMTP
+# connection attempts so it cannot be used as an egress/connection hammer.
+_smtp_test_lock = threading.Lock()
+_smtp_test_attempts: dict[str, list[float]] = {}
+_SMTP_TEST_LIMIT = 10
+_SMTP_TEST_WINDOW = 600  # seconds
+_SMTP_TEST_MAX_IPS = 10_000  # hard cap on tracked buckets
+_smtp_last_sweep = 0.0  # monotonic time of the last global sweep
+
+
+def _check_and_record_smtp_test(ip: str) -> bool:
+    """Atomically rate-limit one SMTP test attempt.
+
+    Returns True when the attempt must be refused (limit reached); otherwise
+    records the attempt and returns False. Check-and-append happen under one
+    lock so concurrent requests cannot all slip past the limit. A global
+    sweep (at most once per window) prunes stale buckets, and a brand-new IP
+    is refused once the bucket map is at _SMTP_TEST_MAX_IPS — so a source-IP
+    spray cannot grow the dict unboundedly even within a single window.
+    """
+    with _smtp_test_lock:
+        global _smtp_last_sweep
+        now = time.monotonic()
+        if now - _smtp_last_sweep >= _SMTP_TEST_WINDOW:
+            for key in list(_smtp_test_attempts):
+                recent = [t for t in _smtp_test_attempts[key] if now - t < _SMTP_TEST_WINDOW]
+                if recent:
+                    _smtp_test_attempts[key] = recent
+                else:
+                    _smtp_test_attempts.pop(key, None)
+            _smtp_last_sweep = now
+        recent = [t for t in _smtp_test_attempts.get(ip, []) if now - t < _SMTP_TEST_WINDOW]
+        if recent:
+            _smtp_test_attempts[ip] = recent
+        else:
+            _smtp_test_attempts.pop(ip, None)
+        if len(recent) >= _SMTP_TEST_LIMIT:
+            return True
+        if len(_smtp_test_attempts) >= _SMTP_TEST_MAX_IPS and ip not in _smtp_test_attempts:
+            # At the tracked-IP ceiling with a brand-new source: refuse rather
+            # than let the map grow past the cap during an active spray.
+            return True
+        _smtp_test_attempts.setdefault(ip, []).append(now)
+        return False
+
+
 @app.post("/api/settings/smtp")
 async def save_smtp_settings(
     request: Request,
@@ -2817,6 +2870,24 @@ async def save_smtp_settings(
     if not 1 <= smtp_port <= 65535:
         return render("error.html", request, status_code=400, code=400,
                       message="SMTP port must be a number between 1 and 65535")
+    # Hosted mode only: the tenant is untrusted relative to the VPS's internal
+    # network, so the relay address must be a public host on a standard SMTP
+    # port. Single mode keeps 1-65535 + localhost/LAN relays (unchanged).
+    if settings.MULTI:
+        if smtp_port not in _SMTP_ALLOWED_PORTS:
+            return render(
+                "error.html", request, status_code=400, code=400,
+                message="SMTP port must be 25, 465, 587, or 2525",
+            )
+        try:
+            validate_outbound_url(f"http://{smtp_host.strip()}")
+        except (SSRFError, ValueError):
+            # ValueError: a malformed host (unbracketed IPv6, embedded port,
+            # stray whitespace) that urlparse chokes on — reject the same way.
+            return render(
+                "error.html", request, status_code=400, code=400,
+                message="SMTP host must be a public hostname or IP address",
+            )
     if smtp_from_email and not re.match(
         # No dot required in the domain: a self-hosted relay legitimately uses
         # feedecho@localhost or a bare internal hostname. This rejects
@@ -2864,9 +2935,26 @@ def test_smtp(
     request: Request,
     test_email: str = Form(""),
 ):
+    uid = current_user_id(request)
+    if settings.MULTI:
+        # Rate-limit the outbound SMTP connection attempt, and scrub the raw
+        # smtplib error text below (it is a port/banner oracle to a tenant).
+        if _check_and_record_smtp_test(auth._client_ip(request)):
+            return {
+                "success": False,
+                "message": "Too many test attempts. Please wait before trying again.",
+            }
     success, message = test_smtp_connection(
         test_email, user_id=current_user_id(request)
     )
+    if not success and settings.MULTI:
+        # Hosted: the exception string reveals what answered the connection
+        # (refused / timeout / non-SMTP banner), which turns the test button
+        # into a scanner. Log the detail server-side; hand back a generic
+        # message. Single mode keeps the detail for the operator's own
+        # debugging.
+        logger.info("SMTP test failed for user %s: %s", uid, message)
+        message = "SMTP connection failed. Check the server settings and try again."
     return {"success": success, "message": message}
 
 

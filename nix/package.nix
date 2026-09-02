@@ -9,17 +9,17 @@
 
 pythonPkg.pkgs.buildPythonApplication {
   pname = "feedecho";
-  version = "1.35.1";
+  version = "1.35.2";
 
   src = if src != null then src else fetchFromGitHub {
     owner = "jcrabapple";
     repo = "feedecho";
-    rev = "v1.35.1";
+    rev = "v1.35.2";
     # Placeholder on purpose: the correct value is per-tag and can only be
     # produced by a machine with Nix. Non-flake users must set it (the build
     # prints the expected hash on first failure):
     #   nix-prefetch-url --unpack \
-    #     https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.35.1.tar.gz
+    #     https://github.com/jcrabapple/feedecho/archive/refs/tags/v1.35.2.tar.gz
     # Flake users never hit this path: flake.nix passes `src = self`.
     hash = lib.fakeHash;
   };

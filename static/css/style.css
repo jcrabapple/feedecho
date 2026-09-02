@@ -81,6 +81,15 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* The reset above zeroes `margin`, which also defeats the browser's default
+   `dialog[open] { margin: auto }` auto-centering — so modal <dialog>s must be
+   centered explicitly or they render pinned to the top-left corner. */
+dialog[open] {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+}
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {

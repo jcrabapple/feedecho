@@ -400,21 +400,11 @@ class TestMastodonPostStatusParams:
             def json(self):
                 return {"id": "1"}
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, headers=None, data=None):
-                captured["data"] = data
-                return FakeResponse()
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            captured["data"] = data
+            return FakeResponse()
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         mastodon.post_status(
             instance="https://example.com",
             access_token="tok",
@@ -436,21 +426,11 @@ class TestMastodonPostStatusParams:
             def json(self):
                 return {"id": "1"}
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, headers=None, data=None):
-                captured["data"] = data
-                return FakeResponse()
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            captured["data"] = data
+            return FakeResponse()
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         mastodon.post_status(
             instance="https://example.com",
             access_token="tok",
@@ -470,21 +450,11 @@ class TestMastodonPostStatusParams:
             def json(self):
                 return {"id": "1"}
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, headers=None, data=None):
-                captured["data"] = data
-                return FakeResponse()
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            captured["data"] = data
+            return FakeResponse()
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         mastodon.post_status(
             instance="https://example.com",
             access_token="tok",
@@ -507,21 +477,11 @@ class TestMastodonPostStatusParams:
             def json(self):
                 return {"id": "1"}
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, alt, headers=None, data=None):
-                captured["data"] = data
-                return FakeResponse()
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            captured["data"] = data
+            return FakeResponse()
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         mastodon.post_status(
             instance="https://example.com",
             access_token="pres", content="hello",
@@ -540,20 +500,10 @@ class TestMastodonUploadMedia:
             def json(self):
                 return {"id": "media-42"}
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, headers=None, files=None, data=None):
-                return FakeResponse()
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            return FakeResponse()
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         result = mastodon.upload_media(
             instance="https://example.com",
             access_token="tok",
@@ -566,22 +516,12 @@ class TestMastodonUploadMedia:
     def test_upload_returns_none_on_http_error(self, monkeypatch):
         import mastodon
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, headers=None, files=None, data=None):
-                raise mastodon.httpx.HTTPStatusError(
-                    "500", request=None, response=None
-                )
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            raise mastodon.httpx.HTTPStatusError(
+                "500", request=None, response=None
+            )
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         result = mastodon.upload_media(
             instance="https://example.com",
             access_token="tok",
@@ -593,20 +533,10 @@ class TestMastodonUploadMedia:
     def test_upload_returns_none_on_network_error(self, monkeypatch):
         import mastodon
 
-        class FakeClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, headers=None, files=None, data=None):
-                raise mastodon.httpx.RequestError("network down")
-
-        monkeypatch.setattr(mastodon.httpx, "Client", FakeClient)
+        def _fake_post(method, url, **kw):
+            data = kw.get("data")
+            raise mastodon.httpx.RequestError("network down")
+        monkeypatch.setattr(mastodon, "pinned_request", _fake_post)
         result = mastodon.upload_media(
             instance="https://example.com",
             access_token="tok",

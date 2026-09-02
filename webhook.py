@@ -45,7 +45,7 @@ from urllib.parse import urlsplit
 import httpx
 
 import settings
-from feed_parser import SSRFError, ssrf_client, validate_outbound_url
+from feed_parser import SSRFError, ssrf_client, unpinned_client, validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +305,7 @@ def send_webhook(url: str, headers: dict[str, str], payload: dict) -> None:
             client.close()
     else:
         try:
-            with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
+            with unpinned_client(timeout=REQUEST_TIMEOUT) as client:
                 resp = client.post(url, json=payload, headers=headers)
         except httpx.HTTPError as e:
             raise WebhookError(

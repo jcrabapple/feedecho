@@ -209,21 +209,12 @@ class TestPostgresMigration:
             def json(self):
                 return {"client_id": f"pg-cid-{self._n}", "client_secret": "s"}
 
-        class _Client:
-            def __init__(self, **kw):
-                pass
+        def _pinned_request(method, url, *, timeout=None, headers=None,
+                            follow_redirects=False, **kw):
+            calls.append(kw.get("data"))
+            return _Resp(len(calls))
 
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def post(self, url, data=None, **kw):
-                calls.append(data)
-                return _Resp(len(calls))
-
-        monkeypatch.setattr(oauth.httpx, "Client", _Client)
+        monkeypatch.setattr(oauth, "pinned_request", _pinned_request)
         monkeypatch.setattr(oauth, "validate_outbound_url", lambda url: None)
         monkeypatch.setattr(settings_mod, "APP_WEBSITE", "https://pg.example.org")
 

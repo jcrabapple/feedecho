@@ -64,26 +64,19 @@ class _FakeClient:
 
     calls: list = []
 
-    def __init__(self, **kw):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def post(self, url, data=None, **kw):
-        type(self).calls.append((url, data))
+    @classmethod
+    def pinned_request(cls, method, url, *, timeout=None, headers=None,
+                       follow_redirects=False, **kw):
+        cls.calls.append((url, kw.get("data")))
         return _FakeResponse(
-            {"client_id": "cid-%d" % len(type(self).calls), "client_secret": "csec"}
+            {"client_id": "cid-%d" % len(cls.calls), "client_secret": "csec"}
         )
 
 
 @pytest.fixture
 def fake_http(monkeypatch):
     _FakeClient.calls = []
-    monkeypatch.setattr(oauth.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(oauth, "pinned_request", _FakeClient.pinned_request)
     # Registration targets a fake host; skip the DNS/SSRF round trip.
     monkeypatch.setattr(oauth, "validate_outbound_url", lambda url: None)
     return _FakeClient

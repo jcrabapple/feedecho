@@ -40,7 +40,7 @@ from urllib.parse import quote
 
 import httpx
 
-from feed_parser import validate_outbound_url
+from feed_parser import SSRFError, pinned_request, validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
@@ -253,11 +253,15 @@ def discover_base_url(homeserver: str) -> str:
     validate_outbound_url(base)
     url = f"{base}{WELL_KNOWN_PATH}"
     try:
-        with httpx.Client(timeout=WELL_KNOWN_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(url)
-    except httpx.HTTPError:
+        resp = pinned_request(
+            "GET", url, timeout=WELL_KNOWN_TIMEOUT, follow_redirects=True
+        )
+    except (httpx.HTTPError, SSRFError):
         # Well-known is optional; a network failure here is not fatal because
-        # the plain homeserver URL is the documented fallback.
+        # the plain homeserver URL is the documented fallback. A redirect to
+        # an internal address is refused (SSRFError) and falls back the same
+        # way — well-known is served by the same domain being connected, but
+        # it is still remote input pointing our requests somewhere.
         logger.debug("Matrix well-known lookup failed for %s", base, exc_info=True)
         return base
     if resp.status_code != 200:
@@ -294,12 +298,14 @@ def whoami(base_url: str, access_token: str) -> str:
     """Return the Matrix user ID the token belongs to."""
     validate_outbound_url(base_url)
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(
-                f"{base_url}{CLIENT_API}/account/whoami",
-                headers=_auth_headers(access_token),
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "GET",
+            f"{base_url}{CLIENT_API}/account/whoami",
+            timeout=REQUEST_TIMEOUT,
+            headers=_auth_headers(access_token),
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MatrixError(f"Could not reach the Matrix homeserver: {e}") from e
     _raise_for_status(resp, "token check")
     try:
@@ -319,12 +325,14 @@ def resolve_room(base_url: str, access_token: str, room: str) -> str:
         return room
     validate_outbound_url(base_url)
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(
-                f"{base_url}{CLIENT_API}/directory/room/{quote(room, safe='')}",
-                headers=_auth_headers(access_token),
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "GET",
+            f"{base_url}{CLIENT_API}/directory/room/{quote(room, safe='')}",
+            timeout=REQUEST_TIMEOUT,
+            headers=_auth_headers(access_token),
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MatrixError(f"Could not reach the Matrix homeserver: {e}") from e
     if resp.status_code == 404:
         raise MatrixError(
@@ -345,12 +353,14 @@ def joined_rooms(base_url: str, access_token: str) -> set[str]:
     """The room IDs this token's user has joined."""
     validate_outbound_url(base_url)
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(
-                f"{base_url}{CLIENT_API}/joined_rooms",
-                headers=_auth_headers(access_token),
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "GET",
+            f"{base_url}{CLIENT_API}/joined_rooms",
+            timeout=REQUEST_TIMEOUT,
+            headers=_auth_headers(access_token),
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MatrixError(f"Could not reach the Matrix homeserver: {e}") from e
     _raise_for_status(resp, "joined rooms lookup")
     try:
@@ -406,11 +416,15 @@ def send_event(
         f"/send/{MESSAGE_EVENT_TYPE}/{quote(txn_id, safe='')}"
     )
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-            resp = client.put(
-                url, json=content, headers=_auth_headers(access_token)
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "PUT",
+            url,
+            timeout=REQUEST_TIMEOUT,
+            headers=_auth_headers(access_token),
+            json=content,
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MatrixError(f"Could not reach the Matrix homeserver: {e}") from e
     _raise_for_status(resp, "message send")
     try:
@@ -460,14 +474,16 @@ def upload_media(
     headers = _auth_headers(access_token)
     headers["Content-Type"] = content_type or "application/octet-stream"
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-            resp = client.post(
-                f"{base_url}{MEDIA_API}/upload",
-                params={"filename": filename},
-                content=data,
-                headers=headers,
-            )
-    except httpx.HTTPError as e:
+        resp = pinned_request(
+            "POST",
+            f"{base_url}{MEDIA_API}/upload",
+            timeout=REQUEST_TIMEOUT,
+            headers=headers,
+            params={"filename": filename},
+            content=data,
+            follow_redirects=True,
+        )
+    except (httpx.HTTPError, SSRFError) as e:
         raise MatrixError(f"Could not reach the Matrix homeserver: {e}") from e
     _raise_for_status(resp, "media upload")
     try:

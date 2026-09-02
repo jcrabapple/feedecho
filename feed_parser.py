@@ -29,6 +29,19 @@ class SSRFError(ValueError):
     """Raised when a URL points to a private or internal address."""
 
 
+# 100.64.0.0/10 (RFC 6598 shared address space) is not is_private, is_loopback,
+# is_link_local, is_reserved, is_multicast, or is_unspecified, so it slips
+# through the explicit checks below — but it is used for internal service
+# addressing by cloud providers, Kubernetes CNIs, and Tailscale. Block it.
+#
+# NOTE: do NOT replace the checks with `not ip.is_global`. On Python 3.14
+# is_global returns True for multicast (224.0.0.0/4, ff00::/8) and NAT64
+# (64:ff9b::/96), so `not is_global` would ALLOW those ranges that the
+# explicit checks below block — a regression. The explicit checks plus the
+# CGNAT range below is the strictly-safe union.
+_CGNAT_V4 = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Check if an IP address is private, loopback, link-local, or reserved."""
     return (
@@ -38,6 +51,7 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
+        or (ip.version == 4 and ip in _CGNAT_V4)
     )
 
 
@@ -307,6 +321,112 @@ def ssrf_client(
 
 # Backwards-compatible alias
 validate_feed_url = validate_outbound_url
+
+
+def unpinned_client(*, timeout: float = 30) -> httpx.Client:
+    """A plain, unpinned httpx.Client for SINGLE-MODE only.
+
+    Single mode has no privilege boundary: the operator owns both the app
+    and any outbound address (LAN vision servers, local webhook receivers),
+    so SSRF validation/pinning would only break legitimate self-hosted
+    setups. Hosted (multi) code must NEVER use this — every outbound request
+    there goes through pinned_request()/ssrf_client() so the validated IP is
+    the one dialed.
+
+    Kept as one named function so the test that forbids bare ``httpx.Client``
+    outside feed_parser.py pins the machinery's surface to this file.
+    """
+    return httpx.Client(timeout=timeout, follow_redirects=False)
+
+
+# Headers that must never follow a cross-origin redirect. httpx strips these
+# when the redirect target's origin differs; a hand-rolled loop must too, or a
+# hostile homeserver/PDS can bounce a request — and the tenant's Bearer token —
+# to an arbitrary public address it chose.
+_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+# Headers that describe a request body; dropped when a redirect downgrades the
+# method to GET (mirrors httpx's redirect handling).
+_ENTITY_HEADERS = frozenset({"content-type", "content-length"})
+
+
+def _strip_headers(headers: dict | None, drop: frozenset) -> dict | None:
+    """Return ``headers`` with the named (case-insensitive) headers removed."""
+    if not headers:
+        return headers
+    return {k: v for k, v in headers.items() if k.lower() not in drop}
+
+
+def _url_origin(url: str) -> tuple:
+    u = httpx.URL(url)
+    return (u.scheme, u.host, u.port)
+
+
+def pinned_request(
+    method: str,
+    url: str,
+    *,
+    timeout: float = 30,
+    headers: dict | None = None,
+    follow_redirects: bool = False,
+    **kwargs,
+) -> httpx.Response:
+    """One outbound HTTP request through the SSRF-pinned transport.
+
+    The URL's hostname is resolved once, validated, and its IP pinned for
+    the life of the request, so the connection dials the exact address that
+    was approved (closing the DNS-rebinding TOCTOU window that a
+    validate-then-fetch-anyway call leaves open). The client is created and
+    closed inside this call.
+
+    When ``follow_redirects`` is True, every redirect hop is re-validated
+    and re-pinned before being followed, so a redirect to an internal
+    address is refused instead of dialed. Redirect semantics match httpx:
+    303 -> GET; 301/302 on a POST -> GET with the body dropped; 307/308
+    preserve method and body. Credential headers (Authorization, Cookie,
+    Proxy-Authorization) are stripped on cross-origin hops, and entity
+    headers on GET downgrades, exactly as httpx's own redirect handling.
+
+    Raises SSRFError if the URL (or any followed redirect hop) is unsafe or
+    unresolvable. Returns the final (non-redirect) response.
+    """
+    client, backend = ssrf_client([url], timeout=timeout)
+    try:
+        current_url = url
+        current_method = method.upper()
+        current_kwargs = dict(kwargs)
+        hop_headers = headers
+        for _ in range(MAX_REDIRECTS + 1):
+            resp = client.request(
+                current_method, current_url, headers=hop_headers, **current_kwargs
+            )
+            if not follow_redirects or not resp.is_redirect:
+                return resp
+            location = resp.headers.get("location")
+            if not location:
+                # A redirect with no Location is not followable; hand it back
+                # and let the caller's status handling report it.
+                return resp
+            next_url = str(httpx.URL(current_url).join(location))
+            validate_outbound_url(next_url)
+            for key, addr in _pins_for_urls([next_url]).items():
+                backend.set_pin(key, addr)
+            if _url_origin(current_url) != _url_origin(next_url):
+                # Cross-origin: drop credentials before re-issuing (from the
+                # already-stripped hop headers, so a later re-cross keeps
+                # them stripped).
+                hop_headers = _strip_headers(hop_headers, _CREDENTIAL_HEADERS)
+            current_url = next_url
+            if resp.status_code == 303:
+                current_method = "GET"
+                current_kwargs = {}
+                hop_headers = _strip_headers(hop_headers, _ENTITY_HEADERS)
+            elif resp.status_code in (301, 302) and current_method == "POST":
+                current_method = "GET"
+                current_kwargs = {}
+                hop_headers = _strip_headers(hop_headers, _ENTITY_HEADERS)
+        raise SSRFError(f"Too many redirects (max {MAX_REDIRECTS}) for {url}")
+    finally:
+        client.close()
 
 
 def fetch_feed(url: str) -> dict:

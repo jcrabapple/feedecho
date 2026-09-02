@@ -353,9 +353,9 @@ class TestAltTextTenantScopingAndSsrf:
         def _no_network(*args, **kwargs):
             raise AssertionError("outbound request made to a blocked address")
 
-        # Replace the module reference on alt_text rather than mutating the
-        # real httpx module's attributes.
-        monkeypatch.setattr(alt_text, "httpx", type("m", (), {"Client": _no_network}))
+        # A blocked address must be refused before any outbound request;
+        # pinned_request is the hosted-mode seam and must never be reached.
+        monkeypatch.setattr(alt_text, "pinned_request", _no_network)
         assert alt_text.generate_alt_text(b"\x89PNG", "image/png", user_id=1) == ""
         assert "private" in alt_text.endpoint_rejection_reason(user_id=1).lower()
 
@@ -394,7 +394,7 @@ class TestAltTextTenantScopingAndSsrf:
                 called["url"] = url
                 return _Resp()
 
-        monkeypatch.setattr(alt_text, "httpx", type("m", (), {"Client": _Client}))
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: _Client())
         result = alt_text.generate_alt_text(b"\x89PNG", "image/png", user_id=1)
         assert result == "a cat"
         assert called["url"] == "http://192.168.1.50:11434/v1/chat/completions"
@@ -414,7 +414,7 @@ class TestAltTextTenantScopingAndSsrf:
         def _boom(*a, **k):
             raise AssertionError("request attempted against a blocked address")
 
-        monkeypatch.setattr(alt_text, "httpx", type("m", (), {"Client": _boom}))
+        monkeypatch.setattr(alt_text, "pinned_request", _boom)
         c.cookies.set("feedecho_session", security.sign_session(42, "u42@example.com"))
         body = c.post("/api/settings/alt-text/test").json()
         assert body["success"] is False
@@ -465,6 +465,8 @@ class TestAltTextTenantScopingAndSsrf:
         class _FakeHttpError(Exception):
             pass
 
+        monkeypatch.setattr(alt_text.app_settings, "MULTI", False)
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: _Client())
         monkeypatch.setattr(
             alt_text,
             "httpx",
@@ -472,7 +474,6 @@ class TestAltTextTenantScopingAndSsrf:
                 "m",
                 (),
                 {
-                    "Client": _Client,
                     "HTTPStatusError": _FakeHttpError,
                     "RequestError": _FakeHttpError,
                 },

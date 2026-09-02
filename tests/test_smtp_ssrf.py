@@ -165,6 +165,21 @@ class TestSmtpTestRoute:
         assert body["success"] is False
         assert "SMTP connection failed" in body["message"]
 
+    def test_bucket_cap_refuses_new_ips_under_spray(self, multi_client, monkeypatch):
+        """At the tracked-IP ceiling a brand-new source is refused (fail-closed),
+        so a source-IP spray cannot grow the bucket map unboundedly."""
+        app_module, _ = multi_client
+        monkeypatch.setattr(app_module, "_SMTP_TEST_MAX_IPS", 2)
+        monkeypatch.setattr(app_module, "_smtp_last_sweep", 0.0)
+        monkeypatch.setattr(app_module, "_smtp_test_attempts", {})
+
+        assert app_module._check_and_record_smtp_test("1.1.1.1") is False
+        assert app_module._check_and_record_smtp_test("2.2.2.2") is False
+        # Third distinct IP hits the cap → refused.
+        assert app_module._check_and_record_smtp_test("3.3.3.3") is True
+        # An already-tracked IP still proceeds (under its own per-IP limit).
+        assert app_module._check_and_record_smtp_test("1.1.1.1") is False
+
 
 class TestSingleModeUnchanged:
     @pytest.fixture

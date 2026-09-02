@@ -2812,6 +2812,7 @@ _smtp_test_attempts: dict[str, list[float]] = {}
 _SMTP_TEST_LIMIT = 10
 _SMTP_TEST_WINDOW = 600  # seconds
 _SMTP_TEST_MAX_IPS = 10_000  # hard cap on tracked buckets
+_smtp_last_sweep = 0.0  # monotonic time of the last global sweep
 
 
 def _check_and_record_smtp_test(ip: str) -> bool:
@@ -2819,25 +2820,32 @@ def _check_and_record_smtp_test(ip: str) -> bool:
 
     Returns True when the attempt must be refused (limit reached); otherwise
     records the attempt and returns False. Check-and-append happen under one
-    lock so concurrent requests cannot all slip past the limit. A global sweep
-    runs when the bucket count crosses _SMTP_TEST_MAX_IPS, so a source-IP
-    spray cannot leave an unbounded number of stale buckets behind.
+    lock so concurrent requests cannot all slip past the limit. A global
+    sweep (at most once per window) prunes stale buckets, and a brand-new IP
+    is refused once the bucket map is at _SMTP_TEST_MAX_IPS — so a source-IP
+    spray cannot grow the dict unboundedly even within a single window.
     """
     with _smtp_test_lock:
+        global _smtp_last_sweep
         now = time.monotonic()
-        if len(_smtp_test_attempts) >= _SMTP_TEST_MAX_IPS:
+        if now - _smtp_last_sweep >= _SMTP_TEST_WINDOW:
             for key in list(_smtp_test_attempts):
                 recent = [t for t in _smtp_test_attempts[key] if now - t < _SMTP_TEST_WINDOW]
                 if recent:
                     _smtp_test_attempts[key] = recent
                 else:
                     _smtp_test_attempts.pop(key, None)
+            _smtp_last_sweep = now
         recent = [t for t in _smtp_test_attempts.get(ip, []) if now - t < _SMTP_TEST_WINDOW]
         if recent:
             _smtp_test_attempts[ip] = recent
         else:
             _smtp_test_attempts.pop(ip, None)
         if len(recent) >= _SMTP_TEST_LIMIT:
+            return True
+        if len(_smtp_test_attempts) >= _SMTP_TEST_MAX_IPS and ip not in _smtp_test_attempts:
+            # At the tracked-IP ceiling with a brand-new source: refuse rather
+            # than let the map grow past the cap during an active spray.
             return True
         _smtp_test_attempts.setdefault(ip, []).append(now)
         return False

@@ -209,6 +209,17 @@ TRIAL_GRACE_NOTE = env("TRIAL_GRACE_NOTE", "")
 INVITES_REQUIRED = env("INVITES_REQUIRED", "") == "1"
 
 
+# ── Billing (hosted-only seam) ────────────────────────────────────────────────
+#
+# When True, multi-mode templates render billing UI (a "Subscribe" CTA on the
+# trial banner and a Billing section on /settings). The actual payment routes
+# (/api/billing/*) are NOT part of this repo — the hosted deployment mounts
+# them from its private billing module — so this flag only toggles the
+# front-end seam and never implies Stripe here. The hosted image sets
+# FEEDECHO_BILLING_ENABLED=1.
+BILLING_ENABLED = env("BILLING_ENABLED", "") == "1"
+
+
 # ── Backdated entries ─────────────────────────────────────────────────────────
 #
 # When True, feed items that appear positionally OLDER than the cursor (so the

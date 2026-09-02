@@ -536,6 +536,9 @@ def _trial_context(request: Request) -> dict:
         # agree with reality, not just the dashboard's).
         "posting_paused": plans.posting_paused(plan, row["trial_ends_at"]),
         "plan_limits": settings.PLAN_LIMITS.get(plan) or settings.PLAN_LIMITS["trial"],
+        # True only when the hosted deployment has mounted its private billing
+        # module — templates gate the "Subscribe"/"Manage" UI on this flag.
+        "billing_enabled": settings.BILLING_ENABLED,
     }
     # Trial users see their limits and where they stand against them on the
     # dashboard (the banner lives in dashboard.html). One cheap count query
@@ -553,9 +556,15 @@ def _trial_context(request: Request) -> dict:
                 ).fetchone()["c"]
                 for t in DESTINATION_TABLES
             )
+            echoes_used = db.execute(
+                "SELECT COUNT(*) AS c FROM echoes WHERE user_id = ? AND deleted_at IS NULL",
+                (uid,),
+            ).fetchone()["c"]
         ctx["trial_usage"] = {
             "feeds": feeds_used,
             "max_feeds": plans.limit_for(plan, "max_feeds"),
+            "echoes": echoes_used,
+            "max_echoes": plans.limit_for(plan, "max_echoes"),
             "destinations": dest_used,
             "max_destinations": plans.limit_for(plan, "max_destinations"),
             "min_poll_interval": plans.limit_for(plan, "min_poll_interval"),

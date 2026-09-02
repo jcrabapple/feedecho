@@ -61,6 +61,7 @@ class TestTrialLimitsOnDashboard:
         text = _usage_text(page)
         assert text, "trial-usage line missing from the banner"
         assert "0 of 5 feeds" in text
+        assert "0 of 5 echoes" in text
         assert "0 of 5 connected accounts" in text
         assert "15 min" in text, "poll floor must be stated (it clamps silently)"
         assert "60 posts/hour" in text
@@ -128,3 +129,36 @@ class TestTrialLimitsOnDashboard:
             encoding="utf-8"
         )
         assert 'style.css?v=47' in base
+
+
+class TestBillingCtaSeam:
+    """The billing UI is gated on settings.BILLING_ENABLED (set by the hosted
+    deployment). Disabled = the "launch soon" copy; enabled = a Subscribe CTA."""
+
+    def test_subscribe_cta_when_enabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        page = _dashboard(monkeypatch, tmp_path)
+        assert "Subscribe" in page
+
+    def test_launch_soon_copy_when_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        page = _dashboard(monkeypatch, tmp_path)
+        assert "Paid plans launch soon" in page
+
+    def test_settings_billing_section_when_enabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(USER_ID, "trial@example.com", 0))
+            page = c.get("/settings").text
+        assert 'id="billing"' in page
+        assert "$4/month" in page
+        assert "$40/year" in page
+
+    def test_settings_billing_section_hidden_when_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        _setup(monkeypatch, tmp_path)
+        with TestClient(app) as c:
+            c.cookies.set("feedecho_session", security.sign_session(USER_ID, "trial@example.com", 0))
+            page = c.get("/settings").text
+        assert 'id="billing"' not in page

@@ -1987,6 +1987,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
         fulltext=bool(fulltext),
         shout_destinations=_shout_destinations(uid),
         default_template="{{ title }} {{ link }}",
+        template_vars=available_variables(),
     )
 
 

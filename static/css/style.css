@@ -1269,12 +1269,73 @@ details.account-section > summary:focus-visible {
     .reader-feeds.open { transform: translateX(0); }
 }
 
-/* Shout (reader one-time post) */
-.reader-shout { display: inline-block; }
-.reader-shout summary { list-style: none; }
-.reader-shout summary::-webkit-details-marker { display: none; }
-.reader-shout-form { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem; padding: 0.75rem; background: var(--surface-light); border: 1px solid var(--border); border-radius: 8px; }
-.reader-shout-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--text-muted); }
+/* Shout (reader one-time post) — overlay dialog */
+.reader-shout {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--text);
+    padding: 1.25rem;
+    width: min(92vw, 440px);
+}
+.reader-shout::backdrop { background: rgba(0, 0, 0, 0.45); }
+.reader-shout-title { margin: 0 0 0.25rem; font-size: 1.1rem; font-weight: 700; }
+.reader-shout-subtitle { margin: 0 0 1rem; color: var(--text-muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.reader-shout-form { display: flex; flex-direction: column; gap: 0.8rem; }
+.reader-shout-form label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.9rem; font-weight: 600; color: var(--text); }
+.reader-shout-form select,
+.reader-shout-form textarea {
+    font: inherit;
+    font-size: 0.95rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    min-height: 44px;
+}
+.reader-shout-form select:focus,
+.reader-shout-form textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
+.reader-shout-form textarea {
+    min-height: 5.5rem;
+    resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+.reader-shout-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.25rem; }
+.reader-shout-actions .action-status { flex: 1 1 auto; margin-right: auto; }
+
+/* Variables tooltip (hover/focus) next to the Template label */
+.reader-shout-tpl-label { flex-direction: row; align-items: center; }
+.reader-shout-vars { position: relative; display: inline-flex; align-items: center; cursor: help; }
+.reader-shout-vars-trigger {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.15rem; height: 1.15rem; border-radius: 50%;
+    background: var(--surface-light); border: 1px solid var(--border);
+    color: var(--text-muted); font-size: 0.7rem; font-weight: 700;
+}
+.reader-shout-vars-tip {
+    position: absolute; top: calc(100% + 0.4rem); left: 0;
+    width: max-content; max-width: 280px;
+    padding: 0.6rem 0.75rem;
+    background: var(--text); color: var(--surface);
+    border-radius: 6px; font-size: 0.78rem; font-weight: 400; line-height: 1.7;
+    opacity: 0; pointer-events: none; transition: opacity 0.15s; z-index: 20;
+}
+.reader-shout-vars-tip code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; }
+.reader-shout-vars:hover .reader-shout-vars-tip,
+.reader-shout-vars:focus .reader-shout-vars-tip,
+.reader-shout-vars:focus-within .reader-shout-vars-tip { opacity: 1; }
+
+/* Reader toast (Shout success, after the overlay closes) */
+.reader-toast {
+    position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%);
+    z-index: 200; padding: 0.6rem 1.1rem; border-radius: 999px;
+    background: var(--primary-wash); color: var(--primary);
+    border: 1px solid var(--primary);
+    font-size: 0.9rem; font-weight: 600; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
 
 /* Reader full-text search */
 .reader-search { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 auto; max-width: 420px; }
@@ -1360,6 +1421,12 @@ details.account-section > summary:focus-visible {
 
 /* Tier 1 — toolbar right group */
 .reader-toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+/* The '?' keyboard-shortcuts button is desktop-only: touch devices have no
+   keyboard, and the toolbar already wraps tightly on narrow screens. */
+@media (max-width: 720px) {
+    .reader-shortcuts-btn { display: none; }
+}
 
 /* Tier 2 — letter avatar + fetch-error badge */
 .reader-feed-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--primary-wash); color: var(--primary); font-size: 0.7rem; font-weight: 700; flex-shrink: 0; }

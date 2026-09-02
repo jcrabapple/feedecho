@@ -55,7 +55,7 @@
         <button class="btn-sm" type="button" id="reader-density-btn" onclick="readerToggleDensity()" title="Toggle list density" aria-pressed="false">Compact</button>
         <button class="btn-sm" type="button" id="reader-autoread-btn" onclick="readerToggleAutoRead()" title="Mark items read as you scroll past them" aria-pressed="false">Auto-read</button>
         <button class="btn-sm" type="button" id="reader-fulltext-btn" onclick="readerToggleFullText()" title="Show the full article text instead of the summary teaser" aria-pressed="{{ 'true' if fulltext else 'false' }}">Full text</button>
-        <button class="btn-sm" type="button" onclick="readerShowShortcuts()" title="Keyboard shortcuts">?</button>
+        <button class="btn-sm reader-shortcuts-btn" type="button" onclick="readerShowShortcuts()" title="Keyboard shortcuts">?</button>
       </div>
     </div>
 
@@ -99,22 +99,32 @@
               <span class="action-group action-group--echo">
                 <a class="action-btn" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo</a>
                 {% if shout_destinations %}
-                <details class="reader-shout">
-                  <summary class="action-btn">Shout</summary>
+                <button class="action-btn reader-shout-open" type="button" onclick="readerOpenShout({{ item.id }})">Shout</button>
+                <dialog class="reader-shout" id="shout-{{ item.id }}" aria-labelledby="shout-title-{{ item.id }}">
                   <form class="reader-shout-form" onsubmit="readerShout({{ item.id }}, this); return false">
-                    <label>Destination
-                      <select name="destination" required>
+                    <h3 id="shout-title-{{ item.id }}" class="reader-shout-title">Shout this item</h3>
+                    <p class="reader-shout-subtitle">{{ item.title or '(untitled)' }}</p>
+                    <label for="shout-dest-{{ item.id }}">Destination
+                      <select name="destination" id="shout-dest-{{ item.id }}" required>
                         {% for d in shout_destinations %}
                         <option value="{{ d.value }}">{{ d.label }}</option>
                         {% endfor %}
                       </select>
                     </label>
-                    <label>Template
-                      <input type="text" name="template" value="{{ default_template }}">
+                    <label for="shout-tpl-{{ item.id }}" class="reader-shout-tpl-label">
+                      Template
+                      <span class="reader-shout-vars" tabindex="0" aria-label="Available template variables">
+                        <span class="reader-shout-vars-trigger" aria-hidden="true">?</span>
+                        <span class="reader-shout-vars-tip" role="tooltip">{% for v in template_vars %}<code>{{ v.var }}</code>{% if not loop.last %} {% endif %}{% endfor %}</span>
+                      </span>
                     </label>
-                    <button type="submit" class="btn-sm">Shout</button>
+                    <textarea name="template" id="shout-tpl-{{ item.id }}" rows="3" spellcheck="false">{{ default_template }}</textarea>
+                    <div class="reader-shout-actions">
+                      <button type="button" class="btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+                      <button type="submit" class="btn-sm reader-shout-submit">Shout</button>
+                    </div>
                   </form>
-                </details>
+                </dialog>
                 {% endif %}
               </span>
             </div>

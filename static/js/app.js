@@ -819,18 +819,37 @@ async function readerMarkAllRead(btn) {
     finally { btn.disabled = false; }
 }
 
+function readerOpenShout(itemId) {
+    const dlg = document.getElementById('shout-' + itemId);
+    if (dlg) dlg.showModal();
+}
+
+// Transient toast (role=status) for overlay actions whose dialog has closed.
+function readerToast(text) {
+    const toast = document.createElement('div');
+    toast.className = 'reader-toast';
+    toast.setAttribute('role', 'status');
+    toast.textContent = text;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
+
 async function readerShout(itemId, form) {
     const btn = form.querySelector('button[type="submit"]');
     if (btn.disabled) return false;
     const data = new URLSearchParams(new FormData(form));
     btn.disabled = true;
+    const dlg = form.closest('dialog');
     try {
         const resp = await fetch(`/api/reader/${itemId}/shout`, { method: 'POST', body: data });
         const result = await resp.json();
         if (!resp.ok) { showStatus(btn, result.detail || 'Shout failed', 'error'); return false; }
         if (result.success) {
-            showStatus(btn, 'Shouted' + (result.post_url ? ' — view in History' : ''), 'success');
+            const box = form.querySelector('.action-status');
+            if (box) box.remove();
             form.reset();
+            if (dlg) dlg.close();
+            readerToast('Shouted' + (result.post_url ? ' — view in History' : ''));
         } else {
             showStatus(btn, result.error_message || 'Shout failed', 'error');
         }

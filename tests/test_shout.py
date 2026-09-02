@@ -93,8 +93,13 @@ class TestShout:
         assert resp.status_code == 200
         assert "Shout" in resp.text
         assert "readerShout" in resp.text
+        assert "readerOpenShout" in resp.text
         assert "return false" in resp.text
         assert 'name="destination"' in resp.text
+        # Overlay dialog + variables tooltip, not the old inline <details> form
+        assert 'class="reader-shout"' in resp.text
+        assert 'role="tooltip"' in resp.text
+        assert "{{ title }}" in resp.text
 
 
 @pytest.fixture

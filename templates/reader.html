@@ -113,10 +113,10 @@
                     </label>
                     <div class="reader-shout-tpl-head">
                       <label for="shout-tpl-{{ item.id }}">Template</label>
-                      <span class="reader-shout-vars" tabindex="0" aria-label="Available template variables" aria-describedby="shout-vars-{{ item.id }}">
+                      <button type="button" class="reader-shout-vars" aria-label="Available template variables" aria-describedby="shout-vars-{{ item.id }}" aria-expanded="false" onclick="readerToggleVars(this)">
                         <span class="reader-shout-vars-trigger" aria-hidden="true">?</span>
                         <span class="reader-shout-vars-tip" id="shout-vars-{{ item.id }}" role="tooltip">{% for v in template_vars %}<code>{{ v.var }}</code>{% if not loop.last %} {% endif %}{% endfor %}</span>
-                      </span>
+                      </button>
                     </div>
                     <textarea name="template" id="shout-tpl-{{ item.id }}" rows="3" spellcheck="false">{{ default_template }}</textarea>
                     <div class="reader-shout-actions">

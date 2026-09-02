@@ -828,6 +828,13 @@ function readerOpenShout(itemId) {
     dlg.showModal();
 }
 
+// Toggle the variables tooltip (tap/click/Enter on the ⓘ trigger). Desktop
+// hover still reveals it via CSS; this makes it usable on touch devices.
+function readerToggleVars(btn) {
+    const open = btn.classList.toggle('is-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 // Transient toast (role=status) for overlay actions whose dialog has closed.
 function readerToast(text) {
     document.querySelector('.reader-toast')?.remove();

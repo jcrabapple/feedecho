@@ -102,6 +102,8 @@ class TestShout:
         assert '<details class="reader-shout"' not in resp.text
         assert 'role="tooltip"' in resp.text
         assert 'aria-describedby="shout-vars-' in resp.text
+        assert 'readerToggleVars' in resp.text
+        assert 'aria-expanded="false"' in resp.text
         assert "{{ title }}" in resp.text
 
 

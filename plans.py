@@ -105,16 +105,6 @@ def check_destination_allowance(current_count: int, plan: str) -> None:
         )
 
 
-def check_echo_allowance(current_count: int, plan: str) -> None:
-    """Raise PlanError when creating one more echo would exceed the plan."""
-    cap = limit_for(plan, "max_echoes")
-    if cap and current_count >= cap:
-        raise PlanError(
-            f"Your plan allows {cap} echo{'es' if cap != 1 else ''}. "
-            "Upgrade or remove an echo to add another."
-        )
-
-
 def clamp_poll_interval(minutes: int, plan: str) -> int:
     """Clamp a requested poll interval down to the plan's floor.
 

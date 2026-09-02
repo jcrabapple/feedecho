@@ -61,7 +61,6 @@ class TestTrialLimitsOnDashboard:
         text = _usage_text(page)
         assert text, "trial-usage line missing from the banner"
         assert "0 of 5 feeds" in text
-        assert "0 of 5 echoes" in text
         assert "0 of 5 connected accounts" in text
         assert "15 min" in text, "poll floor must be stated (it clamps silently)"
         assert "60 posts/hour" in text

@@ -160,13 +160,6 @@ class TestAllowances:
         with pytest.raises(plans.PlanError, match="5 connected"):
             plans.check_destination_allowance(5, "trial")
 
-    def test_echo_allowance_raises_at_cap(self):
-        with pytest.raises(plans.PlanError, match="5 echoes"):
-            plans.check_echo_allowance(5, "trial")
-
-    def test_echo_allowance_passes_under_cap(self):
-        plans.check_echo_allowance(4, "trial")
-
 
 # ── Route guards ────────────────────────────────────────────────────────────
 
@@ -251,62 +244,6 @@ class TestFeedCapRoute:
         with database.get_db() as db:
             row = db.execute("SELECT poll_interval FROM feeds").fetchone()
         assert row["poll_interval"] == 1  # no plan clamp in single mode
-
-
-class TestEchoCapRoute:
-    def _setup(self, client):
-        client.post(
-            "/api/email-accounts",
-            data={"name": "a0", "email": "user0@example.com"},
-        )
-        client.post(
-            "/api/feeds",
-            data={"name": "f", "url": "https://example.com/feed.xml"},
-            follow_redirects=False,
-        )
-
-    def _add_echo(self, client, i):
-        return client.post(
-            "/api/echoes",
-            data={
-                "feed_id": "1",
-                "destination_type": "email",
-                "email_account_id": "1",
-                "template": f"{{{{ title }}}} {i}",
-            },
-            follow_redirects=False,
-        )
-
-    def test_add_echo_blocked_at_plan_cap(self, multi_client):
-        self._setup(multi_client)
-        for i in range(5):
-            assert self._add_echo(multi_client, i).status_code == 303
-        r = self._add_echo(multi_client, 6)
-        assert r.status_code == 402
-        assert "5 echoes" in r.json()["detail"]
-
-    def test_add_echo_allowed_under_cap(self, multi_client):
-        self._setup(multi_client)
-        for i in range(4):
-            assert self._add_echo(multi_client, i).status_code == 303
-        assert self._add_echo(multi_client, 5).status_code == 303
-
-    def test_paid_plan_no_echo_cap(self, multi_client):
-        _set_plan(UID, "paid")
-        self._setup(multi_client)
-        for i in range(6):
-            assert self._add_echo(multi_client, i).status_code == 303
-
-    def test_deleted_echoes_do_not_count(self, multi_client):
-        self._setup(multi_client)
-        for i in range(5):
-            assert self._add_echo(multi_client, i).status_code == 303
-        with database.get_db() as db:
-            db.execute(
-                "UPDATE echoes SET deleted_at = '2026-01-01 00:00:00' WHERE user_id = ? AND id = 1",
-                (UID,),
-            )
-        assert self._add_echo(multi_client, 6).status_code == 303
 
 
 class TestDestinationCapRoute:

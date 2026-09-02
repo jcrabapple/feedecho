@@ -48,7 +48,7 @@ _FORGOT_LIMIT = 5
 _FORGOT_WINDOW = 600
 _MIN_PASSWORD_LENGTH = 8
 _MAX_PASSWORD_LENGTH = 1024
-_TRIAL_DAYS = 14
+_TRIAL_DAYS = 7
 
 COOKIE_NAME = "feedecho_session"
 # Single-mode shared-secret cookie. Named here so the middleware, the login

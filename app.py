@@ -3667,6 +3667,17 @@ async def add_echo(
         if not dest:
             raise HTTPException(status_code=404, detail="Destination not found")
 
+        # Echo cap (multi mode): trial plans are limited to max_echoes.
+        if settings.MULTI:
+            echo_count = db.execute(
+                "SELECT COUNT(*) AS c FROM echoes WHERE user_id = ? AND deleted_at IS NULL",
+                (uid,),
+            ).fetchone()["c"]
+            try:
+                plans.check_echo_allowance(echo_count, _user_plan(db, uid))
+            except PlanError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
         db.execute(
             """INSERT INTO echoes (feed_id, destination_type, destination_id, template, visibility,
                                    filter_keywords, filter_mode, content_warning, attach_image,

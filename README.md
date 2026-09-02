@@ -8,6 +8,8 @@ Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
+A paid hosted version is coming soon at [feedecho.net](https://feedecho.net).
+
 ## Features
 
 - **RSS/Atom/JSON feed support** via feedparser

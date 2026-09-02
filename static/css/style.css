@@ -1324,6 +1324,13 @@ details.account-section > summary:focus-visible {
     cursor: pointer; font: inherit; color: inherit;
     -webkit-tap-highlight-color: transparent;
 }
+/* The global `button:hover { background: var(--primary-hover) }` would paint a
+   coral block behind this icon-only trigger on hover (and on touch, via the
+   sticky simulated :hover). Keep it a plain glyph — no coral highlight. */
+.reader-shout-vars:hover,
+.reader-shout-vars:active {
+    background: none;
+}
 .reader-shout-vars-trigger {
     display: inline-flex; align-items: center; justify-content: center;
     width: 1.15rem; height: 1.15rem; border-radius: 50%;

@@ -551,12 +551,17 @@ class TestNoBareHttpxClientOutsideFeedParser:
     test_no_async_route_performs_blocking_io.
 
     Matches every evasion spelling: ``httpx.Client(``, ``httpx.AsyncClient(``,
-    and ``from httpx import Client`` (which lets a module build a bare client
-    under a short alias). Scans the whole repo (rglob), excluding tests/.
+    ``from httpx import Client``, and ``import httpx as <alias>`` (which lets a
+    module build a bare client under a short alias). Scans the whole repo
+    (rglob), excluding tests/ and hidden dirs.
+
+    Accepted residuals (documented, not worth AST analysis): ``getattr(httpx,
+    "Client")(...)`` and a line-split ``httpx.\\nClient(``.
     """
 
     CONSTRUCTION = re.compile(r"\bhttpx\.(?:Async)?Client\s*\(")
     IMPORTED = re.compile(r"\bfrom\s+httpx\s+import\s+[^\n]*\b(?:Async)?Client\b")
+    ALIASED = re.compile(r"\bimport\s+httpx\s+as\s+\w+\b")
 
     def _offenders(self) -> dict:
         repo = Path(__file__).resolve().parent.parent
@@ -564,8 +569,8 @@ class TestNoBareHttpxClientOutsideFeedParser:
         for py in repo.rglob("*.py"):
             rel = py.relative_to(repo)
             # Skip the test tree, hidden dirs (.venv, .git, ...), and the
-            # SSRF machinery itself.
-            if py.name == "feed_parser.py":
+            # SSRF machinery itself (by exact path, not basename).
+            if str(rel) == "feed_parser.py":
                 continue
             if rel.parts and (rel.parts[0] == "tests" or any(
                 part.startswith(".") for part in rel.parts
@@ -575,7 +580,9 @@ class TestNoBareHttpxClientOutsideFeedParser:
                 {
                     i + 1
                     for i, line in enumerate(py.read_text().splitlines())
-                    if self.CONSTRUCTION.search(line) or self.IMPORTED.search(line)
+                    if self.CONSTRUCTION.search(line)
+                    or self.IMPORTED.search(line)
+                    or self.ALIASED.search(line)
                 }
             )
             if lines:

@@ -297,9 +297,20 @@ def validate_config() -> None:
             "reset emails cannot be sent (their links would be relative)."
         )
     if not CREDENTIAL_KEY:
-        # Same reasoning: a missing key degrades security (credentials are
-        # stored plaintext), not availability. Loud, so an operator who
-        # intended to encrypt notices it in the logs, but not an outage.
+        # A missing key undoes S3 (the credential-encryption work) silently:
+        # multi mode boots with every third-party credential stored plaintext,
+        # and nothing fails or alerts until a breach. In a real multi-mode
+        # deployment (real database, no sqlite fallback) that must be a
+        # hard failure. The sqlite-fallback path is local development, where
+        # plaintext is acceptable for the same reason it is in single mode —
+        # the operator owns the database.
+        if not ALLOW_SQLITE_FALLBACK:
+            raise RuntimeError(
+                "FEEDECHO_CREDENTIAL_KEY must be set when FEEDECHO_MODE=multi "
+                "(or set FEEDECHO_ALLOW_SQLITE_FALLBACK=1 for local development). "
+                "Generate one with: python -c \"from cryptography.fernet import "
+                "Fernet; print(Fernet.generate_key().decode())\""
+            )
         logging.getLogger("feedecho").warning(
             "FEEDECHO_CREDENTIAL_KEY is not set: third-party account "
             "credentials (Mastodon/Bluesky/Matrix/micro.blog/Discord tokens, "

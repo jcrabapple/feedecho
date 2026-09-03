@@ -806,6 +806,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_config()
+    _assert_billing_mounted(app)
     init_db()
     _bootstrap_admin()
     _revalidate_stored_templates()
@@ -813,6 +814,28 @@ async def lifespan(app: FastAPI):
     logger.info("FeedEcho started")
     yield
     stop_scheduler()
+
+
+def _assert_billing_mounted(app: FastAPI) -> None:
+    """Fail fast if billing is advertised but its checkout route is absent.
+
+    When FEEDECHO_BILLING_ENABLED=1, registration 302-redirects into
+    /api/billing/checkout (auth.py) and every signup lands there. If the
+    hosted billing module failed to mount — or the wrong entrypoint was
+    served — that redirect hits a 404 and every new user is stranded
+    silently at a paused trial with no error and no alert. The route path
+    is already hard-coded in auth.py, so checking it here adds no new
+    coupling; it just turns that silent failure into a startup refusal.
+    """
+    if not settings.BILLING_ENABLED:
+        return
+    paths = {getattr(r, "path", None) for r in app.routes}
+    if "/api/billing/checkout" not in paths:
+        raise RuntimeError(
+            "FEEDECHO_BILLING_ENABLED=1 but /api/billing/checkout is not "
+            "registered — the billing module did not mount. Refusing to start "
+            "(serve the hosted entrypoint, or disable billing)."
+        )
 
 
 def _bootstrap_admin() -> None:

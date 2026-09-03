@@ -3,7 +3,11 @@
 import os
 import importlib
 
+from cryptography.fernet import Fernet
+
 import settings
+
+_VALID_KEY = Fernet.generate_key().decode()
 
 
 def _reload_settings():
@@ -88,13 +92,16 @@ class TestValidateConfig:
         monkeypatch.setattr(
             settings, "SESSION_SECRET", kwargs.get("secret", "")
         )
+        monkeypatch.setattr(
+            settings, "CREDENTIAL_KEY", kwargs.get("key", "")
+        )
 
     def test_single_mode_never_raises(self, monkeypatch):
         monkeypatch.setattr(settings, "MULTI", False)
         settings.validate_config()  # must not raise
 
     def test_multi_without_url_raises(self, monkeypatch):
-        self._set_multi(monkeypatch, secret="x" * 40)
+        self._set_multi(monkeypatch, secret="x" * 40, key=_VALID_KEY)
         import pytest
 
         with pytest.raises(RuntimeError, match="FEEDECHO_DATABASE_URL"):
@@ -105,19 +112,38 @@ class TestValidateConfig:
         settings.validate_config()  # must not raise
 
     def test_multi_without_session_secret_raises(self, monkeypatch):
-        self._set_multi(monkeypatch, url="postgresql://x/x")
+        self._set_multi(monkeypatch, url="postgresql://x/x", key=_VALID_KEY)
         import pytest
 
         with pytest.raises(RuntimeError, match="FEEDECHO_SESSION_SECRET"):
             settings.validate_config()
 
     def test_multi_with_short_session_secret_raises(self, monkeypatch):
-        self._set_multi(monkeypatch, url="postgresql://x/x", secret="short")
+        self._set_multi(
+            monkeypatch, url="postgresql://x/x", secret="short", key=_VALID_KEY
+        )
         import pytest
 
         with pytest.raises(RuntimeError, match="at least 32"):
             settings.validate_config()
 
     def test_multi_fully_configured_passes(self, monkeypatch):
+        self._set_multi(
+            monkeypatch, url="postgresql://x/x", secret="s" * 32, key=_VALID_KEY
+        )
+        settings.validate_config()  # must not raise
+
+    def test_multi_without_credential_key_raises(self, monkeypatch):
+        # S3 (credential encryption) is silently undone when a real multi
+        # deployment boots without a key — fail closed instead (Opus D1.5).
         self._set_multi(monkeypatch, url="postgresql://x/x", secret="s" * 32)
+        import pytest
+
+        with pytest.raises(RuntimeError, match="FEEDECHO_CREDENTIAL_KEY"):
+            settings.validate_config()
+
+    def test_multi_without_credential_key_allowed_via_fallback(self, monkeypatch):
+        # Local development (sqlite fallback) keeps the old warn-not-raise
+        # behaviour, mirroring the DATABASE_URL carve-out.
+        self._set_multi(monkeypatch, fallback=True, secret="s" * 32)
         settings.validate_config()  # must not raise

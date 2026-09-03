@@ -27,6 +27,12 @@ def pg_env(monkeypatch):
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "DATABASE_URL", TEST_PG_URL)
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", False)
+    # validate_config() now REQUIRES a Fernet key in real multi mode (no
+    # sqlite fallback) since v1.46.0 — set one or the lifespan refuses to
+    # boot and every full-app PG test fails at startup.
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr(settings, "CREDENTIAL_KEY", Fernet.generate_key().decode())
     return settings
 
 

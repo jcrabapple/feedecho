@@ -32,6 +32,15 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "trial-limits.db")
+    # v1.46.0: with billing advertised, the startup guard requires the
+    # checkout route to exist. The OSS app has no billing module, so stub it
+    # exactly like the hosted entrypoint does in production.
+    if settings.BILLING_ENABLED and not any(
+        getattr(r, "path", None) == "/api/billing/checkout" for r in app.routes
+    ):
+        @app.get("/api/billing/checkout")
+        def _stub_checkout():
+            return {"ok": True}
     database.init_db()
     with database.get_db() as db:
         db.execute(
@@ -204,3 +213,41 @@ class TestBillingRegister:
             ).fetchone()
         assert row["trial_ends_at"] != "2000-01-01 00:00:00"  # clock running
         assert row["trial_ends_at"] > "2026-01-01 00:00:00"
+
+
+class TestBillingMountGuard:
+    """D1: advertising billing without a checkout route must fail at startup."""
+
+    def test_guard_raises_when_billing_on_and_route_missing(self, monkeypatch):
+        from fastapi import FastAPI
+
+        from app import _assert_billing_mounted
+
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        bare = FastAPI()  # no /api/billing/checkout
+        import pytest
+
+        with pytest.raises(RuntimeError, match="billing"):
+            _assert_billing_mounted(bare)
+
+    def test_guard_passes_when_billing_on_and_route_present(self, monkeypatch):
+        from fastapi import FastAPI
+
+        from app import _assert_billing_mounted
+
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        with_route = FastAPI()
+
+        @with_route.get("/api/billing/checkout")
+        def checkout():
+            return {"ok": True}
+
+        _assert_billing_mounted(with_route)  # must not raise
+
+    def test_guard_skips_when_billing_off(self, monkeypatch):
+        from fastapi import FastAPI
+
+        from app import _assert_billing_mounted
+
+        monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+        _assert_billing_mounted(FastAPI())  # must not raise

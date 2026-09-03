@@ -547,9 +547,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             )
         if "Content-Security-Policy" not in h:
             h["Content-Security-Policy"] = _CSP_HEADER
-        if request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE:
-            if "Strict-Transport-Security" not in h:
-                h["Strict-Transport-Security"] = "max-age=31536000"
+        # Emit HSTS unconditionally: browsers ignore the header over plain HTTP
+        # (RFC 6797), so it is safe on http:// and correct on https://. Gating on
+        # request.url.scheme silently fails behind a TLS-terminating reverse
+        # proxy (the app then reads scheme=http even though the client is on
+        # https) — exactly the deployments that need it. Caddy sets its own HSTS
+        # for the hosted service; this covers self-hosters behind their own TLS.
+        if "Strict-Transport-Security" not in h:
+            h["Strict-Transport-Security"] = "max-age=31536000"
         return response
 
 

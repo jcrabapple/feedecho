@@ -35,10 +35,12 @@ def test_security_headers_present_on_html(client):
     assert "form-action 'self'" in csp
 
 
-def test_hsts_not_set_over_plain_http(client):
-    # TestClient uses http://; HSTS must not be emitted.
+def test_hsts_emitted_unconditionally(client):
+    # HSTS is emitted even over plain HTTP: browsers ignore the header there
+    # (RFC 6797), and gating on scheme would silently drop it behind a
+    # TLS-terminating reverse proxy. Caddy sets the hosted service's own HSTS.
     r = client.get("/healthz")
-    assert "Strict-Transport-Security" not in r.headers
+    assert r.headers.get("Strict-Transport-Security") == "max-age=31536000"
 
 
 def test_csrf_rejects_cross_origin_post(client):

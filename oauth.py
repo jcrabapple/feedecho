@@ -13,6 +13,7 @@ import httpx
 import settings
 from database import get_db
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
+from security import decrypt_secret, encrypt_secret
 from settings import AUTH_TOKEN, STATE_SECRET
 
 SCOPES = "read write"
@@ -187,7 +188,7 @@ def get_or_create_app(instance: str, allow_refresh: bool = True) -> dict:
             if unchanged or not allow_refresh:
                 return {
                     "client_id": row["client_id"],
-                    "client_secret": row["client_secret"],
+                    "client_secret": decrypt_secret(row["client_secret"]),
                 }
 
     data = {
@@ -223,7 +224,7 @@ def get_or_create_app(instance: str, allow_refresh: bool = True) -> dict:
                 website = excluded.website,
                 redirect_uris = excluded.redirect_uris
             """,
-            (instance, client_id, client_secret, website, redirect_uris),
+            (instance, client_id, encrypt_secret(client_secret), website, redirect_uris),
         )
 
     return {"client_id": client_id, "client_secret": client_secret}

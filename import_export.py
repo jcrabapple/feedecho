@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 import plans
 import settings
 from _version import __version__ as APP_VERSION
+from security import decrypt_secret, encrypt_secret, hash_secret
 
 FORMAT = "feedecho-export"
 VERSION = 1
@@ -56,6 +57,17 @@ _ACCOUNTS = [
 ACCOUNT_TYPES = tuple(section for section, *_ in _ACCOUNTS)
 ACCOUNT_TABLES = {section: table for section, table, _, _ in _ACCOUNTS}
 _KEY_COLS = {section: keys for section, _, _, keys in _ACCOUNTS}
+
+# Columns that hold third-party credentials and are encrypted at rest in multi
+# mode. Export decrypts them (the export document carries plaintext, matching
+# the "credentials included by design" contract); import re-encrypts them.
+_CREDENTIAL_COLS = {
+    "mastodon": {"access_token"},
+    "bluesky": {"app_password", "access_jwt", "refresh_jwt"},
+    "microblog": {"token"},
+    "matrix": {"access_token"},
+    "discord": {"webhook_url"},
+}
 
 _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
 
@@ -106,11 +118,16 @@ def build_export(db, uid: int) -> dict:
 
     accounts = {}
     for section, table, cols, _ in _ACCOUNTS:
-        accounts[section] = _rows_to_dicts(db.execute(
+        rows = _rows_to_dicts(db.execute(
             f"SELECT id, {', '.join(cols)} FROM {table}"
             " WHERE user_id = ? ORDER BY id",
             (uid,),
         ).fetchall())
+        for row in rows:
+            for col in _CREDENTIAL_COLS.get(section, frozenset()):
+                if row.get(col):
+                    row[col] = decrypt_secret(row[col])
+        accounts[section] = rows
 
     # Echoes reference feeds by feed_id; only emit echoes whose feed survives
     # the export (a soft-deleted feed is not exported, and an echo pointing at
@@ -240,6 +257,22 @@ def _normalize_account(section: str, account: dict) -> None:
 def _existing_account_id(db, uid: int, section: str, account: dict):
     table = ACCOUNT_TABLES[section]
     key_cols = _KEY_COLS[section]
+    # A credential that is also a natural key (Discord webhook_url) is stored
+    # encrypted, so equality can't be a SQL match — decrypt-and-compare. A user
+    # has at most a handful of accounts, so this is cheap.
+    if _CREDENTIAL_COLS.get(section, frozenset()) & set(key_cols):
+        want = _account_key(section, account)
+        rows = db.execute(
+            f"SELECT id, {', '.join(key_cols)} FROM {table} WHERE user_id = ?",
+            (uid,),
+        ).fetchall()
+        for row in rows:
+            got = tuple(
+                str(decrypt_secret(row[c] or "")).strip() for c in key_cols
+            )
+            if got == want:
+                return row
+        return None
     key_vals = _account_key(section, account)
     clause = " AND ".join(f"{c} = ?" for c in key_cols)
     return db.execute(
@@ -394,6 +427,10 @@ def import_data(db, uid: int, payload: dict) -> dict:
     for section, table, cols, _ in _ACCOUNTS:
         for key in new_account_keys[section]:
             account = first_account[section][key]
+            # Encrypt credentials at rest (multi mode); no-op in single mode.
+            for col in _CREDENTIAL_COLS.get(section, frozenset()):
+                if account.get(col):
+                    account[col] = encrypt_secret(account[col])
             values = [account.get(col) for col in cols]
             placeholders = ", ".join("?" for _ in cols)
             column_list = ", ".join(cols)

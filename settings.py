@@ -108,6 +108,12 @@ APP_WEBSITE = (
 )
 ADMIN_EMAIL = env("ADMIN_EMAIL", "")
 SESSION_SECRET = env("SESSION_SECRET", "")
+# Fernet key for encrypting third-party credentials (Mastodon/Bluesky/Matrix/
+# micro.blog/Discord tokens, SMTP passwords, vision API keys, OAuth client
+# secrets) at rest. Multi mode only; single mode stores them plaintext (the
+# operator owns the DB). Generate with `python -c "from cryptography.fernet
+# import Fernet; print(Fernet.generate_key().decode())"`.
+CREDENTIAL_KEY = env("CREDENTIAL_KEY", "")
 ALLOW_SQLITE_FALLBACK = env("ALLOW_SQLITE_FALLBACK", "") == "1"
 # Force the Secure flag on session cookies when TLS terminates in front
 # of the app (Caddy/nginx proxy): the request scheme then reads http
@@ -278,4 +284,14 @@ def validate_config() -> None:
         logging.getLogger("feedecho").warning(
             "FEEDECHO_BASE_URL is not set: account verification and password "
             "reset emails cannot be sent (their links would be relative)."
+        )
+    if not CREDENTIAL_KEY:
+        # Same reasoning: a missing key degrades security (credentials are
+        # stored plaintext), not availability. Loud, so an operator who
+        # intended to encrypt notices it in the logs, but not an outage.
+        logging.getLogger("feedecho").warning(
+            "FEEDECHO_CREDENTIAL_KEY is not set: third-party account "
+            "credentials (Mastodon/Bluesky/Matrix/micro.blog/Discord tokens, "
+            "SMTP passwords, vision API keys) are stored in PLAINTEXT. Set "
+            "it to a Fernet key to encrypt them at rest."
         )

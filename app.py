@@ -2158,7 +2158,7 @@ async def add_account(
         db.execute(
             "INSERT INTO accounts (name, username, instance, access_token, user_id)"
             " VALUES (?, ?, ?, ?, ?)",
-            (name, username or name, instance, access_token, uid),
+            (name, username or name, instance, security.encrypt_secret(access_token), uid),
         )
     return RedirectResponse(url="/accounts", status_code=303)
 
@@ -2173,7 +2173,7 @@ def test_account(request: Request, account_id: int):
         ).fetchone()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    success, message = test_connection(account["instance"], account["access_token"])
+    success, message = test_connection(account["instance"], security.decrypt_secret(account["access_token"]))
     return {"success": success, "message": message}
 
 
@@ -2309,11 +2309,11 @@ def add_bluesky_account(
             (
                 display_name,
                 handle,
-                app_password,
+                security.encrypt_secret(app_password),
                 session["did"],
                 pds,
-                session["access_jwt"],
-                session["refresh_jwt"],
+                security.encrypt_secret(session["access_jwt"]),
+                security.encrypt_secret(session["refresh_jwt"]),
                 bluesky_session_expiry(session["access_jwt"]),
                 uid,
             ),
@@ -2332,7 +2332,7 @@ def test_bluesky_account(request: Request, account_id: int):
     if not account:
         raise HTTPException(status_code=404, detail="Bluesky account not found")
     success, message = test_bluesky_connection(
-        account["handle"], account["app_password"]
+        account["handle"], security.decrypt_secret(account["app_password"])
     )
     return {"success": success, "message": message}
 
@@ -2436,7 +2436,7 @@ def add_microblog_account(
                     name = excluded.name,
                     token = excluded.token
                 """,
-                (blog["name"], blog["uid"], token, uid),
+                (blog["name"], blog["uid"], security.encrypt_secret(token), uid),
             )
     return RedirectResponse(url="/accounts?status=microblog_connected", status_code=303)
 
@@ -2451,7 +2451,7 @@ def test_microblog_account(request: Request, account_id: int):
         ).fetchone()
     if not account:
         raise HTTPException(status_code=404, detail="Micro.blog account not found")
-    success, message = test_microblog_connection(account["token"])
+    success, message = test_microblog_connection(security.decrypt_secret(account["token"]))
     return {"success": success, "message": message}
 
 
@@ -2562,7 +2562,7 @@ def add_matrix_account(
                 display_name,
                 homeserver,
                 info["base_url"],
-                access_token,
+                security.encrypt_secret(access_token),
                 info["user_id"],
                 info["room_id"],
                 info["room_alias"],
@@ -2586,7 +2586,7 @@ def test_matrix_account(request: Request, account_id: int):
     # for rows written before discovery ran (or when well-known was down).
     base = account["base_url"] or account["homeserver"]
     success, message = test_matrix_connection(
-        base, account["access_token"], account["room_id"]
+        base, security.decrypt_secret(account["access_token"]), account["room_id"]
     )
     return {"success": success, "message": message}
 
@@ -2648,28 +2648,39 @@ def add_discord_account(
 
     with get_db() as db:
         uid = current_user_id(request)
-        # Cap counts NEW rows only: reconnecting the same webhook (to refresh
-        # the name) updates in place and must not be blocked at the cap.
-        existing = db.execute(
-            "SELECT id FROM discord_accounts"
-            " WHERE user_id = ? AND webhook_url = ?",
-            (uid, info["webhook_url"]),
-        ).fetchone()
-        if not existing:
+        # Dedup by the decrypted webhook URL: it is stored encrypted (Fernet is
+        # non-deterministic), so the natural key cannot be a SQL equality on
+        # the ciphertext. A user has at most a handful of Discord accounts, so
+        # decrypt-and-compare is cheap. Legacy plaintext rows decrypt to
+        # themselves via the fallback, so they still match.
+        existing = None
+        for row in db.execute(
+            "SELECT id, webhook_url FROM discord_accounts WHERE user_id = ?",
+            (uid,),
+        ).fetchall():
+            if security.decrypt_secret(row["webhook_url"]) == info["webhook_url"]:
+                existing = row
+                break
+        if existing is None:
             try:
                 _check_destination_cap(db, uid)
             except PlanError as e:
                 return _render_accounts_error(request, str(e))
-        db.execute(
-            """
-            INSERT INTO discord_accounts (name, webhook_url, channel_id, user_id)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id, webhook_url) DO UPDATE SET
-                name = excluded.name,
-                channel_id = excluded.channel_id
-            """,
-            (display_name, info["webhook_url"], info["channel_id"], uid),
-        )
+            db.execute(
+                "INSERT INTO discord_accounts (name, webhook_url, channel_id, user_id)"
+                " VALUES (?, ?, ?, ?)",
+                (display_name, security.encrypt_secret(info["webhook_url"]),
+                 info["channel_id"], uid),
+            )
+        else:
+            # Reconnect: refresh name/channel_id, and re-encrypt a legacy
+            # plaintext row on the way (lazy migration).
+            db.execute(
+                "UPDATE discord_accounts SET name = ?, channel_id = ?, webhook_url = ?"
+                " WHERE id = ?",
+                (display_name, info["channel_id"],
+                 security.encrypt_secret(info["webhook_url"]), existing["id"]),
+            )
     return RedirectResponse(url="/accounts?status=discord_connected", status_code=303)
 
 
@@ -2683,7 +2694,7 @@ def test_discord_account(request: Request, account_id: int):
         ).fetchone()
     if not account:
         raise HTTPException(status_code=404, detail="Discord account not found")
-    success, message = test_discord_connection(account["webhook_url"])
+    success, message = test_discord_connection(security.decrypt_secret(account["webhook_url"]))
     return {"success": success, "message": message}
 
 
@@ -2925,7 +2936,7 @@ async def save_smtp_settings(
             db.execute(
                 "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
                 " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-                (uid, "smtp_password", smtp_password),
+                (uid, "smtp_password", security.encrypt_secret(smtp_password)),
             )
     return RedirectResponse(url="/settings?status=saved", status_code=303)
 
@@ -3009,7 +3020,7 @@ async def save_alt_text_settings(
             db.execute(
                 "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
                 " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-                (uid, "alt_text_ai_api_key", alt_text_ai_api_key.strip()),
+                (uid, "alt_text_ai_api_key", security.encrypt_secret(alt_text_ai_api_key.strip())),
             )
     return RedirectResponse(url="/settings?status=saved", status_code=303)
 
@@ -4104,7 +4115,7 @@ def oauth_callback(
         db.execute(
             """INSERT INTO accounts (name, username, instance, access_token, user_id)
                VALUES (?, ?, ?, ?, ?)""",
-            (display_name, username, instance, access_token, state_user_id or 1),
+            (display_name, username, instance, security.encrypt_secret(access_token), state_user_id or 1),
         )
 
     response = RedirectResponse(url="/accounts?status=connected", status_code=303)

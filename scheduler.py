@@ -15,6 +15,7 @@ import settings
 import plans
 from database import get_db, timestamp_str, prune_feed_items
 from email_sender import send_email
+from security import decrypt_secret, encrypt_secret
 from feed_parser import (
     fetch_feed,
     fetch_image,
@@ -1110,7 +1111,7 @@ def _send_mastodon(
                         )
                 uploaded = upload_media(
                     instance=account["instance"],
-                    access_token=account["access_token"],
+                    access_token=decrypt_secret(account["access_token"]),
                     image_bytes=img_bytes,
                     content_type=img_type,
                     description=description,
@@ -1152,7 +1153,7 @@ def _send_mastodon(
     try:
         result = post_status(
             instance=account["instance"],
-            access_token=account["access_token"],
+            access_token=decrypt_secret(account["access_token"]),
             content=truncate(content, MASTODON_MAX_CHARS),
             visibility=echo["visibility"],
             sensitive=sensitive,
@@ -1248,11 +1249,11 @@ def _bsky_session(account) -> dict:
     connection held; only the short cache write opens one.
     """
     handle = account["handle"]
-    app_password = account["app_password"]
+    app_password = decrypt_secret(account["app_password"])
     pds = (account["pds"] or "").strip()
     did = (account["did"] or "").strip()
-    access_jwt = (account["access_jwt"] or "").strip()
-    refresh_jwt = (account["refresh_jwt"] or "").strip()
+    access_jwt = decrypt_secret(account["access_jwt"] or "").strip()
+    refresh_jwt = decrypt_secret(account["refresh_jwt"] or "").strip()
     now = _now()
 
     resolved_did = None
@@ -1301,8 +1302,8 @@ def _bsky_session(account) -> dict:
             (
                 session["did"],
                 pds,
-                session["access_jwt"],
-                session["refresh_jwt"],
+                encrypt_secret(session["access_jwt"]),
+                encrypt_secret(session["refresh_jwt"]),
                 session_expiry(session["access_jwt"]),
                 account["id"],
             ),
@@ -1475,7 +1476,7 @@ def _send_bluesky(
             if not fresh:
                 raise BlueskyError("Bluesky account was deleted during dispatch")
             refreshed = create_session(
-                session["pds"], fresh["handle"], fresh["app_password"]
+                session["pds"], fresh["handle"], decrypt_secret(fresh["app_password"])
             )
             with get_db() as db:
                 db.execute(
@@ -1487,8 +1488,8 @@ def _send_bluesky(
                     """,
                     (
                         refreshed["did"],
-                        refreshed["access_jwt"],
-                        refreshed["refresh_jwt"],
+                        encrypt_secret(refreshed["access_jwt"]),
+                        encrypt_secret(refreshed["refresh_jwt"]),
                         session_expiry(refreshed["access_jwt"]),
                         account["id"],
                     ),
@@ -1618,7 +1619,7 @@ def _send_microblog(
 
     try:
         result = microblog_create_post(
-            token=account["token"],
+            token=decrypt_secret(account["token"]),
             content=content,
             destination=account["uid"],
             photo_url=photo_url,
@@ -1686,7 +1687,7 @@ def _send_matrix(
         )
 
     base_url = account["base_url"] or account["homeserver"]
-    access_token = account["access_token"]
+    access_token = decrypt_secret(account["access_token"])
     room_id = account["room_id"]
 
     # Image work happens BEFORE the text event so its slow I/O (fetch, alt
@@ -1890,7 +1891,7 @@ def _send_discord(
             permanent=True,
         )
 
-    webhook_url = account["webhook_url"]
+    webhook_url = decrypt_secret(account["webhook_url"])
 
     try:
         attach_image = bool(echo["attach_image"])

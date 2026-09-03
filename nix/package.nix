@@ -36,6 +36,7 @@ pythonPkg.pkgs.buildPythonApplication {
     feedparser
     httpx
     apscheduler
+    cryptography
   ];
 
   nativeCheckInputs = with pythonPkg.pkgs; [ pytest pytest-asyncio ];

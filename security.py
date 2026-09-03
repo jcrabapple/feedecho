@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 
 import settings
@@ -31,6 +32,11 @@ _SCRYPT_R = 8
 _SCRYPT_P = 1
 _SCRYPT_MAXMEM = 256 * 1024 * 1024
 
+# scrypt releases the GIL, so N concurrent hashes genuinely run in parallel and
+# stack N × ~128 MiB. Bound concurrency so a login/register/reset burst cannot
+# OOM the box. Default 4 (≈512 MiB peak); tune via FEEDECHO_SCRYPT_CONCURRENCY.
+_scrypt_semaphore = threading.BoundedSemaphore(settings.SCRYPT_CONCURRENCY)
+
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 _SESSION_PURPOSE = b"feedecho-session:v1"
@@ -45,17 +51,22 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def _scrypt(password: bytes, salt: bytes, n: int, r: int, p: int) -> bytes:
+    """Run hashlib.scrypt under the global concurrency cap.
+
+    scrypt releases the GIL, so concurrent calls genuinely run in parallel and
+    each holds ~128 MiB. The semaphore bounds total simultaneous hashes.
+    """
+    with _scrypt_semaphore:
+        return hashlib.scrypt(
+            password, salt=salt, n=n, r=r, p=p, maxmem=_SCRYPT_MAXMEM
+        )
+
+
 def hash_password(password: str) -> str:
     """scrypt-hash a password. Format: scrypt$N$r$p$salt_b64$digest_b64."""
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(
-        password.encode(),
-        salt=salt,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-    )
+    digest = _scrypt(password.encode(), salt, _SCRYPT_N, _SCRYPT_R, _SCRYPT_P)
     return "scrypt${}${}${}${}${}".format(
         _SCRYPT_N, _SCRYPT_R, _SCRYPT_P, _b64(salt), _b64(digest)
     )
@@ -74,14 +85,7 @@ def verify_password(password: str, stored: str) -> bool:
             return False
         salt = _unb64(salt_b64)
         expected = _unb64(digest_b64)
-        actual = hashlib.scrypt(
-            password.encode(),
-            salt=salt,
-            n=int(n),
-            r=int(r),
-            p=int(p),
-            maxmem=_SCRYPT_MAXMEM,
-        )
+        actual = _scrypt(password.encode(), salt, int(n), int(r), int(p))
         return hmac.compare_digest(actual, expected)
     except (ValueError, TypeError):
         return False

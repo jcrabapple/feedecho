@@ -37,6 +37,15 @@ _MAX_REGISTER_ATTEMPTS = 10
 _REGISTER_WINDOW_SECONDS = 10 * 60
 _register_attempts: dict[str, list[float]] = {}
 
+# Per-account login throttle: a distributed attacker rotates source IPs, so the
+# per-IP bucket alone cannot stop a brute-force against one account. Keyed by
+# lowercased email; recorded even for unknown addresses (same enumeration-safe
+# posture as the per-IP throttle). In-memory like the rest; the DB/Redis
+# migration lands with the D2 scale work.
+_MAX_ACCOUNT_ATTEMPTS = 10
+_ACCOUNT_WINDOW_SECONDS = 15 * 60
+_account_attempts: dict[str, list[float]] = {}
+
 _EMAIL_RE = re.compile(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$")
 
 
@@ -169,6 +178,24 @@ def _clear_failures(ip: str) -> None:
     """A successful login resets the failure bucket for that IP."""
     with _login_lock:
         _login_attempts.pop(ip, None)
+
+
+def _account_throttled(email: str) -> bool:
+    with _login_lock:
+        return (
+            len(_prune(_account_attempts, email, _ACCOUNT_WINDOW_SECONDS))
+            >= _MAX_ACCOUNT_ATTEMPTS
+        )
+
+
+def _record_account_failure(email: str) -> None:
+    with _login_lock:
+        _account_attempts.setdefault(email, []).append(time.monotonic())
+
+
+def _clear_account_failures(email: str) -> None:
+    with _login_lock:
+        _account_attempts.pop(email, None)
 
 
 def _set_session_cookie(
@@ -419,7 +446,8 @@ def login_submit(
         return _render_auth(request, "login.html", error="Invalid token")
 
     ip = _client_ip(request)
-    if _throttled(ip):
+    email = email.strip().lower()
+    if _throttled(ip) or _account_throttled(email):
         return _render_auth(
             request,
             "login.html",
@@ -427,7 +455,6 @@ def login_submit(
             error="Too many failed attempts. Try again in a few minutes.",
         )
 
-    email = email.strip().lower()
     with get_db() as db:
         user = db.execute(
             "SELECT id, email, password_hash, suspended, session_epoch"
@@ -439,15 +466,18 @@ def login_submit(
         # timing does not reveal whether an account exists.
         verify_password(password, _DUMMY_HASH)
         _record_failure(ip)
+        _record_account_failure(email)
         return _render_auth(
             request, "login.html", multi=True, error="Invalid email or password"
         )
     if not verify_password(password, user["password_hash"]):
         _record_failure(ip)
+        _record_account_failure(email)
         return _render_auth(
             request, "login.html", multi=True, error="Invalid email or password"
         )
     _clear_failures(ip)
+    _clear_account_failures(email)
     if user["suspended"]:
         return _render_auth(
             request, "login.html", multi=True, error="This account is suspended."

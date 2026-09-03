@@ -257,12 +257,19 @@ class TestNoBlockingCallsOnAsyncHandlers:
         "send_message",
         "send_image",
         "matrix_connect",
+        # scrypt hashing (~200 ms, ~128 MiB) on the event loop is the S7
+        # unauthenticated-DoS vector. get_db is deliberately NOT listed: it is
+        # a fast local call used in ~38 async routes, and adding it would force
+        # an unrelated whole-app refactor.
+        "hash_password",
+        "verify_password",
     }
 
     def test_no_async_route_performs_blocking_io(self):
         import ast
         from pathlib import Path
 
+        auth_blocking = self._auth_blocking_names()
         src = Path(__file__).resolve().parent.parent / "app.py"
         tree = ast.parse(src.read_text())
         offenders = []
@@ -277,12 +284,76 @@ class TestNoBlockingCallsOnAsyncHandlers:
                     )
                     if name in self.BLOCKING:
                         called.add(name)
+                    # Follow `auth.<handler>` into auth.py: the blocking call
+                    # (scrypt) lives inside the handler, not the route wrapper.
+                    if (
+                        isinstance(child.func, ast.Attribute)
+                        and getattr(child.func.value, "id", None) == "auth"
+                        and name in auth_blocking
+                    ):
+                        called.add(f"auth.{name}")
             if called:
                 offenders.append(f"{node.name} (line {node.lineno}): {sorted(called)}")
         assert not offenders, (
             "async handlers doing blocking I/O — declare them `def` so FastAPI "
             "offloads them to the threadpool:\n  " + "\n  ".join(offenders)
         )
+
+    def _auth_blocking_names(self) -> set[str]:
+        """auth.py handlers that synchronously call a BLOCKING function.
+
+        Resolves calls within auth.py transitively, but a call wrapped in
+        asyncio.to_thread()/asyncio.create_task() is offloaded to a worker
+        thread and does not block the event loop (forgot_submit's reset email
+        is dispatched that way, so it must not be flagged).
+        """
+        import ast
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parent.parent / "auth.py"
+        tree = ast.parse(src.read_text())
+
+        funcs: dict[str, set[str]] = {}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs[node.name] = self._sync_calls(node)
+
+        resolved: dict[str, set[str]] = {}
+        changed = True
+        while changed:
+            changed = False
+            for name, called in funcs.items():
+                block = set(resolved.get(name, ()))
+                for c in called:
+                    if c in self.BLOCKING:
+                        block.add(c)
+                    elif c in funcs and c != name:
+                        block |= resolved.get(c, set())
+                if block != resolved.get(name):
+                    resolved[name] = block
+                    changed = True
+        return {n for n, b in resolved.items() if b}
+
+    @classmethod
+    def _sync_calls(cls, node) -> set[str]:
+        """Names a function calls synchronously; offloaded calls are skipped."""
+        import ast
+
+        names: set[str] = set()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Call):
+                if (
+                    isinstance(child.func, ast.Attribute)
+                    and child.func.attr in ("to_thread", "create_task")
+                ):
+                    continue  # offloaded to a worker thread; skip the subtree
+                name = getattr(child.func, "id", None) or getattr(
+                    child.func, "attr", None
+                )
+                if name:
+                    names.add(name)
+            names |= cls._sync_calls(child)
+        return names
 
 
 class TestAltTextTenantScopingAndSsrf:

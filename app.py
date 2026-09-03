@@ -442,7 +442,7 @@ async def login_page(request: Request):
 
 
 @app.post("/login")
-async def login_submit(
+def login_submit(
     request: Request,
     email: str = Form(""),
     password: str = Form(""),
@@ -457,7 +457,7 @@ async def register_page(request: Request):
 
 
 @app.post("/register")
-async def register_submit(
+def register_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
@@ -491,7 +491,7 @@ async def reset_page(request: Request, token: str = ""):
 
 
 @app.post("/reset-password")
-async def reset_submit(
+def reset_submit(
     request: Request,
     token: str = Form(""),
     password: str = Form(""),

@@ -44,6 +44,10 @@ _register_attempts: dict[str, list[float]] = {}
 # migration lands with the D2 scale work.
 _MAX_ACCOUNT_ATTEMPTS = 10
 _ACCOUNT_WINDOW_SECONDS = 15 * 60
+# Bound the account-failure dict: emails are attacker-supplied and effectively
+# infinite, so a rotating spray must not grow memory without limit. Sweep runs
+# when this many buckets accumulate.
+_ACCOUNT_SWEEP_THRESHOLD = 10_000
 _account_attempts: dict[str, list[float]] = {}
 
 _EMAIL_RE = re.compile(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$")
@@ -190,6 +194,16 @@ def _account_throttled(email: str) -> bool:
 
 def _record_account_failure(email: str) -> None:
     with _login_lock:
+        # Emails are an unbounded keyspace (worse than IPs), so a spray of
+        # rotating addresses would otherwise accumulate one dict entry each,
+        # forever. Sweep expired buckets once the dict crosses a threshold.
+        if len(_account_attempts) >= _ACCOUNT_SWEEP_THRESHOLD:
+            now = time.monotonic()
+            for key in [
+                k for k, ts in _account_attempts.items()
+                if not ts or now - ts[-1] >= _ACCOUNT_WINDOW_SECONDS
+            ]:
+                del _account_attempts[key]
         _account_attempts.setdefault(email, []).append(time.monotonic())
 
 
@@ -447,7 +461,7 @@ def login_submit(
 
     ip = _client_ip(request)
     email = email.strip().lower()
-    if _throttled(ip) or _account_throttled(email):
+    if _throttled(ip):
         return _render_auth(
             request,
             "login.html",
@@ -470,22 +484,39 @@ def login_submit(
         return _render_auth(
             request, "login.html", multi=True, error="Invalid email or password"
         )
-    if not verify_password(password, user["password_hash"]):
-        _record_failure(ip)
-        _record_account_failure(email)
-        return _render_auth(
-            request, "login.html", multi=True, error="Invalid email or password"
-        )
-    _clear_failures(ip)
-    _clear_account_failures(email)
-    if user["suspended"]:
-        return _render_auth(
-            request, "login.html", multi=True, error="This account is suspended."
-        )
 
-    response = RedirectResponse(url="/", status_code=302)
-    _set_session_cookie(response, user["id"], user["email"], request, user["session_epoch"])
-    return response
+    # Verify the password BEFORE consulting the per-account throttle: a correct
+    # password must always succeed, or a distributed attacker could lock a
+    # victim out of their own account by piling up bad attempts against their
+    # email (the per-IP bucket keys on the attacker's own address, but the
+    # account bucket keys on the victim). Verify-first, throttle-second, the
+    # same order the single-mode token login uses.
+    if verify_password(password, user["password_hash"]):
+        _clear_failures(ip)
+        _clear_account_failures(email)
+        if user["suspended"]:
+            return _render_auth(
+                request, "login.html", multi=True, error="This account is suspended."
+            )
+        response = RedirectResponse(url="/", status_code=302)
+        _set_session_cookie(
+            response, user["id"], user["email"], request, user["session_epoch"]
+        )
+        return response
+
+    # Wrong password: record, then throttle only the wrong-password path.
+    _record_failure(ip)
+    _record_account_failure(email)
+    if _account_throttled(email):
+        return _render_auth(
+            request,
+            "login.html",
+            multi=True,
+            error="Too many failed attempts. Try again in a few minutes.",
+        )
+    return _render_auth(
+        request, "login.html", multi=True, error="Invalid email or password"
+    )
 
 
 def logout():

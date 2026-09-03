@@ -2310,7 +2310,10 @@ def _delete_throttled(uid: int) -> bool:
     now = time.time()
     with _delete_lock:
         bucket = [t for t in _delete_attempts.get(uid, []) if now - t < _DELETE_WINDOW_SECONDS]
-        _delete_attempts[uid] = bucket
+        if bucket:
+            _delete_attempts[uid] = bucket
+        else:
+            _delete_attempts.pop(uid, None)
         return len(bucket) >= _MAX_DELETE_ATTEMPTS
 
 

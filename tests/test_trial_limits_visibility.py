@@ -32,15 +32,15 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "trial-limits.db")
-    # v1.46.0: with billing advertised, the startup guard requires the
-    # checkout route to exist. The OSS app has no billing module, so stub it
-    # exactly like the hosted entrypoint does in production.
-    if settings.BILLING_ENABLED and not any(
-        getattr(r, "path", None) == "/api/billing/checkout" for r in app.routes
-    ):
-        @app.get("/api/billing/checkout")
-        def _stub_checkout():
-            return {"ok": True}
+    # These tests exercise the billing UI SEAM (CTA, settings section, register
+    # redirect), not the startup guard — that has its own tests below. The OSS
+    # app has no billing module, so when a test turns BILLING_ENABLED on, the
+    # lifespan's _assert_billing_mounted would refuse to boot. No-op it here
+    # (monkeypatch-scoped, unlike a route registered on the shared app, which
+    # would leak across the whole session).
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "_assert_billing_mounted", lambda app: None)
     database.init_db()
     with database.get_db() as db:
         db.execute(

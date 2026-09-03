@@ -212,6 +212,28 @@ def _add_column_if_missing(
         )
 
 
+def _dedupe_discord_webhook_hashes(db) -> None:
+    """Collapse duplicate (user_id, webhook_url_hash) rows before the unique
+    index is built.
+
+    The old UNIQUE(user_id, webhook_url) was on the ciphertext, so a prior
+    racy dedup could theoretically have stored the same plaintext webhook
+    twice under two ciphertexts — the backfill would then give them the same
+    hash and CREATE UNIQUE INDEX would fail. Keep the lowest id per group.
+    """
+    dupes = db.execute(
+        "SELECT user_id, webhook_url_hash, MIN(id) AS keep_id"
+        " FROM discord_accounts WHERE webhook_url_hash != ''"
+        " GROUP BY user_id, webhook_url_hash HAVING COUNT(*) > 1"
+    ).fetchall()
+    for d in dupes:
+        db.execute(
+            "DELETE FROM discord_accounts"
+            " WHERE user_id = ? AND webhook_url_hash = ? AND id != ?",
+            (d["user_id"], d["webhook_url_hash"], d["keep_id"]),
+        )
+
+
 def prune_feed_items(db, feed_id: int, limit: int | None = None) -> None:
     """Delete a feed's oldest items beyond ``limit``, newest kept.
 
@@ -525,6 +547,7 @@ def init_db_sqlite() -> None:
                 "UPDATE discord_accounts SET webhook_url_hash = ? WHERE id = ?",
                 (hash_secret(decrypt_secret(_row["webhook_url"])), _row["id"]),
             )
+        _dedupe_discord_webhook_hashes(db)
         db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_user_hash"
             " ON discord_accounts(user_id, webhook_url_hash)"
@@ -1080,6 +1103,7 @@ def init_db_postgres() -> None:
                 "UPDATE discord_accounts SET webhook_url_hash = ? WHERE id = ?",
                 (hash_secret(decrypt_secret(_row["webhook_url"])), _row["id"]),
             )
+        _dedupe_discord_webhook_hashes(db)
         db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_user_hash"
             " ON discord_accounts(user_id, webhook_url_hash)"

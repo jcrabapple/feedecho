@@ -3,18 +3,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies first for layer caching
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir \
-    "fastapi>=0.115.0" \
-    "uvicorn[standard]>=0.34.0" \
-    "jinja2>=3.1.0" \
-    "python-multipart>=0.0.18" \
-    "feedparser>=6.0.11" \
-    "httpx>=0.28.0" \
-    "apscheduler>=3.10.4" \
-    "cryptography>=42.0.0" \
-    "psycopg[binary]>=3.2"
+# Install dependencies from the lockfile for reproducible builds
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 COPY . .
 

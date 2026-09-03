@@ -195,7 +195,7 @@ function editFeed(feedId) {
     const muteKeywords = row.dataset.muteKeywords || '';
 
     row.innerHTML = `<td colspan="6">
-        <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form">
+        <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form" aria-label="Edit feed">
             <div class="form-row">
                 <label>Name
                     <input type="text" name="name" value="${escapeHTML(name)}" required>
@@ -204,7 +204,7 @@ function editFeed(feedId) {
                     <input type="url" name="url" value="${escapeHTML(url)}" required>
                 </label>
                 <label>Poll interval (min)
-                    <input type="number" name="poll_interval" min="1" max="1440" value="${pollInterval}">
+                    <input type="number" name="poll_interval" min="1" max="1440" value="${escapeHTML(pollInterval)}">
                 </label>
                 <label>Mute keywords (comma-separated)
                     <input type="text" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
@@ -322,7 +322,7 @@ function editEcho(echoId) {
     const matrixStyle = destType === 'matrix' ? '' : 'display:none';
 
     row.innerHTML = `<td colspan="5">
-        <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form">
+        <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form" aria-label="Edit echo">
             <div class="form-row">
                 <label>Feed
                     <select name="feed_id" required>${feedOpts}</select>
@@ -412,7 +412,7 @@ function editEcho(echoId) {
             </div>
             <div class="form-row" id="edit-drip-fields-${echoId}">
                 <label>Max posts per hour
-                    <input type="number" name="drip_limit" min="0" max="1000" value="${dripLimit}">
+                    <input type="number" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}">
                 </label>
             </div>
             <div class="form-row edit-actions">
@@ -1088,6 +1088,9 @@ function readerLoadBody(details) {
     if (!itemId) return;
     content.dataset.loaded = '1';
     content.classList.add('is-loading');
+    // Announce the body arrival: scoped to this one item (set live only while
+    // loading) so the whole list isn't a wall of live regions.
+    content.setAttribute('aria-live', 'polite');
     fetch(`/api/reader/${itemId}/body`)
         .then((r) => (r.ok ? r.json() : Promise.reject()))
         .then((d) => { content.textContent = d.content || ''; content.classList.remove('is-loading'); })

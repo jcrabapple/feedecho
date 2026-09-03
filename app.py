@@ -20,6 +20,7 @@ import uuid
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -502,8 +503,105 @@ def reset_submit(
     )
 
 
+# ── S8: Security headers middleware ──────────────────────────────────────────
+#
+# Progressive CSP: frame-ancestors blocks clickjacking (the S9 half);
+# script-src 'unsafe-inline' is a concession to the 42 inline onclick handlers
+# and 3 inline <script> blocks that predate this release.  A strict nonce-based
+# CSP requires migrating all of those to addEventListener / external files —
+# deferred to the A-batch a11y/refactor work.
+#
+# Stripe billing is safe: the hosted checkout flow is a 302 redirect, not a
+# client-side JS iframe or connect to stripe.com.
+
+_CSP_HEADER = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: https: http:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "frame-src 'none'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Sets security headers on every response (S8)."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        h = response.headers
+        if "X-Content-Type-Options" not in h:
+            h["X-Content-Type-Options"] = "nosniff"
+        if "X-Frame-Options" not in h:
+            h["X-Frame-Options"] = "DENY"
+        if "Referrer-Policy" not in h:
+            h["Referrer-Policy"] = "no-referrer"
+        if "Permissions-Policy" not in h:
+            h["Permissions-Policy"] = (
+                "camera=(), microphone=(), geolocation=(), payment=()"
+            )
+        if "Content-Security-Policy" not in h:
+            h["Content-Security-Policy"] = _CSP_HEADER
+        # Emit HSTS unconditionally: browsers ignore the header over plain HTTP
+        # (RFC 6797), so it is safe on http:// and correct on https://. Gating on
+        # request.url.scheme silently fails behind a TLS-terminating reverse
+        # proxy (the app then reads scheme=http even though the client is on
+        # https) — exactly the deployments that need it. Caddy sets its own HSTS
+        # for the hosted service; this covers self-hosters behind their own TLS.
+        if "Strict-Transport-Security" not in h:
+            h["Strict-Transport-Security"] = "max-age=31536000"
+        return response
+
+
+# ── S9: CSRF Origin check on state-changing methods ──────────────────────────
+#
+# The session cookie is SameSite=Lax, which already blocks most CSRF in modern
+# browsers.  This is the recommended second layer: for unsafe methods, a
+# cross-origin Origin (or, as fallback, Referer) is rejected.  "Origin: null"
+# is treated as a mismatch.  Neither header present → allow (non-browser clients
+# like webhooks, curl, and single-mode API scripts).
+
+class CSRFOriginMiddleware(BaseHTTPMiddleware):
+    """Origin/Referer check on state-changing requests (S9)."""
+
+    _UNSAFE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method in self._UNSAFE and not self._same_origin(request):
+            return Response(status_code=403)
+        return await call_next(request)
+
+    @staticmethod
+    def _same_origin(request: Request) -> bool:
+        req_host = (request.url.hostname or "").lower()
+        origin = request.headers.get("origin")
+        if origin is not None:
+            return _host_matches(origin, req_host)
+        referer = request.headers.get("referer")
+        if referer is not None:
+            return _host_matches(referer, req_host)
+        return True  # no browser headers — non-browser client
+
+
+def _host_matches(url_val: str, expect_host: str) -> bool:
+    if not url_val or url_val.strip().lower() == "null":
+        return False
+    try:
+        host = (urlsplit(url_val).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == expect_host
+
+
 app.add_middleware(AuthMiddleware)
-# Outermost: request-id threading + access logging wraps auth.
+app.add_middleware(CSRFOriginMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+# Outermost: request-id threading + access logging wraps everything.
 app.add_middleware(RequestIdMiddleware)
 
 

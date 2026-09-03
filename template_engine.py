@@ -21,11 +21,51 @@ import re
 from datetime import datetime
 
 from jinja2 import TemplateSyntaxError
+from jinja2.exceptions import SecurityError
 from jinja2.sandbox import SandboxedEnvironment
+
+# A post is at most a few KB (Mastodon 500, Bluesky 300, Matrix 32K, email a
+# few KB). These caps are deliberately generous for real templates while
+# stopping the exponential-blowup DoS: `{{ 'A' * 50000000 }}` renders a 50 MB
+# string in ~0.2s, and `{% set a = 'A' * 100000 %}{{ a * 100000 }}` requests
+# 10 GB. The multiplication is evaluated before any output cap could catch it,
+# so it must be bounded at the operator.
+_MAX_REPEAT = 100_000    # max chars/items a single `*` may produce
+_MAX_OUTPUT = 1_000_000  # max rendered output chars (backstop)
+
+
+class CappedSandbox(SandboxedEnvironment):
+    """SandboxedEnvironment that also bounds sequence repetition (`*`)."""
+
+    intercepted_binops = frozenset(["*"])
+
+    def call_binop(self, context, operator, left, right):
+        if operator == "*":
+            self._guard_repeat(left, right)
+        return super().call_binop(context, operator, left, right)
+
+    def _guard_repeat(self, left, right) -> None:
+        """Reject `seq * n` that would allocate more than _MAX_REPEAT items.
+
+        Checked before the operator runs, so the oversized result is never
+        allocated. ``n < 0`` and ``n == 0`` produce an empty sequence and are
+        safe.
+        """
+        for seq, n in ((left, right), (right, left)):
+            if isinstance(seq, (str, bytes, list, tuple)) and isinstance(n, int):
+                if n < 0:
+                    return
+                if n and len(seq) * n > _MAX_REPEAT:
+                    raise SecurityError(
+                        "Template uses `*` to build an oversized value "
+                        f"({len(seq)} items repeated {n} times)"
+                    )
+                return
+
 
 # Post content is plain text (Mastodon/Bluesky statuses, email bodies),
 # never HTML — no autoescaping.
-env = SandboxedEnvironment(autoescape=False)
+env = CappedSandbox(autoescape=False)
 
 # Jinja2 identifiers cannot contain colons, but the original engine exposed
 # {{ date:iso }} and {{ date:short }}. Normalize those two tokens before
@@ -120,10 +160,16 @@ def render_template(template: str, item: dict, feed_name: str = "") -> str:
 
     Raises:
         jinja2.TemplateSyntaxError on malformed templates.
-        jinja2.exceptions.SecurityError on sandbox violations.
+        jinja2.exceptions.SecurityError on sandbox violations or oversized output.
     """
     context = _build_context(item, feed_name)
-    return env.from_string(_normalize(template or "")).render(**context)
+    result = env.from_string(_normalize(template or "")).render(**context)
+    if len(result) > _MAX_OUTPUT:
+        raise SecurityError(
+            f"Template output is {len(result)} chars, over the "
+            f"{_MAX_OUTPUT}-char cap"
+        )
+    return result
 
 
 def validate_template(template: str) -> None:

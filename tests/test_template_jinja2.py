@@ -162,3 +162,26 @@ class TestSandbox:
 
     def test_plain_braces_not_an_expression(self):
         assert render_template("Plain { text } here", ITEM) == "Plain { text } here"
+
+    def test_repeat_oversized_refused(self):
+        # `{{ 'A' * 50000000 }}` rendered a 50 MB string in ~0.2s before the
+        # cap; the `*` operator must be bounded before it allocates.
+        with pytest.raises(SecurityError):
+            render_template("{{ 'A' * 50000000 }}", ITEM)
+
+    def test_nested_repeat_refused(self):
+        # `{% set a = 'A' * 100000 %}{{ a * 100000 }}` requested ~10 GB.
+        with pytest.raises(SecurityError):
+            render_template("{% set a = 'A' * 100000 %}{{ a * 100000 }}", ITEM)
+
+    def test_small_repeat_allowed(self):
+        # The cap must not break legitimate repetition.
+        assert render_template("{{ '-' * 5 }}", ITEM) == "-----"
+
+    def test_output_backstop_refused(self):
+        # 100000 iterations * 11 chars = 1.1M > the 1M output backstop,
+        # exercised independent of the `*` operator.
+        with pytest.raises(SecurityError):
+            render_template(
+                "{% for i in range(100000) %}xxxxxxxxxxx{% endfor %}", ITEM
+            )

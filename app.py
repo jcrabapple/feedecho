@@ -2275,6 +2275,87 @@ async def import_all(request: Request, file: UploadFile = File(...)):
     return _render_settings(request, import_success=", ".join(parts) + ".")
 
 
+# ── Account deletion (D4) ───────────────────────────────────────────────────
+
+# Overlay-registered hooks run before a tenant is hard-deleted. The OSS repo
+# knows nothing about Stripe; the hosted billing module registers a hook that
+# cancels the user's subscription so deleting an account never leaves an
+# orphaned charge. Each hook takes (uid) and is best-effort — a failure is
+# logged, never blocks deletion.
+_account_deletion_hooks: list = []
+
+
+def register_account_deletion_hook(fn) -> None:
+    _account_deletion_hooks.append(fn)
+
+
+def _hard_delete_user(db, uid: int) -> None:
+    """Delete every row owned by `uid`, then the user row itself.
+
+    Child rows without a user_id (feed_items, digest_items, drip_items,
+    posted_items) are scoped through their parent's id so no tenant data
+    survives. Runs inside the caller's transaction. Credential columns are
+    encrypted at rest (S3), so dropping the rows destroys the credentials.
+    """
+    # Rows keyed off the user's feeds (feed_items is the only child of feeds).
+    db.execute(
+        "DELETE FROM feed_items WHERE feed_id IN (SELECT id FROM feeds WHERE user_id = ?)",
+        (uid,),
+    )
+    # Rows keyed off the user's echoes.
+    for child in ("digest_items", "drip_items", "posted_items"):
+        db.execute(
+            f"DELETE FROM {child} WHERE echo_id IN"
+            " (SELECT id FROM echoes WHERE user_id = ?)",
+            (uid,),
+        )
+    # Parent tables carrying user_id directly.
+    for table in (
+        "echoes",
+        "feeds",
+        "accounts",
+        "email_accounts",
+        "bluesky_accounts",
+        "microblog_accounts",
+        "matrix_accounts",
+        "discord_accounts",
+        "webhook_accounts",
+    ):
+        db.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
+    db.execute("DELETE FROM settings WHERE user_id = ?", (uid,))
+    # Auth/flow tables referencing the user id without a user_id column.
+    db.execute("DELETE FROM oauth_states WHERE user_id = ?", (uid,))
+    db.execute("DELETE FROM email_tokens WHERE user_id = ?", (uid,))
+    db.execute("DELETE FROM users WHERE id = ?", (uid,))
+
+
+@app.post("/settings/delete-account")
+def delete_account_submit(request: Request, password: str = Form("")):
+    from auth import _require_multi
+
+    _require_multi()  # self-hosted has no account to delete
+    uid = current_user_id(request)
+    with get_db() as db:
+        user = db.execute(
+            "SELECT email, password_hash FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+    if not user or not security.verify_password(password, user["password_hash"]):
+        return _render_settings(request, delete_error="Incorrect password.")
+    email = user["email"]
+    for hook in _account_deletion_hooks:
+        try:
+            hook(uid)
+        except Exception:  # noqa: BLE001 — never let a hook block deletion
+            logger.exception("account-deletion hook failed for user %s", uid)
+    with get_db() as db:
+        _hard_delete_user(db, uid)
+    logger.info("User %s (%s) deleted their account", uid, email)
+    response = RedirectResponse(url="/login?deleted=1", status_code=303)
+    response.delete_cookie(auth.COOKIE_NAME)
+    response.delete_cookie(auth.AUTH_COOKIE_NAME)
+    return response
+
+
 @app.get("/healthz")
 async def healthz():
     logger.debug("health check")

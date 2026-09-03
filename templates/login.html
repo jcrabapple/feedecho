@@ -13,6 +13,9 @@
         {% if error %}
         <div class="alert alert-error" role="alert">{{ error }}</div>
         {% endif %}
+        {% if request.query_params.get('deleted') %}
+        <div class="alert alert-success" role="status">Your account has been deleted.</div>
+        {% endif %}
         {% if multi %}
         <form method="post" action="/login" class="auth-form">
             <div class="form-row">

@@ -164,4 +164,22 @@
     {% endif %}
 </section>
 {% endif %}
+
+{% if MULTI %}
+<section class="danger-zone">
+    <h2>Delete account</h2>
+    <p class="hint">Permanently deletes your account, every feed and echo, all connected destinations, and all stored credentials. This cannot be undone. Any active subscription is cancelled.</p>
+    {% if delete_error %}
+    <div class="alert alert-error" role="alert">{{ delete_error }}</div>
+    {% endif %}
+    <form method="post" action="/settings/delete-account" class="echo-form">
+        <div class="form-row">
+            <label for="delete-password">Enter your password to confirm
+                <input type="password" id="delete-password" name="password" autocomplete="current-password" required>
+            </label>
+        </div>
+        <button type="submit" class="btn-danger">Delete my account</button>
+    </form>
+</section>
+{% endif %}
 {% endblock %}

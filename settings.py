@@ -127,6 +127,17 @@ TRUSTED_PROXIES = tuple(
     c.strip() for c in env("TRUSTED_PROXIES", "").split(",") if c.strip()
 )
 
+# Cap on concurrent scrypt hashes. scrypt releases the GIL, so concurrent
+# login/register/reset attempts stack ~128 MiB each; this bounds peak memory.
+# Default 4 (≈512 MiB). Tune down on small hosts, up on large ones.
+try:
+    SCRYPT_CONCURRENCY = max(1, int(env("SCRYPT_CONCURRENCY", "4")))
+except ValueError:
+    logging.getLogger("feedecho").warning(
+        "FEEDECHO_SCRYPT_CONCURRENCY is not a valid integer; using default of 4"
+    )
+    SCRYPT_CONCURRENCY = 4
+
 # ── Plan limits (hosted mode) ────────────────────────────────────────────────
 #
 # Per-plan resource caps. JSON via FEEDECHO_PLAN_LIMITS overrides defaults;

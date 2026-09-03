@@ -2280,13 +2280,51 @@ async def import_all(request: Request, file: UploadFile = File(...)):
 # Overlay-registered hooks run before a tenant is hard-deleted. The OSS repo
 # knows nothing about Stripe; the hosted billing module registers a hook that
 # cancels the user's subscription so deleting an account never leaves an
-# orphaned charge. Each hook takes (uid) and is best-effort — a failure is
-# logged, never blocks deletion.
+# orphaned charge. A hook may raise AccountDeletionAbort to VETO the deletion
+# (e.g. it could not cancel a live subscription); any other exception is
+# logged and the deletion proceeds (best-effort hooks).
 _account_deletion_hooks: list = []
+
+
+class AccountDeletionAbort(Exception):
+    """A pre-deletion hook refused to let the account be deleted."""
 
 
 def register_account_deletion_hook(fn) -> None:
     _account_deletion_hooks.append(fn)
+
+
+# Per-user throttle on the deletion password check: a hijacked session (stolen
+# cookie) must not get unlimited online guesses at the account password to
+# authorize irreversible deletion. Keyed by uid, not IP — the attacker may
+# already hold a valid session from a different address. This only delays the
+# deletion confirmation; login and every other route are unaffected.
+_delete_attempts: dict[int, list[float]] = {}
+_delete_lock = threading.Lock()
+_MAX_DELETE_ATTEMPTS = 5
+_DELETE_WINDOW_SECONDS = 10 * 60
+
+
+def _delete_throttled(uid: int) -> bool:
+    """True when `uid` has exhausted its deletion-confirmation attempts."""
+    now = time.time()
+    with _delete_lock:
+        bucket = [t for t in _delete_attempts.get(uid, []) if now - t < _DELETE_WINDOW_SECONDS]
+        _delete_attempts[uid] = bucket
+        return len(bucket) >= _MAX_DELETE_ATTEMPTS
+
+
+def _record_delete_failure(uid: int) -> None:
+    now = time.time()
+    with _delete_lock:
+        bucket = [t for t in _delete_attempts.get(uid, []) if now - t < _DELETE_WINDOW_SECONDS]
+        bucket.append(now)
+        _delete_attempts[uid] = bucket
+
+
+def _clear_delete_failures(uid: int) -> None:
+    with _delete_lock:
+        _delete_attempts.pop(uid, None)
 
 
 def _hard_delete_user(db, uid: int) -> None:
@@ -2335,17 +2373,27 @@ def delete_account_submit(request: Request, password: str = Form("")):
 
     _require_multi()  # self-hosted has no account to delete
     uid = current_user_id(request)
+    if _delete_throttled(uid):
+        return _render_settings(
+            request, delete_error="Too many attempts. Try again later."
+        )
     with get_db() as db:
         user = db.execute(
             "SELECT email, password_hash FROM users WHERE id = ?", (uid,)
         ).fetchone()
     if not user or not security.verify_password(password, user["password_hash"]):
+        _record_delete_failure(uid)
         return _render_settings(request, delete_error="Incorrect password.")
+    _clear_delete_failures(uid)
     email = user["email"]
     for hook in _account_deletion_hooks:
         try:
             hook(uid)
-        except Exception:  # noqa: BLE001 — never let a hook block deletion
+        except AccountDeletionAbort as exc:
+            # A hook (e.g. billing) refused to let this account go. Fail closed:
+            # do not delete the account and orphan a live subscription.
+            return _render_settings(request, delete_error=str(exc))
+        except Exception:  # noqa: BLE001 — best-effort hooks must not block
             logger.exception("account-deletion hook failed for user %s", uid)
     with get_db() as db:
         _hard_delete_user(db, uid)

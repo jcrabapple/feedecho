@@ -196,6 +196,45 @@ class TestAccountDeletion:
         )
         assert resp.status_code == 404
 
+    def test_hook_veto_aborts_deletion(self, client):
+        from app import AccountDeletionAbort
+
+        def _veto(uid):
+            raise AccountDeletionAbort("could not cancel subscription")
+
+        _account_deletion_hooks.append(_veto)
+        try:
+            _register(client)
+            uid = _uid("new@example.com")
+            resp = client.post(
+                "/settings/delete-account",
+                data={"password": "hunter2hunter2"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 200
+            assert "could not cancel subscription" in resp.text
+            assert _user_scoped_counts(uid)["users"] == 1  # NOT deleted
+        finally:
+            _account_deletion_hooks.clear()
+
+    def test_delete_throttles_after_failed_attempts(self, client):
+        _register(client)
+        uid = _uid("new@example.com")
+        for _ in range(5):
+            client.post(
+                "/settings/delete-account",
+                data={"password": "wrong-password-1"},
+                follow_redirects=False,
+            )
+        resp = client.post(
+            "/settings/delete-account",
+            data={"password": "hunter2hunter2"},  # correct, but throttled
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert "Too many attempts" in resp.text
+        assert _user_scoped_counts(uid)["users"] == 1
+
 
 @pytest.mark.pg
 @pytest.mark.skipif(

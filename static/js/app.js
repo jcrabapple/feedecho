@@ -1088,6 +1088,9 @@ function readerLoadBody(details) {
     if (!itemId) return;
     content.dataset.loaded = '1';
     content.classList.add('is-loading');
+    // Announce the body arrival: scoped to this one item (set live only while
+    // loading) so the whole list isn't a wall of live regions.
+    content.setAttribute('aria-live', 'polite');
     fetch(`/api/reader/${itemId}/body`)
         .then((r) => (r.ok ? r.json() : Promise.reject()))
         .then((d) => { content.textContent = d.content || ''; content.classList.remove('is-loading'); })

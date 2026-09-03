@@ -147,12 +147,17 @@ def sign_session(user_id: int, email: str, epoch: int = 0) -> str:
     return f"{payload}.{sig}"
 
 
-def read_session(token: str | bytes) -> dict | None:
+def read_session(token: str | bytes, ignore_expiry: bool = False) -> dict | None:
     """Verify a signed session token; return claims or None.
 
     Returns None for EVERY malformed input — never raises: garbage
     payloads, non-ASCII or truncated signatures, bytes tokens, wrong
     audience, expired tokens, and coerced claim types all fail closed.
+
+    ``ignore_expiry`` (logout only): verify the signature and claims but do
+    NOT reject an expired token. Logout must still bump the user's
+    session_epoch even when their cookie has expired, otherwise a stored/
+    fresher session elsewhere survives a logout the user believes happened.
     """
     try:
         if not isinstance(token, str) or "." not in token:
@@ -169,7 +174,7 @@ def read_session(token: str | bytes) -> dict | None:
             return None
         if data.get("aud") != _SESSION_AUD:
             return None
-        if int(data.get("exp", 0)) < time.time():
+        if not ignore_expiry and int(data.get("exp", 0)) < time.time():
             return None
         uid = data.get("uid")
         if isinstance(uid, bool) or not isinstance(uid, int):

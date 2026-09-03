@@ -276,6 +276,19 @@ class TestSessionEnforcement:
         after = client.get("/feeds", follow_redirects=False, headers=self.BROWSER)
         assert after.status_code == 302
 
+    def test_logout_bumps_session_epoch(self, client):
+        # S10a: logout must invalidate every session for the user, not just the
+        # current cookie. Bump session_epoch so a stored/parallel session dies.
+        _register(client)
+        row_before = _user_row("new@example.com")
+        assert row_before["session_epoch"] == 0
+
+        resp = client.post("/logout", follow_redirects=False)
+        assert resp.status_code == 302
+
+        row_after = _user_row("new@example.com")
+        assert row_after["session_epoch"] == 1
+
     def test_healthz_exempt(self, client):
         resp = client.get("/healthz")
         assert resp.status_code == 200

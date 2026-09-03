@@ -473,7 +473,11 @@ def logout(request: Request):
     # unset here — read the signed session cookie directly instead.
     if settings.MULTI:
         token = request.cookies.get(COOKIE_NAME)
-        claims = read_session(token) if token else None
+        # ignore_expiry: logout must invalidate all of the user's sessions
+        # even when this cookie has already expired — otherwise a fresher
+        # session on another device (or a stored token) survives a logout the
+        # user believes happened. The signature is still verified.
+        claims = read_session(token, ignore_expiry=True) if token else None
         uid = claims["user_id"] if claims else None
         if uid:
             with get_db() as db:

@@ -204,10 +204,15 @@ def _route_index(app):
             path = getattr(route, "path", None)
             if not path or getattr(route, "matches", None) is None:
                 continue
-            if "{" in path:
+            methods = getattr(route, "methods", None)
+            # Routes with no methods set (Mount for /static, WebSocket routes)
+            # must go through the matches() scan, not the literal fast-path:
+            # a prefix-matched Mount path would otherwise be dropped entirely
+            # and change unauthenticated behaviour from redirect to 404.
+            if not methods or "{" in path:
                 parameterized.append(route)
                 continue
-            methods: set = set(getattr(route, "methods", None) or ())
+            methods = set(methods)
             # Starlette treats a HEAD request as a match for a GET route.
             if "GET" in methods:
                 methods.add("HEAD")
@@ -4085,12 +4090,28 @@ _preview_throttle_attempts: dict[str, list[float]] = {}
 _PREVIEW_THROTTLE_LIMIT = 20
 _PREVIEW_THROTTLE_WINDOW = 600  # seconds
 _PREVIEW_THROTTLE_MAX_IPS = 10_000
+_preview_last_sweep = 0.0
 
 
 def _preview_throttled(ip: str) -> bool:
     """Atomically rate-limit one preview attempt (check-and-record)."""
+    global _preview_last_sweep
     now = time.monotonic()
     with _preview_throttle_lock:
+        # Global sweep (at most once per window) prunes stale buckets, so a
+        # rotating-IP spray cannot permanently exhaust the tracked-IP ceiling
+        # with expired entries and 429 every new legitimate user.
+        if now - _preview_last_sweep >= _PREVIEW_THROTTLE_WINDOW:
+            for key in list(_preview_throttle_attempts):
+                recent = [
+                    t for t in _preview_throttle_attempts[key]
+                    if now - t < _PREVIEW_THROTTLE_WINDOW
+                ]
+                if recent:
+                    _preview_throttle_attempts[key] = recent
+                else:
+                    _preview_throttle_attempts.pop(key, None)
+            _preview_last_sweep = now
         recent = [
             t for t in _preview_throttle_attempts.get(ip, [])
             if now - t < _PREVIEW_THROTTLE_WINDOW

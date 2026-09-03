@@ -183,6 +183,52 @@ def _release_feed_lease(feed_id: int, lease_token: str) -> None:
         )
 
 
+# ── Job-level leases (D2) ──────────────────────────────────────────────────
+
+# Per-process identifier so every instance generates a unique lease owner.
+# Reused across all job-level leases for the lifetime of this process.
+_instance_id = secrets.token_urlsafe(16)
+
+# TTLs are generous: each job runs minutes, not seconds, and the lease is
+# released in a finally block. The TTL is the crash-safety net.
+FLUSH_DIGEST_LEASE_SECONDS = 15 * 60
+FLUSH_DRIP_LEASE_SECONDS = 5 * 60
+
+
+def _acquire_job_lease(job_name: str, ttl_seconds: int) -> bool:
+    """Atomically claim a scheduler lease for `job_name`.
+
+    Returns True if the lease was taken (either created fresh, stolen from
+    an expired owner, or renewed by the current owner). Returns False if
+    another live instance holds the lease.
+    """
+    now = _now()
+    expires_at = _timestamp_after(ttl_seconds)
+    with get_db() as db:
+        result = db.execute(
+            """
+            INSERT INTO scheduler_leases (job_name, instance_id, expires_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(job_name) DO UPDATE
+            SET instance_id = excluded.instance_id,
+                expires_at = excluded.expires_at
+            WHERE scheduler_leases.instance_id = excluded.instance_id
+               OR scheduler_leases.expires_at <= ?
+            """,
+            (job_name, _instance_id, expires_at, now),
+        )
+        return result.rowcount == 1
+
+
+def _release_job_lease(job_name: str) -> None:
+    """Release only the lease held by this instance."""
+    with get_db() as db:
+        db.execute(
+            "DELETE FROM scheduler_leases WHERE job_name = ? AND instance_id = ?",
+            (job_name, _instance_id),
+        )
+
+
 def _update_last_fetched(feed_id: int, lease_token: str) -> None:
     with get_db() as db:
         db.execute(
@@ -2169,6 +2215,15 @@ def flush_drips() -> None:
     echoes have their backlog discarded as gave_up. Removing the limit
     entirely drains the queue in bounded batches per flush.
     """
+    if not _acquire_job_lease("flush_drips", FLUSH_DRIP_LEASE_SECONDS):
+        return
+    try:
+        _flush_drips()
+    finally:
+        _release_job_lease("flush_drips")
+
+
+def _flush_drips() -> None:
     with get_db() as db:
         pending = db.execute(
             """
@@ -2315,6 +2370,15 @@ def flush_digests() -> None:
     deletes the items from digest_items and updates posted_items
     from 'queued' to 'success'.
     """
+    if not _acquire_job_lease("flush_digests", FLUSH_DIGEST_LEASE_SECONDS):
+        return
+    try:
+        _flush_digests()
+    finally:
+        _release_job_lease("flush_digests")
+
+
+def _flush_digests() -> None:
     # Sweep first: stranded items are invisible to the query below, so nothing
     # would ever clear them.
     _discard_orphaned_digest_items()

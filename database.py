@@ -801,6 +801,7 @@ def _init_shared_tables(db) -> None:
 
     system_settings holds admin email/SMTP config; email_tokens holds
     single-use email-flow tokens (verification, password reset).
+    scheduler_leases ensures only one process runs each flush job.
 
     Deliberately a separate table from per-user `settings`: system values
     (verification/reset SMTP) belong to the deployment, not to any tenant,
@@ -810,6 +811,14 @@ def _init_shared_tables(db) -> None:
         CREATE TABLE IF NOT EXISTS system_settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+    """)
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS scheduler_leases (
+            job_name TEXT PRIMARY KEY,
+            instance_id TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL
         )
     """)
 

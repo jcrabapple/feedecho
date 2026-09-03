@@ -13,6 +13,7 @@ from email.mime.multipart import MIMEMultipart
 import settings
 from database import get_db
 from feed_parser import SSRFError, validate_outbound_url
+from security import decrypt_secret
 
 
 def get_smtp_settings(user_id: int = 1) -> dict | None:
@@ -56,7 +57,7 @@ def _normalize(settings: dict) -> dict | None:
         "host": settings.get("smtp_host", ""),
         "port": int(settings.get("smtp_port", 587)),
         "username": settings.get("smtp_username", ""),
-        "password": settings.get("smtp_password", ""),
+        "password": decrypt_secret(settings.get("smtp_password", "")),
         "from_email": settings.get("smtp_from_email", ""),
         "from_name": settings.get("smtp_from_name", "FeedEcho"),
         "use_tls": settings.get("smtp_use_tls", "1") == "1",

@@ -23,6 +23,7 @@ import httpx
 import settings as app_settings
 from database import get_db
 from feed_parser import SSRFError, pinned_request, unpinned_client, validate_outbound_url
+from security import decrypt_secret
 
 logger = logging.getLogger("feedecho.alt_text")
 
@@ -111,7 +112,7 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
 
     base_url = cfg.get("alt_text_ai_base_url", "").rstrip("/")
     model = cfg.get("alt_text_ai_model", "")
-    api_key = cfg.get("alt_text_ai_api_key", "")
+    api_key = decrypt_secret(cfg.get("alt_text_ai_api_key", ""))
 
     if not (base_url and model and api_key):
         return ""

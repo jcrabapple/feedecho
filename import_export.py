@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 import plans
 import settings
 from _version import __version__ as APP_VERSION
+from security import decrypt_secret, encrypt_secret, hash_secret
 
 FORMAT = "feedecho-export"
 VERSION = 1
@@ -49,13 +50,24 @@ _ACCOUNTS = [
         "name", "homeserver", "base_url", "access_token",
         "matrix_user_id", "room_id", "room_alias",
     ], ("homeserver", "room_id")),
-    ("discord", "discord_accounts", ["name", "webhook_url", "channel_id"], ("webhook_url",)),
+    ("discord", "discord_accounts", ["name", "webhook_url", "webhook_url_hash", "channel_id"], ("webhook_url_hash",)),
     ("webhook", "webhook_accounts", ["name", "url", "headers"], ("url",)),
 ]
 
 ACCOUNT_TYPES = tuple(section for section, *_ in _ACCOUNTS)
 ACCOUNT_TABLES = {section: table for section, table, _, _ in _ACCOUNTS}
 _KEY_COLS = {section: keys for section, _, _, keys in _ACCOUNTS}
+
+# Columns that hold third-party credentials and are encrypted at rest in multi
+# mode. Export decrypts them (the export document carries plaintext, matching
+# the "credentials included by design" contract); import re-encrypts them.
+_CREDENTIAL_COLS = {
+    "mastodon": {"access_token"},
+    "bluesky": {"app_password", "access_jwt", "refresh_jwt"},
+    "microblog": {"token"},
+    "matrix": {"access_token"},
+    "discord": {"webhook_url"},
+}
 
 _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
 
@@ -106,11 +118,16 @@ def build_export(db, uid: int) -> dict:
 
     accounts = {}
     for section, table, cols, _ in _ACCOUNTS:
-        accounts[section] = _rows_to_dicts(db.execute(
+        rows = _rows_to_dicts(db.execute(
             f"SELECT id, {', '.join(cols)} FROM {table}"
             " WHERE user_id = ? ORDER BY id",
             (uid,),
         ).fetchall())
+        for row in rows:
+            for col in _CREDENTIAL_COLS.get(section, frozenset()):
+                if row.get(col):
+                    row[col] = decrypt_secret(row[col])
+        accounts[section] = rows
 
     # Echoes reference feeds by feed_id; only emit echoes whose feed survives
     # the export (a soft-deleted feed is not exported, and an echo pointing at
@@ -235,6 +252,10 @@ def _normalize_account(section: str, account: dict) -> None:
             account[key] = value.strip()
     if section == "mastodon" and not account.get("username"):
         account["username"] = account.get("name") or ""
+    if section == "discord" and account.get("webhook_url"):
+        # The natural key is the deterministic digest of the (plaintext) URL,
+        # which is stored encrypted at rest.
+        account["webhook_url_hash"] = hash_secret(str(account["webhook_url"]))
 
 
 def _existing_account_id(db, uid: int, section: str, account: dict):
@@ -394,7 +415,15 @@ def import_data(db, uid: int, payload: dict) -> dict:
     for section, table, cols, _ in _ACCOUNTS:
         for key in new_account_keys[section]:
             account = first_account[section][key]
-            values = [account.get(col) for col in cols]
+            creds = _CREDENTIAL_COLS.get(section, frozenset())
+            # Encrypt credentials at rest (no-op in single mode) without
+            # mutating the caller's payload, so re-importing the same document
+            # stays idempotent.
+            values = [
+                encrypt_secret(account[col]) if col in creds and account.get(col)
+                else account.get(col)
+                for col in cols
+            ]
             placeholders = ", ".join("?" for _ in cols)
             column_list = ", ".join(cols)
             row = db.execute(

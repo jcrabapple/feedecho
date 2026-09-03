@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir \
     "feedparser>=6.0.11" \
     "httpx>=0.28.0" \
     "apscheduler>=3.10.4" \
+    "cryptography>=42.0.0" \
     "psycopg[binary]>=3.2"
 
 COPY . .

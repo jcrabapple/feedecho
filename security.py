@@ -1,13 +1,11 @@
-"""Password hashing and signed session tokens — stdlib only.
+"""Password hashing, signed session tokens, and credential encryption.
 
-Deliberately dependency-free: scrypt (hashlib) for passwords, HMAC-signed
-stateless cookies for sessions. No argon2/itsdangerous so self-hosters
-never need extra wheels, and the same code runs identically in single
-and multi mode.
-
-Session tokens use a purpose-derived HMAC key (separate from the OAuth
-state key) and carry an ``aud`` claim, so tokens cannot be confused with
-any other signed artifact under the same secret.
+Passwords use scrypt (hashlib), session cookies are HMAC-signed stateless
+tokens, and third-party credentials (Mastodon/Bluesky/Matrix/micro.blog/
+Discord tokens, SMTP passwords, vision API keys, OAuth client secrets) are
+encrypted at rest with Fernet (cryptography) in multi mode only. Single mode
+stores credentials plaintext: the operator owns the database and gains nothing
+from encrypting against themselves.
 """
 
 import base64
@@ -18,6 +16,11 @@ import secrets
 import time
 
 import settings
+
+try:
+    from cryptography.fernet import Fernet
+except ImportError:  # pragma: no cover - cryptography is a declared dependency
+    Fernet = None
 
 # scrypt cost parameters: N=2**17, r=8, p=1 (OWASP-recommended minimum,
 # ~128 MiB per hash). verify_password only accepts hashes made with
@@ -177,3 +180,88 @@ def read_session(token: str | bytes) -> dict | None:
         }
     except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
         return None
+
+
+# ── Credential encryption (Fernet, multi mode only) ──────────────────────────
+
+
+_credential_fernet = None
+_credential_fernet_key = None
+
+
+def _fernet():
+    """Lazy-initialised Fernet instance, keyed from settings.CREDENTIAL_KEY.
+
+    Returns None when the key is unset or cryptography is not installed,
+    so callers silently fall back to plaintext.
+    """
+    global _credential_fernet, _credential_fernet_key
+    key = settings.CREDENTIAL_KEY or ""
+    if _credential_fernet is not None and key == _credential_fernet_key:
+        return _credential_fernet
+    _credential_fernet_key = key
+    if not key or Fernet is None:
+        _credential_fernet = None
+    else:
+        _credential_fernet = Fernet(key.encode("utf-8"))
+    return _credential_fernet
+
+
+def encrypt_secret(value: str) -> str:
+    """Encrypt a third-party credential for at-rest storage.
+
+    Only encrypts in multi mode with FEEDECHO_CREDENTIAL_KEY set. Single
+    mode returns the value unchanged (the operator owns the DB). An unset
+    key in multi mode returns the value unchanged (a startup warning fires
+    through settings.validate_config).
+    """
+    if not value:
+        return value
+    if not settings.MULTI:
+        return value
+    fernet = _fernet()
+    if fernet is None:
+        return value
+    token = fernet.encrypt(value.encode("utf-8"))
+    return token.decode("ascii")
+
+
+def decrypt_secret(value: str) -> str:
+    """Decrypt a stored credential, tolerating legacy plaintext rows.
+
+    Returns the plaintext credential. Values that are not valid Fernet
+    tokens (rows written before encryption shipped, or a key rotation that
+    renders the token unreadable) are returned unchanged, so a mixed
+    plaintext/encrypted DB keeps working. Re-encrypts on the next write.
+    """
+    if not value:
+        return value
+    if not settings.MULTI:
+        return value
+    fernet = _fernet()
+    if fernet is None:
+        return value
+    try:
+        return fernet.decrypt(value.encode("ascii")).decode("utf-8")
+    except Exception:
+        if value.startswith("gAAAA"):
+            # A well-formed Fernet token that failed to decrypt is a wrong key
+            # or tampered value — NOT a legacy plaintext row. Returning the
+            # ciphertext as a "credential" would hand garbage to Mastodon/etc.
+            # and surface as a confusing 401. Fail loud instead.
+            raise ValueError(
+                "credential decryption failed — FEEDECHO_CREDENTIAL_KEY is "
+                "wrong or the stored value was tampered with"
+            )
+        # Legacy plaintext (written before encryption shipped): return as-is.
+        return value
+
+
+def hash_secret(value: str) -> str:
+    """Deterministic SHA-256 digest of a secret, for dedup of an encrypted
+    credential that also serves as a row's natural key (Discord webhook URL).
+
+    Fernet is non-deterministic, so an encrypted column can't be an
+    ON CONFLICT / WHERE-equality key; the digest of the plaintext can.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()

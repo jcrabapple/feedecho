@@ -127,7 +127,7 @@ class TestTrialLimitsOnDashboard:
         base = (Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(
             encoding="utf-8"
         )
-        assert 'style.css?v=47' in base
+        assert 'style.css?v=48' in base
 
 
 class TestBillingCtaSeam:

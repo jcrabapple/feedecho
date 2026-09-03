@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import settings
 import invites
 from database import get_db
-from security import SESSION_TTL_SECONDS, hash_password, sign_session, verify_password
+from security import SESSION_TTL_SECONDS, hash_password, read_session, sign_session, verify_password
 
 # Minimal in-memory login throttle: 5 failed attempts per IP per 5 minutes.
 # Deliberately cheap and boring; real abuse controls (per-user caps, IP
@@ -458,7 +458,7 @@ def login_submit(
     return response
 
 
-def logout():
+def logout(request: Request):
     response = RedirectResponse(url="/login", status_code=302)
     # Both cookies: multi mode authenticates on the signed session, single
     # mode on the shared-secret cookie. Clearing only one made logout a
@@ -466,6 +466,21 @@ def logout():
     # ("/") and no domain, so these deletions match them.
     response.delete_cookie(COOKIE_NAME)
     response.delete_cookie(AUTH_COOKIE_NAME)
+    # S10a: bump session_epoch so all existing sessions for this user are
+    # invalidated immediately. The cookie is deleted either way, but this
+    # also kills any session token an attacker may have stored before the
+    # user logged out. /logout is auth-exempt, so request.state.user_id is
+    # unset here — read the signed session cookie directly instead.
+    if settings.MULTI:
+        token = request.cookies.get(COOKIE_NAME)
+        claims = read_session(token) if token else None
+        uid = claims["user_id"] if claims else None
+        if uid:
+            with get_db() as db:
+                db.execute(
+                    "UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?",
+                    (uid,),
+                )
     return response
 
 

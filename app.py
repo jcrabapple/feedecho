@@ -185,6 +185,37 @@ from settings import AUTH_TOKEN  # noqa: F401  (re-exported for tests/legacy)
 _AUTH_EXEMPT_PATHS = {"/healthz", "/favicon.svg", "/static", "/oauth/callback"}
 _AUTH_EXEMPT_PREFIXES = ("/static",)
 
+# S10f: index the route table once, splitting literal paths (dict lookup of
+# path -> methods) from parameterized ones (need the full matches() scan).
+# Rebuilt only when the route list length changes (billing.mount appends at
+# startup, before serving). Method-aware so a wrong-method request to a known
+# path still falls through to the router's 405, matching the pre-cache behavior.
+_route_index_cache: dict = {}
+
+
+def _route_index(app):
+    routes = app.routes
+    key = id(app)
+    cached = _route_index_cache.get(key)
+    if cached is None or cached[0] != len(routes):
+        literal: dict = {}
+        parameterized: list = []
+        for route in routes:
+            path = getattr(route, "path", None)
+            if not path or getattr(route, "matches", None) is None:
+                continue
+            if "{" in path:
+                parameterized.append(route)
+                continue
+            methods: set = set(getattr(route, "methods", None) or ())
+            # Starlette treats a HEAD request as a match for a GET route.
+            if "GET" in methods:
+                methods.add("HEAD")
+            literal.setdefault(path, set()).update(methods)
+        cached = (len(routes), literal, parameterized)
+        _route_index_cache[key] = cached
+    return cached[1], cached[2]
+
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Request-id threading + structured access log.
@@ -309,9 +340,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         to a nonexistent URL was silently redirected to /login, so a visitor
         following a bad link could not tell "page doesn't exist" from
         "session expired" (impeccable critique 2026-08-29, P1a).
+
+        S10f: literal (no-path-param) routes are checked against a cached
+        path->methods dict first — that is the hot path for most requests. The
+        `matches()` scan only runs for parameterized routes, which is a
+        handful.
         """
+        literal, parameterized = _route_index(request.app)
+        methods = literal.get(request.url.path)
+        if methods and request.method in methods:
+            return True
         scope = request.scope
-        for route in request.app.routes:
+        for route in parameterized:
             matches = getattr(route, "matches", None)
             if matches is None:
                 continue
@@ -472,8 +512,8 @@ def register_submit(
 
 
 @app.post("/logout")
-async def logout():
-    return auth.logout()
+def logout(request: Request):
+    return auth.logout(request)
 
 
 @app.get("/forgot-password", response_class=HTMLResponse)
@@ -517,8 +557,8 @@ def reset_submit(
 _CSP_HEADER = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self'; "
     "img-src 'self' data: https: http:; "
     "connect-src 'self'; "
     "frame-ancestors 'none'; "
@@ -4036,6 +4076,40 @@ async def delete_echo(request: Request, echo_id: int):
 
 # ── API: Preview ────────────────────────────────────────────────────────────
 
+# Per-IP throttle on the template preview endpoint (hosted mode): the preview
+# fetches a live feed on every call, so it is both an outbound-egress hammer
+# and a way to hammer the target feed. Gated on MULTI — single-mode operators
+# preview their own feeds.
+_preview_throttle_lock = threading.Lock()
+_preview_throttle_attempts: dict[str, list[float]] = {}
+_PREVIEW_THROTTLE_LIMIT = 20
+_PREVIEW_THROTTLE_WINDOW = 600  # seconds
+_PREVIEW_THROTTLE_MAX_IPS = 10_000
+
+
+def _preview_throttled(ip: str) -> bool:
+    """Atomically rate-limit one preview attempt (check-and-record)."""
+    now = time.monotonic()
+    with _preview_throttle_lock:
+        recent = [
+            t for t in _preview_throttle_attempts.get(ip, [])
+            if now - t < _PREVIEW_THROTTLE_WINDOW
+        ]
+        if recent:
+            _preview_throttle_attempts[ip] = recent
+        else:
+            _preview_throttle_attempts.pop(ip, None)
+        if len(recent) >= _PREVIEW_THROTTLE_LIMIT:
+            return True
+        if (
+            len(_preview_throttle_attempts) >= _PREVIEW_THROTTLE_MAX_IPS
+            and ip not in _preview_throttle_attempts
+        ):
+            return True
+        _preview_throttle_attempts.setdefault(ip, []).append(now)
+        return False
+
+
 @app.post("/api/preview")
 def preview_template(
     request: Request,
@@ -4048,6 +4122,11 @@ def preview_template(
     can check output before saving an echo. The template is validated
     first; syntax errors return 400 with the Jinja2 error message.
     """
+    if settings.MULTI and _preview_throttled(auth._client_ip(request)):
+        return JSONResponse(
+            {"success": False, "error": "Too many previews. Please wait before trying again."},
+            status_code=429,
+        )
     try:
         validate_template(template)
     except Exception as e:

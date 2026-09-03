@@ -78,9 +78,9 @@
             <img class="reader-item-image" src="{{ item.image_url | safe_url }}" alt="{{ item.image_alt }}" loading="lazy" referrerpolicy="no-referrer">
             {% endif %}
             {% if fulltext %}
-            <div class="reader-item-content" data-item-id="{{ item.id }}" data-loaded="1">{{ item.content_text or item.content or item.summary }}</div>
+            <div class="reader-item-content" data-item-id="{{ item.id }}" data-loaded="1" aria-live="polite">{{ item.content_text or item.content or item.summary }}</div>
             {% else %}
-            <div class="reader-item-content" data-item-id="{{ item.id }}">{% if item.summary %}{{ item.summary }}{% elif item.content %}{{ item.content | truncate(280) }}{% endif %}</div>
+            <div class="reader-item-content" data-item-id="{{ item.id }}" aria-live="polite">{% if item.summary %}{{ item.summary }}{% elif item.content %}{{ item.content | truncate(280) }}{% endif %}</div>
             {% endif %}
             {% if item.enclosure_url | safe_url %}
             <audio class="reader-item-audio" controls preload="none" src="{{ item.enclosure_url | safe_url }}"></audio>

@@ -2648,39 +2648,33 @@ def add_discord_account(
 
     with get_db() as db:
         uid = current_user_id(request)
-        # Dedup by the decrypted webhook URL: it is stored encrypted (Fernet is
-        # non-deterministic), so the natural key cannot be a SQL equality on
-        # the ciphertext. A user has at most a handful of Discord accounts, so
-        # decrypt-and-compare is cheap. Legacy plaintext rows decrypt to
-        # themselves via the fallback, so they still match.
-        existing = None
-        for row in db.execute(
-            "SELECT id, webhook_url FROM discord_accounts WHERE user_id = ?",
-            (uid,),
-        ).fetchall():
-            if security.decrypt_secret(row["webhook_url"]) == info["webhook_url"]:
-                existing = row
-                break
-        if existing is None:
+        # The webhook URL is encrypted at rest (non-deterministic Fernet), so
+        # dedup uses a deterministic digest of the plaintext URL; the unique
+        # index on (user_id, webhook_url_hash) makes the upsert atomic.
+        webhook_url_hash = security.hash_secret(info["webhook_url"])
+        existing = db.execute(
+            "SELECT id FROM discord_accounts"
+            " WHERE user_id = ? AND webhook_url_hash = ?",
+            (uid, webhook_url_hash),
+        ).fetchone()
+        if not existing:
             try:
                 _check_destination_cap(db, uid)
             except PlanError as e:
                 return _render_accounts_error(request, str(e))
-            db.execute(
-                "INSERT INTO discord_accounts (name, webhook_url, channel_id, user_id)"
-                " VALUES (?, ?, ?, ?)",
-                (display_name, security.encrypt_secret(info["webhook_url"]),
-                 info["channel_id"], uid),
-            )
-        else:
-            # Reconnect: refresh name/channel_id, and re-encrypt a legacy
-            # plaintext row on the way (lazy migration).
-            db.execute(
-                "UPDATE discord_accounts SET name = ?, channel_id = ?, webhook_url = ?"
-                " WHERE id = ?",
-                (display_name, info["channel_id"],
-                 security.encrypt_secret(info["webhook_url"]), existing["id"]),
-            )
+        db.execute(
+            """
+            INSERT INTO discord_accounts
+                (name, webhook_url, webhook_url_hash, channel_id, user_id)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, webhook_url_hash) DO UPDATE SET
+                name = excluded.name,
+                channel_id = excluded.channel_id,
+                webhook_url = excluded.webhook_url
+            """,
+            (display_name, security.encrypt_secret(info["webhook_url"]),
+             webhook_url_hash, info["channel_id"], uid),
+        )
     return RedirectResponse(url="/accounts?status=discord_connected", status_code=303)
 
 

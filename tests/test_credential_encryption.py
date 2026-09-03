@@ -82,6 +82,29 @@ class TestEncryptDecrypt:
         assert security.hash_secret(url) == security.hash_secret(url)
         assert security.hash_secret(url) != security.hash_secret(url + "x")
 
+    def test_decrypt_raises_on_wrong_key(self, monkeypatch):
+        monkeypatch.setattr(settings_mod, "MULTI", True)
+        monkeypatch.setattr(settings_mod, "CREDENTIAL_KEY", TEST_KEY)
+        _reset_fernet_cache(monkeypatch)
+        token = security.encrypt_secret("secret")
+        # Rotate the key: a well-formed Fernet token must now fail LOUD, not
+        # silently return the ciphertext as a "credential".
+        monkeypatch.setattr(settings_mod, "CREDENTIAL_KEY", Fernet.generate_key().decode())
+        _reset_fernet_cache(monkeypatch)
+        with pytest.raises(ValueError, match="CREDENTIAL_KEY"):
+            security.decrypt_secret(token)
+
+    def test_invalid_key_rejected_at_startup(self, monkeypatch):
+        import settings as s
+
+        monkeypatch.setattr(s, "MULTI", True)
+        monkeypatch.setattr(s, "DATABASE_URL", "")
+        monkeypatch.setattr(s, "ALLOW_SQLITE_FALLBACK", True)
+        monkeypatch.setattr(s, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(s, "CREDENTIAL_KEY", "not-a-valid-fernet-key")
+        with pytest.raises(RuntimeError, match="not a valid Fernet key"):
+            s.validate_config()
+
 
 @pytest.fixture
 def multi_client(monkeypatch, tmp_path):

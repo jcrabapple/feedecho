@@ -244,12 +244,16 @@ def decrypt_secret(value: str) -> str:
     try:
         return fernet.decrypt(value.encode("ascii")).decode("utf-8")
     except Exception:
-        # Any decryption failure (InvalidToken, wrong key, malformed
-        # base64, non-UTF8 payload) means the value is legacy plaintext
-        # or unrecoverable — return it as-is so the caller can still try
-        # to use it (the auth attempt will fail if the value is garbage,
-        # which is the correct behaviour: we don't crash, we just can't
-        # authenticate with a bad credential).
+        if value.startswith("gAAAA"):
+            # A well-formed Fernet token that failed to decrypt is a wrong key
+            # or tampered value — NOT a legacy plaintext row. Returning the
+            # ciphertext as a "credential" would hand garbage to Mastodon/etc.
+            # and surface as a confusing 401. Fail loud instead.
+            raise ValueError(
+                "credential decryption failed — FEEDECHO_CREDENTIAL_KEY is "
+                "wrong or the stored value was tampered with"
+            )
+        # Legacy plaintext (written before encryption shipped): return as-is.
         return value
 
 

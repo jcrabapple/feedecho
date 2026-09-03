@@ -295,3 +295,17 @@ def validate_config() -> None:
             "SMTP passwords, vision API keys) are stored in PLAINTEXT. Set "
             "it to a Fernet key to encrypt them at rest."
         )
+    else:
+        # A set-but-invalid key would otherwise only crash on the first
+        # encrypt/decrypt (mid-request, as a 500). Fail fast at startup.
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(CREDENTIAL_KEY.encode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(
+                "FEEDECHO_CREDENTIAL_KEY is not a valid Fernet key "
+                f"({exc}). Generate one with: python -c "
+                "\"from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())\""
+            )

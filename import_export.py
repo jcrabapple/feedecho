@@ -50,7 +50,7 @@ _ACCOUNTS = [
         "name", "homeserver", "base_url", "access_token",
         "matrix_user_id", "room_id", "room_alias",
     ], ("homeserver", "room_id")),
-    ("discord", "discord_accounts", ["name", "webhook_url", "channel_id"], ("webhook_url",)),
+    ("discord", "discord_accounts", ["name", "webhook_url", "webhook_url_hash", "channel_id"], ("webhook_url_hash",)),
     ("webhook", "webhook_accounts", ["name", "url", "headers"], ("url",)),
 ]
 
@@ -252,27 +252,15 @@ def _normalize_account(section: str, account: dict) -> None:
             account[key] = value.strip()
     if section == "mastodon" and not account.get("username"):
         account["username"] = account.get("name") or ""
+    if section == "discord" and account.get("webhook_url"):
+        # The natural key is the deterministic digest of the (plaintext) URL,
+        # which is stored encrypted at rest.
+        account["webhook_url_hash"] = hash_secret(str(account["webhook_url"]))
 
 
 def _existing_account_id(db, uid: int, section: str, account: dict):
     table = ACCOUNT_TABLES[section]
     key_cols = _KEY_COLS[section]
-    # A credential that is also a natural key (Discord webhook_url) is stored
-    # encrypted, so equality can't be a SQL match — decrypt-and-compare. A user
-    # has at most a handful of accounts, so this is cheap.
-    if _CREDENTIAL_COLS.get(section, frozenset()) & set(key_cols):
-        want = _account_key(section, account)
-        rows = db.execute(
-            f"SELECT id, {', '.join(key_cols)} FROM {table} WHERE user_id = ?",
-            (uid,),
-        ).fetchall()
-        for row in rows:
-            got = tuple(
-                str(decrypt_secret(row[c] or "")).strip() for c in key_cols
-            )
-            if got == want:
-                return row
-        return None
     key_vals = _account_key(section, account)
     clause = " AND ".join(f"{c} = ?" for c in key_cols)
     return db.execute(
@@ -427,11 +415,15 @@ def import_data(db, uid: int, payload: dict) -> dict:
     for section, table, cols, _ in _ACCOUNTS:
         for key in new_account_keys[section]:
             account = first_account[section][key]
-            # Encrypt credentials at rest (multi mode); no-op in single mode.
-            for col in _CREDENTIAL_COLS.get(section, frozenset()):
-                if account.get(col):
-                    account[col] = encrypt_secret(account[col])
-            values = [account.get(col) for col in cols]
+            creds = _CREDENTIAL_COLS.get(section, frozenset())
+            # Encrypt credentials at rest (no-op in single mode) without
+            # mutating the caller's payload, so re-importing the same document
+            # stays idempotent.
+            values = [
+                encrypt_secret(account[col]) if col in creds and account.get(col)
+                else account.get(col)
+                for col in cols
+            ]
             placeholders = ", ".join("?" for _ in cols)
             column_list = ", ".join(cols)
             row = db.execute(

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import settings
 from settings import DB_PATH
+from security import decrypt_secret, hash_secret
 
 
 def dialect() -> str:
@@ -505,12 +506,29 @@ def init_db_sqlite() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 webhook_url TEXT NOT NULL,
+                webhook_url_hash TEXT DEFAULT '',
                 channel_id TEXT DEFAULT '',
                 user_id INTEGER NOT NULL DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, webhook_url)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # The webhook URL is encrypted at rest (non-deterministic Fernet), so
+        # the dedup key is a deterministic digest of the plaintext URL.
+        _add_column_if_missing(
+            db, "discord_accounts", "webhook_url_hash", "TEXT DEFAULT ''"
+        )
+        for _row in db.execute(
+            "SELECT id, webhook_url FROM discord_accounts"
+            " WHERE webhook_url_hash = '' OR webhook_url_hash IS NULL"
+        ).fetchall():
+            db.execute(
+                "UPDATE discord_accounts SET webhook_url_hash = ? WHERE id = ?",
+                (hash_secret(decrypt_secret(_row["webhook_url"])), _row["id"]),
+            )
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_user_hash"
+            " ON discord_accounts(user_id, webhook_url_hash)"
+        )
 
         # One row per generic webhook endpoint: url is the target, headers a
         # JSON object of custom HTTP headers (credentials live there — never
@@ -1045,12 +1063,27 @@ def init_db_postgres() -> None:
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 webhook_url TEXT NOT NULL,
+                webhook_url_hash TEXT DEFAULT '',
                 channel_id TEXT DEFAULT '',
                 user_id BIGINT NOT NULL DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, webhook_url)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        _add_column_if_missing(
+            db, "discord_accounts", "webhook_url_hash", "TEXT DEFAULT ''"
+        )
+        for _row in db.execute(
+            "SELECT id, webhook_url FROM discord_accounts"
+            " WHERE webhook_url_hash = '' OR webhook_url_hash IS NULL"
+        ).fetchall():
+            db.execute(
+                "UPDATE discord_accounts SET webhook_url_hash = ? WHERE id = ?",
+                (hash_secret(decrypt_secret(_row["webhook_url"])), _row["id"]),
+            )
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_user_hash"
+            " ON discord_accounts(user_id, webhook_url_hash)"
+        )
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS settings (

@@ -325,6 +325,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
     }
     _MULTI_EXEMPT_PREFIXES = ("/static",)
 
+    # Paths a card-pending trial user (registered but checkout unfinished) may
+    # still reach so they can finish checkout, log out, or delete the abandoned
+    # account. Everything else bounces to /settings#billing until the card is
+    # collected (the webhook stamps the real trial_ends_at on the Stripe
+    # subscription.created event, which clears the sentinel).
+    _PENDING_CARD_ALLOWED = {
+        "/settings",
+        "/api/billing/checkout",
+        "/api/billing/portal",
+        "/settings/delete-account",
+        "/logout",
+    }
+
     # Exempt paths that still render the app's nav/footer, so the viewer is
     # worth identifying. Deliberately NOT the whole exempt set:
     # /oauth/callback authorizes on the signed OAuth state and its handler
@@ -456,6 +469,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return claims["user_id"]
         return None
 
+    @staticmethod
+    def _pending_card(uid: int) -> bool:
+        """True when a billing account has registered but not collected a card.
+
+        The register flow writes the TRIAL_PENDING sentinel as trial_ends_at;
+        the Stripe subscription webhook replaces it with a real date once the
+        card is collected. Until then the account must be gated off the app so
+        a bot that abandons checkout cannot use it (posting is paused, but it
+        should not be able to poke at feeds/echoes/accounts either).
+        """
+        if not settings.BILLING_ENABLED:
+            return False
+        with get_db() as db:
+            row = db.execute(
+                "SELECT plan, trial_ends_at FROM users WHERE id = ?", (uid,)
+            ).fetchone()
+        return bool(
+            row
+            and row["plan"] == "trial"
+            and plans.trial_pending(row["trial_ends_at"])
+        )
+
     async def _multi(self, request: Request, call_next):
         path = request.url.path
         if path in self._MULTI_EXEMPT_PATHS or path.startswith(
@@ -466,6 +501,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if uid is not None:
                     request.state.user_id = uid
                     request.state.authed = True
+                    if path == "/" and self._pending_card(uid):
+                        # The dashboard is the landing page only for anonymous
+                        # viewers; a card-pending user must finish checkout
+                        # before seeing the app.
+                        return RedirectResponse(url="/settings#billing", status_code=302)
                     if path in ("/login", "/register") and request.method == "GET":
                         return RedirectResponse(url="/", status_code=302)
             return await call_next(request)
@@ -474,6 +514,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if uid is not None:
             request.state.user_id = uid
             request.state.authed = True
+            if self._pending_card(uid) and path not in self._PENDING_CARD_ALLOWED:
+                return RedirectResponse(url="/settings#billing", status_code=302)
             return await call_next(request)
 
         # Unknown paths get the real 404 page instead of a login redirect.

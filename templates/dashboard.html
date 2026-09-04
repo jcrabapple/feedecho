@@ -11,7 +11,7 @@
     <p><strong>Trial ended:</strong> your free trial has ended.{% if billing_enabled %} <a href="/settings#billing">Subscribe to continue</a>{% else %} Paid plans launch soon.{% endif %}</p>
     {% elif trial_ends_date %}
         {% if subscription_status == 'trialing' %}
-        <p><strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time> and renews automatically.{% if billing_enabled %} <a href="/settings#billing">Manage subscription</a>.{% endif %}</p>
+        <p><strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time> and renews automatically.{% if billing_enabled %} <a href="/settings#billing">Manage subscription or start now</a>.{% endif %}</p>
         {% else %}
         <p><strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>.{% if billing_enabled %} <a href="/settings#billing">Subscribe now</a> to keep everything running.{% else %} Paid plans launch soon.{% endif %}</p>
         {% endif %}

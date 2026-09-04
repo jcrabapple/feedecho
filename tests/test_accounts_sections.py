@@ -121,3 +121,23 @@ class TestAccountsPageSections:
         )
         assert next_section != -1
         assert receiver_at < next_section
+
+    def test_connect_forms_stack_fields_on_own_lines(self, multi_client):
+        # Multi-field account forms (Bluesky: name + handle + app password,
+        # Matrix: server + room + token, etc.) must not render inline, where
+        # flex squeezes each input to an unreadable sliver. Every connect form
+        # carries the `stacked` modifier so labels sit above full-width inputs.
+        r = multi_client.get("/accounts")
+        assert r.status_code == 200
+        assert r.text.count('class="inline-form stacked"') == 8
+        # No connect form may remain plain inline.
+        assert 'class="inline-form"' not in r.text
+
+    def test_stacked_css_rule_exists(self):
+        from pathlib import Path
+        css = (Path(__file__).resolve().parent.parent / "static" / "css" / "style.css").read_text(encoding="utf-8")
+        import re
+        m = re.search(r"\.inline-form\.stacked\s*\{([^}]*)\}", css)
+        assert m, ".inline-form.stacked rule missing from style.css"
+        assert "flex-direction: column" in m.group(1), "stacked forms must use a column layout"
+        assert "align-items: stretch" in m.group(1), "stacked inputs must stretch full width"

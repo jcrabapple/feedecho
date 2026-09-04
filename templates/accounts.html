@@ -69,7 +69,7 @@
         <section class="oauth-section">
             <h2>Connect Mastodon via OAuth</h2>
             <p class="hint">Enter your Mastodon instance to connect with a single click.</p>
-            <form method="get" action="/oauth/connect" class="inline-form">
+            <form method="get" action="/oauth/connect" class="inline-form stacked">
                 <label for="oauth-instance">Instance URL</label>
                 <input type="text" name="instance" id="oauth-instance" placeholder="https://dmv.community" required>
                 <button type="submit">Connect Account</button>
@@ -79,7 +79,7 @@
         <section class="manual-section">
             <details>
                 <summary>Or add Mastodon manually with a token</summary>
-                <form method="post" action="/api/accounts" class="inline-form" style="margin-top: 0.75rem;">
+                <form method="post" action="/api/accounts" class="inline-form stacked" style="margin-top: 0.75rem;">
                     <label for="masto-name">Display name</label>
                     <input type="text" name="name" id="masto-name" placeholder="Display name" required>
                     <label for="masto-username">Username</label>
@@ -137,7 +137,7 @@
         <section>
             <h2>Add Email Address</h2>
             <p class="hint">Route feed items to an email inbox instead of (or in addition to) Mastodon. <a href="/settings">Configure SMTP first.</a></p>
-            <form method="post" action="/api/email-accounts" class="inline-form">
+            <form method="post" action="/api/email-accounts" class="inline-form stacked">
                 <label for="email-acct-name">Name</label>
                 <input type="text" name="name" id="email-acct-name" placeholder="Name" required>
                 <label for="email-acct-address">Email address</label>
@@ -187,7 +187,7 @@
         <section>
             <h2>Connect Bluesky</h2>
             <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored only in FeedEcho's local database. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
-            <form method="post" action="/api/bluesky-accounts" class="inline-form">
+            <form method="post" action="/api/bluesky-accounts" class="inline-form stacked">
                 <label for="bsky-name">Display name</label>
                 <input type="text" name="name" id="bsky-name" placeholder="Display name">
                 <label for="bsky-handle">Bluesky handle</label>
@@ -240,7 +240,7 @@
         <section>
             <h2>Connect Micro.blog</h2>
             <p class="hint">Create an <strong>App Token</strong> at micro.blog (Account → Edit Apps → Add Token, or <a href="https://micro.blog/account/apps" rel="noopener noreferrer">micro.blog/account/apps</a>) and paste it here. FeedEcho discovers every blog the token can post to and connects each one. Tokens can post on your behalf but cannot change account settings.</p>
-            <form method="post" action="/api/microblog-accounts" class="inline-form">
+            <form method="post" action="/api/microblog-accounts" class="inline-form stacked">
                 <label for="microblog-token">Micro.blog app token</label>
                 <input type="password" name="token" id="microblog-token" placeholder="Micro.blog app token" required autocomplete="off">
                 <button type="submit">Connect Blogs</button>
@@ -289,7 +289,7 @@
         <section>
             <h2>Connect Matrix</h2>
             <p class="hint">Post feed items into a Matrix room. Log the account you want to post as into any client, copy its <strong>access token</strong> (Element: Settings → Help &amp; About → Access Token), and give the room's ID or alias. That account must already be in the room — FeedEcho posts as it, it never joins rooms for you. Connect one room per form submission.</p>
-            <form method="post" action="/api/matrix-accounts" class="inline-form">
+            <form method="post" action="/api/matrix-accounts" class="inline-form stacked">
                 <label for="matrix-homeserver">Homeserver</label>
                 <input type="text" name="homeserver" id="matrix-homeserver" placeholder="https://matrix.org" required>
                 <label for="matrix-token">Access token</label>
@@ -346,7 +346,7 @@
         <section>
             <h2>Connect Discord</h2>
             <p class="hint">Post feed items into a Discord channel via a webhook. In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it here. The webhook URL is a secret — anyone who has it can post to that channel, so treat it like a token.</p>
-            <form method="post" action="/api/discord-accounts" class="inline-form">
+            <form method="post" action="/api/discord-accounts" class="inline-form stacked">
                 <label for="discord-webhook-url">Webhook URL</label>
                 <input type="password" name="webhook_url" id="discord-webhook-url" placeholder="https://discord.com/api/webhooks/…" required autocomplete="off">
                 <label for="discord-name">Display name (optional)</label>
@@ -397,7 +397,7 @@
         <section>
             <h2>Connect Webhook</h2>
             <p class="hint">Post feed items as JSON to any HTTP endpoint. Works with Slack and Mattermost incoming webhooks, ntfy and Gotify notifications, Zapier or n8n, or anything you run yourself. Each item arrives as one JSON object: <code>text</code> (your template output) plus <code>title</code>, <code>link</code>, <code>summary</code>, <code>content</code>, <code>content_link</code>, <code>author</code>, <code>published</code>, <code>tags</code>, <code>image_url</code>, <code>image_alt</code>, <code>id</code>, and <code>feed_name</code>. Custom headers are optional and go in one per line, like <code>Authorization: Bearer your-token</code> — header values are stored like credentials and are never shown again.</p>
-            <form method="post" action="/api/webhook-accounts" class="inline-form">
+            <form method="post" action="/api/webhook-accounts" class="inline-form stacked">
                 <label for="webhook-url">Webhook URL</label>
                 <input type="password" name="url" id="webhook-url" placeholder="https://hooks.example.com/feedecho" required autocomplete="off">
                 <label for="webhook-name">Display name (optional)</label>

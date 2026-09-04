@@ -2,7 +2,7 @@
 {% block title %}Privacy Policy — FeedEcho{% endblock %}
 {% block content %}
 <h1>Privacy Policy</h1>
-<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: August 27, 2026.</p>
+<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 3, 2026.</p>
 
 <section>
     <h2>What we collect and why</h2>
@@ -14,7 +14,7 @@
             <tr><td>Email address</td><td>Account identity, verification, password reset, and operational alerts about your feeds.</td></tr>
             <tr><td>Password</td><td>Stored only as a salted scrypt hash. Never in plain text.</td></tr>
             <tr><td>Feed URLs</td><td>The feeds you ask us to watch, and a cursor (last seen item) per feed so posts are not duplicated.</td></tr>
-            <tr><td>Destination credentials</td><td>Tokens, app passwords, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, email). Required to post on your behalf; nothing else is done with them.</td></tr>
+            <tr><td>Destination credentials</td><td>Tokens, app passwords, webhook URLs, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, Discord, email, webhooks). Required to post on your behalf; nothing else is done with them. They are encrypted at rest.</td></tr>
             <tr><td>Echo configuration</td><td>Your templates, filters, and delivery settings.</td></tr>
             <tr><td>Post history</td><td>Which feed items were delivered where, when, and with what outcome — needed for retries, duplicate prevention, and failure diagnosis.</td></tr>
             <tr><td>Server logs</td><td>Request paths, status codes, and timestamps for debugging and abuse prevention. Paths only — query strings (which could contain tokens) are never logged.</td></tr>
@@ -28,20 +28,21 @@
         <li>We don't sell, rent, or share your data. There is no advertising.</li>
         <li>Feed <em>content</em> is fetched, filtered, posted, and discarded — it is not archived. Only item identifiers and delivery outcomes are kept.</li>
         <li>No analytics, tracking scripts, or third-party browser requests run on these pages.</li>
-        <li>No payment data: card numbers never touch our servers.</li>
+        <li>No payment data: billing is handled by Stripe, which processes your card directly — card numbers never touch our servers.</li>
     </ul>
 </section>
 
 <section>
     <h2>Where your data lives</h2>
-    <p>All account data is stored in a Postgres database on a single operated server (with encrypted offsite backups of that database). Traffic is HTTPS with HSTS. Sessions are signed, HttpOnly, SameSite cookies; a password reset invalidates existing sessions immediately. Every feed, account, setting, and history row is scoped to your account at the query level.</p>
+    <p>All account data is stored in a Postgres database on a single operated server (with encrypted offsite backups of that database). Destination credentials are encrypted at rest. Traffic is HTTPS with HSTS. Sessions are signed, HttpOnly, SameSite cookies; logging out or resetting your password invalidates existing sessions immediately. Every feed, account, setting, and history row is scoped to your account at the query level.</p>
 </section>
 
 <section>
     <h2>Who else sees data</h2>
     <ul>
-        <li><strong>Your connected platforms</strong> (Mastodon, Bluesky, micro.blog, your Matrix homeserver, your email provider) receive exactly the posts you configure — nothing else.</li>
+        <li><strong>Your connected platforms</strong> (Mastodon, Bluesky, micro.blog, your Matrix homeserver, Discord, your email provider) receive exactly the posts you configure — nothing else.</li>
         <li><strong>Email delivery</strong> for verification and password-reset mail goes through a transactional email provider; it processes the message (and your address as recipient) to deliver it.</li>
+        <li><strong>Payment processing</strong> is handled by Stripe, which processes your card directly for subscriptions and refunds.</li>
         <li><strong>Uptime monitoring</strong> periodically requests the public health endpoint from outside the server; it does not involve your account data.</li>
         <li>Nothing else, unless required by law.</li>
     </ul>

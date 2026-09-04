@@ -40,10 +40,11 @@ class TestAboutPage:
         assert "not sold" in resp.text
 
     def test_claims_match_reality(self):
-        # No fabricated capabilities: billing does not exist yet.
+        # No fabricated capabilities: billing is real and Stripe handles cards.
         with TestClient(app) as c:
             resp = c.get("/about")
-        assert "will be handled by a payment processor" in resp.text
+        assert "handled by Stripe" in resp.text
+        assert "never touch our servers" in resp.text
 
     def test_footer_links_appear_in_multi_mode(self):
         with TestClient(app) as c:

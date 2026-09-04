@@ -3,14 +3,14 @@
 {% block content %}
 <h1>About FeedEcho</h1>
 
-<p>FeedEcho is a small, paid hosting service for <a href="https://github.com/jcrabapple/feedecho">FeedEcho</a>, an open-source tool that watches RSS feeds and posts new items to your Mastodon, Bluesky, micro.blog, Matrix, or email accounts. This page describes how the hosted service at feedecho.net handles your data. See also the <a href="/terms">Terms of Service</a> and this <a href="/privacy">Privacy Policy</a>.</p>
+<p>FeedEcho is a small, paid hosting service for <a href="https://github.com/jcrabapple/feedecho">FeedEcho</a>, an open-source tool that watches RSS feeds and posts new items to your Mastodon, Bluesky, micro.blog, Matrix, Discord, email, or webhook destinations. This page describes how the hosted service at feedecho.net handles your data. See also the <a href="/terms">Terms of Service</a>, this <a href="/privacy">Privacy Policy</a>, and the <a href="/pricing">Pricing</a> page.</p>
 
 <section>
     <h2>What we store</h2>
     <ul>
         <li><strong>Your account:</strong> email address and a salted scrypt hash of your password. Passwords are never stored in plain text.</li>
         <li><strong>Feeds:</strong> the feed URLs you add and the last item each feed was checked against.</li>
-        <li><strong>Destinations:</strong> credentials for the accounts you connect — Mastodon access tokens, Bluesky app passwords and session tokens, and email SMTP credentials. These are required to post on your behalf.</li>
+        <li><strong>Destinations:</strong> credentials for the accounts you connect — Mastodon access tokens, Bluesky app passwords, micro.blog tokens, Matrix access tokens, Discord webhook URLs, and email SMTP credentials. These are required to post on your behalf, and they are encrypted at rest.</li>
         <li><strong>Post history:</strong> which items were posted where, and any delivery errors, so failures can be retried and diagnosed.</li>
     </ul>
     <p>Everything lives in a Postgres database on a single VPS we operate. Data is not sold, rented, or shared with anyone.</p>
@@ -21,7 +21,7 @@
     <ul>
         <li>Feed <em>content</em> is fetched, matched against your echoes, and posted — it is not archived. Only identifiers and post outcomes are kept.</li>
         <li>No tracking, analytics, or advertising networks run on this service.</li>
-        <li>No payment data is stored. When paid plans launch, billing will be handled by a payment processor; card numbers never touch our servers.</li>
+        <li>No payment data is stored. Billing is handled by Stripe, which processes cards directly — card numbers never touch our servers.</li>
     </ul>
 </section>
 
@@ -29,7 +29,8 @@
     <h2>Security practices</h2>
     <ul>
         <li><strong>TLS everywhere:</strong> all traffic is HTTPS with HSTS.</li>
-        <li><strong>Sessions:</strong> signed, HttpOnly, SameSite cookies; a password change invalidates all existing sessions immediately.</li>
+        <li><strong>Encryption at rest:</strong> destination credentials are encrypted with Fernet before they are stored.</li>
+        <li><strong>Sessions:</strong> signed, HttpOnly, SameSite cookies; logging out or changing your password invalidates existing sessions immediately.</li>
         <li><strong>Email links:</strong> verification and password-reset tokens are single-use, expire in 24 hours, and are stored only as hashes.</li>
         <li><strong>Tenant isolation:</strong> every feed, account, setting, and history row is scoped to its user at the query level.</li>
         <li><strong>Post templates</strong> run in a sandboxed template engine with no filesystem or network access.</li>
@@ -41,7 +42,8 @@
 <section>
     <h2>Third parties</h2>
     <ul>
-        <li>Your connected platforms (Mastodon, Bluesky, your email provider) receive exactly the posts you configure. Nothing else.</li>
+        <li>Your connected platforms (Mastodon, Bluesky, micro.blog, Matrix, Discord, your email provider) receive exactly the posts you configure. Nothing else.</li>
+        <li>Billing goes through Stripe, which processes your payment card directly.</li>
         <li>Pages load the Inter font family from Google Fonts. No other third-party assets or requests are made from your browser.</li>
         <li>Server access logs record request paths (never query strings), status codes, and timestamps for operational debugging, retained briefly.</li>
     </ul>

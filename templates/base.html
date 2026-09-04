@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="no-referrer">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=48">
+    <link rel="stylesheet" href="/static/css/style.css?v=49">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <script>
     // Set theme before first paint to avoid flash. Three states stored in
@@ -51,6 +51,7 @@
             <a href="/admin" {% if request.url.path == '/admin' %}aria-current="page" class="active"{% endif %}>Admin</a>
             {% endif %}
             {% elif MULTI %}
+            <a href="/pricing" {% if request.url.path == '/pricing' %}aria-current="page" class="active"{% endif %}>Pricing</a>
             <a href="/login" {% if request.url.path == '/login' %}aria-current="page" class="active"{% endif %}>Log in</a>
             <a href="/register" {% if request.url.path == '/register' %}aria-current="page" class="active"{% endif %}>Sign up</a>
             {% endif %}
@@ -95,7 +96,7 @@
         <div class="footer-links">
             {# /howto is behind the auth gate: linking it to an anonymous
                viewer just bounces them back to the login page. #}
-            {% if MULTI %}<a href="/about">About</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>{% if authed %} · {% endif %}{% endif %}{% if authed %}<a href="/howto">How To</a>{% endif %}
+            {% if MULTI %}<a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>{% if authed %} · {% endif %}{% endif %}{% if authed %}<a href="/howto">How To</a>{% endif %}
         </div>
         {% if app_version %}
         <div class="footer-version">

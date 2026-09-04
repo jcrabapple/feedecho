@@ -588,7 +588,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if "X-Frame-Options" not in h:
             h["X-Frame-Options"] = "DENY"
         if "Referrer-Policy" not in h:
-            h["Referrer-Policy"] = "no-referrer"
+            # strict-origin-when-cross-origin, NOT no-referrer: a no-referrer
+            # policy makes browsers send "Origin: null" on same-origin form
+            # POSTs (WHATWG Fetch), which breaks Origin-based CSRF checks and
+            # locked every mobile login out with a bare 403. This still sends
+            # only the origin cross-site (no path/query leakage) while keeping
+            # a real Origin on same-origin posts.
+            h["Referrer-Policy"] = "strict-origin-when-cross-origin"
         if "Permissions-Policy" not in h:
             h["Permissions-Policy"] = (
                 "camera=(), microphone=(), geolocation=(), payment=()"
@@ -611,8 +617,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # The session cookie is SameSite=Lax, which already blocks most CSRF in modern
 # browsers.  This is the recommended second layer: for unsafe methods, a
 # cross-origin Origin (or, as fallback, Referer) is rejected.  "Origin: null"
-# is treated as a mismatch.  Neither header present → allow (non-browser clients
-# like webhooks, curl, and single-mode API scripts).
+# is NOT automatically rejected: browsers legitimately send it on a same-origin
+# form POST when a referrer policy hides the referrer (e.g. Firefox after a
+# POST redirect, or privacy tools forcing no-referrer) — rejecting it outright
+# locked every mobile login out with a bare 403.  Fetch Metadata (Sec-Fetch-Site,
+# set by the browser, unforgeable cross-site) disambiguates: a null Origin with
+# Sec-Fetch-Site: same-origin is a genuine same-origin post and is accepted; a
+# null Origin without that evidence falls back to Referer, and fails closed.
+# Neither header present → allow (non-browser clients like webhooks, curl, and
+# single-mode API scripts).
 
 class CSRFOriginMiddleware(BaseHTTPMiddleware):
     """Origin/Referer check on state-changing requests (S9)."""
@@ -628,12 +641,19 @@ class CSRFOriginMiddleware(BaseHTTPMiddleware):
     def _same_origin(request: Request) -> bool:
         req_host = (request.url.hostname or "").lower()
         origin = request.headers.get("origin")
-        if origin is not None:
+        if origin is not None and origin.strip().lower() != "null":
             return _host_matches(origin, req_host)
+        if origin is not None:
+            # origin == "null". Trust the browser's own Fetch Metadata claim
+            # that this is same-origin; otherwise fall through to Referer.
+            if request.headers.get("sec-fetch-site", "").lower() == "same-origin":
+                return True
         referer = request.headers.get("referer")
         if referer is not None:
             return _host_matches(referer, req_host)
-        return True  # no browser headers — non-browser client
+        # No Origin, no Referer → non-browser client. An explicit "null"
+        # Origin with no same-origin evidence and no Referer fails closed.
+        return origin is None
 
 
 def _host_matches(url_val: str, expect_host: str) -> bool:

@@ -2,7 +2,9 @@
 {% block title %}Privacy Policy — FeedEcho{% endblock %}
 {% block content %}
 <h1>Privacy Policy</h1>
-<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 3, 2026.</p>
+<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 4, 2026.</p>
+
+<p>FeedEcho is operated by Jason Crabtree, Winchester, Virginia, United States. For privacy questions or data requests, email <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</p>
 
 <section>
     <h2>What we collect and why</h2>
@@ -23,6 +25,30 @@
 </section>
 
 <section>
+    <h2>Legal basis for processing (GDPR)</h2>
+    <p>If you are in the European Economic Area or the UK, we process your personal data on these bases:</p>
+    <ul>
+        <li><strong>Performance of a contract</strong> (Art. 6(1)(b) GDPR): everything needed to provide the service you signed up for — your account, feeds, echoes, destination credentials, and post history.</li>
+        <li><strong>Legitimate interests</strong> (Art. 6(1)(f) GDPR): securing the service, preventing abuse, and debugging. Server logs fall under this; they are minimal and kept only briefly.</li>
+    </ul>
+    <p>We do not rely on consent as a legal basis — we process on contract and legitimate interests as described above, and we do not sell personal data.</p>
+</section>
+
+<section>
+    <h2>Your privacy rights</h2>
+    <p>Depending on where you live, you have rights over your personal data, which we honour through the controls below:</p>
+    <ul>
+        <li><strong>Access</strong> — your dashboard shows your feeds, echoes, and full delivery history.</li>
+        <li><strong>Export / portability</strong> — export your configuration from the dashboard at any time.</li>
+        <li><strong>Rectification</strong> — edit or reconnect your feeds, accounts, and echoes in the dashboard.</li>
+        <li><strong>Deletion</strong> — delete any feed, account, or echo, or delete your entire account from Settings (this removes all of your data, including post history).</li>
+        <li><strong>Restriction and objection</strong> — email <a href="mailto:support@feedecho.net">support@feedecho.net</a> and we will restrict or stop processing where the law requires.</li>
+        <li><strong>Complaint</strong> — if you are in the EEA/UK and are not satisfied, you have the right to lodge a complaint with your local data-protection supervisory authority.</li>
+    </ul>
+    <p><strong>California residents:</strong> you have the right to know what personal data we collect, to request its deletion, and to non-discrimination for exercising your rights. We do not sell personal data. Email <a href="mailto:support@feedecho.net">support@feedecho.net</a> to exercise these rights.</p>
+</section>
+
+<section>
     <h2>What we don't do</h2>
     <ul>
         <li>We don't sell, rent, or share your data. There is no advertising.</li>
@@ -34,7 +60,8 @@
 
 <section>
     <h2>Where your data lives</h2>
-    <p>All account data is stored in a Postgres database on a single operated server (with encrypted offsite backups of that database). Destination credentials are encrypted at rest. Traffic is HTTPS with HSTS. Sessions are signed, HttpOnly, SameSite cookies; logging out or resetting your password invalidates existing sessions immediately. Every feed, account, setting, and history row is scoped to your account at the query level.</p>
+    <p>All account data is stored in a Postgres database on a server we operate in the United States (with encrypted offsite backups of that database). Destination credentials are encrypted at rest. Traffic is HTTPS with HSTS. Sessions are signed, HttpOnly, SameSite cookies; logging out or resetting your password invalidates existing sessions immediately. Every feed, account, setting, and history row is scoped to your account at the query level.</p>
+    <p><strong>Breach notification:</strong> if we learn that your personal data has been compromised, we will notify affected users and, where required, the relevant authorities.</p>
 </section>
 
 <section>
@@ -63,8 +90,8 @@
     <ul>
         <li>Delete individual feeds, connected accounts, or echoes from the dashboard at any time.</li>
         <li>Revoke any destination token at its source platform (Mastodon, Bluesky, micro.blog, or Matrix settings) — we stop being able to post immediately.</li>
-        <li>Export your data: the dashboard shows your feeds, echoes, and full delivery history; anything else, ask the operator.</li>
-        <li>Delete your account entirely: email <a href="mailto:support@feedecho.net">support@feedecho.net</a> from your account's address and it will be removed, including configuration and history, within a reasonable period.</li>
+        <li>Export your data: the dashboard shows your feeds, echoes, and full delivery history.</li>
+        <li>Delete your account entirely from Settings (password-confirmed) — this removes your account and all of its data, including post history.</li>
     </ul>
 </section>
 

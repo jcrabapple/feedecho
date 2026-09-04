@@ -39,9 +39,13 @@ class TestPricingPage:
         # Trial caps (settings.DEFAULT_PLAN_LIMITS["trial"]).
         assert "5 feeds" in resp.text
         assert "5 connected accounts" in resp.text
+        assert "15 minutes" in resp.text
+        assert "60 posts per hour" in resp.text
         # Paid caps (settings.DEFAULT_PLAN_LIMITS["paid"]).
         assert "50 feeds" in resp.text
         assert "50 connected accounts" in resp.text
+        assert "5 minutes" in resp.text
+        assert "500 posts per hour" in resp.text
 
     def test_footer_link_appears_in_multi_mode(self):
         with TestClient(app) as c:
@@ -63,5 +67,9 @@ class TestPricingPage:
         paid = settings.DEFAULT_PLAN_LIMITS["paid"]
         assert trial["max_feeds"] == 5
         assert trial["max_destinations"] == 5
+        assert trial["min_poll_interval"] == 15
+        assert trial["max_posts_per_hour"] == 60
         assert paid["max_feeds"] == 50
         assert paid["max_destinations"] == 50
+        assert paid["min_poll_interval"] == 5
+        assert paid["max_posts_per_hour"] == 500

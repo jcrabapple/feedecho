@@ -146,6 +146,11 @@
 {% if billing_enabled %}
 <section id="billing">
     <h2>Billing</h2>
+    {% if request.query_params.get('billing') == 'upgraded' %}
+    <div class="flash flash-ok" role="status">Your subscription is starting — your card will be charged now and your account upgrades to the paid plan.</div>
+    {% elif request.query_params.get('billing') == 'upgrade-failed' %}
+    <div class="flash flash-warn" role="status">We couldn't start your subscription. Please try again or contact <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</div>
+    {% endif %}
     {% if plan == 'trial' %}
     {% if trial_pending %}
     <p class="hint">Your 14-day free trial hasn't started yet — add a card to begin. Nothing is charged until the trial ends.</p>
@@ -157,6 +162,10 @@
     {% if subscription_status == 'trialing' %}
     <form method="post" action="/api/billing/portal" class="inline-form">
         <button type="submit">Manage subscription</button>
+    </form>
+    <form method="post" action="/api/billing/upgrade-now" class="inline-form"
+          onsubmit="return confirm('Skip the rest of your trial and start your subscription now? You will be charged immediately.');">
+        <button type="submit">Start my subscription now</button>
     </form>
     {% else %}
     <form method="post" action="/api/billing/checkout" class="inline-form">

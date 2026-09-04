@@ -464,8 +464,16 @@ def logout(request: Request):
     # mode on the shared-secret cookie. Clearing only one made logout a
     # no-op in the other mode. Both are set with Starlette's default path
     # ("/") and no domain, so these deletions match them.
-    response.delete_cookie(COOKIE_NAME)
-    response.delete_cookie(AUTH_COOKIE_NAME)
+    #
+    # The deletion MUST carry the same Secure/HttpOnly flags the login flow
+    # sets. A cookie set with Secure is not reliably evicted by a deletion
+    # that omits Secure on WebKit/Safari — the browser keeps the stale
+    # session cookie, and even though the epoch bump below makes the server
+    # reject it, the browser re-sends it until the user clears it. Matching
+    # the flags removes the cookie for real.
+    _secure = request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE
+    for name in (COOKIE_NAME, AUTH_COOKIE_NAME):
+        response.delete_cookie(name, secure=_secure, httponly=True, samesite="lax")
     # S10a: bump session_epoch so all existing sessions for this user are
     # invalidated immediately. The cookie is deleted either way, but this
     # also kills any session token an attacker may have stored before the

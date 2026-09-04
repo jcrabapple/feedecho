@@ -141,6 +141,24 @@ class TestTrialLimitsOnDashboard:
         assert "Trial ended" not in page
         assert "1999" not in page and "2000-01-01" not in page
 
+    def test_trialing_user_sees_renews_automatically_not_subscribe(self, monkeypatch, tmp_path):
+        # A card-on-file (subscription_status='trialing') user has ALREADY
+        # subscribed; the trial banner must say it renews automatically and
+        # point at "Manage subscription", never "Subscribe now".
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        _setup(monkeypatch, tmp_path)
+        with database.get_db() as db:
+            database._add_column_if_missing(db, "users", "subscription_status", "TEXT")
+            db.execute(
+                "UPDATE users SET subscription_status = 'trialing',"
+                " trial_ends_at = '2030-01-01 00:00:00' WHERE id = ?",
+                (USER_ID,),
+            )
+        page = _dashboard(monkeypatch, tmp_path)
+        assert "renews automatically" in page
+        assert "Manage subscription" in page
+        assert "Subscribe now" not in page
+
     def test_banner_paragraphs_styled(self):
         style = (Path(__file__).resolve().parent.parent / "static" / "css" / "style.css").read_text(
             encoding="utf-8"

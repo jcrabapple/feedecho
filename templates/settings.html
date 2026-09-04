@@ -149,9 +149,16 @@
     {% if plan == 'trial' %}
     {% if trial_pending %}
     <p class="hint">Your 14-day free trial hasn't started yet — add a card to begin. Nothing is charged until the trial ends.</p>
+    {% elif subscription_status == 'trialing' %}
+    <p class="hint">You're on the free trial{% if trial_ends_date %} — it ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>{% endif %}, then your subscription renews automatically.</p>
     {% else %}
     <p class="hint">You're on the free trial{% if trial_ends_date %} — it ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>{% endif %}. Subscribe to unlock higher limits and keep posting.</p>
     {% endif %}
+    {% if subscription_status == 'trialing' %}
+    <form method="post" action="/api/billing/portal" class="inline-form">
+        <button type="submit">Manage subscription</button>
+    </form>
+    {% else %}
     <form method="post" action="/api/billing/checkout" class="inline-form">
         <input type="hidden" name="interval" value="monthly">
         <button type="submit">Subscribe — $4/month</button>
@@ -160,6 +167,7 @@
         <input type="hidden" name="interval" value="yearly">
         <button type="submit">Subscribe — $40/year</button>
     </form>
+    {% endif %}
     {% elif plan == 'paid' %}
     <div class="alert alert-success" role="status">You're on the paid plan.</div>
     <form method="post" action="/api/billing/portal" class="inline-form">

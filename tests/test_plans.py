@@ -95,8 +95,8 @@ class TestLimitFor:
         assert plans.limit_for("enterprise", "max_feeds") == 5
 
     def test_zero_means_unlimited(self):
-        assert plans.limit_for("paid", "min_poll_interval") == 1  # floor, not cap
-        assert plans.limit_for("paid", "max_feeds") == 100
+        assert plans.limit_for("paid", "min_poll_interval") == 5  # floor, not cap
+        assert plans.limit_for("paid", "max_feeds") == 50
 
 
 class TestTrialState:
@@ -135,8 +135,8 @@ class TestClamps:
     def test_poll_untouched_when_above_floor(self):
         assert plans.clamp_poll_interval(60, "trial") == 60
 
-    def test_poll_paid_floor_is_1(self):
-        assert plans.clamp_poll_interval(1, "paid") == 1
+    def test_poll_paid_floor_is_5(self):
+        assert plans.clamp_poll_interval(1, "paid") == 5
 
     def test_drip_clamped_down_to_plan_ceiling(self):
         assert plans.clamp_drip_limit(500, "trial") == 60

@@ -170,10 +170,10 @@ DEFAULT_PLAN_LIMITS = {
         "reader": 1,
     },
     "paid": {
-        "max_feeds": 100,
-        "min_poll_interval": 1,
+        "max_feeds": 50,
+        "min_poll_interval": 5,
         "max_destinations": 50,
-        "max_posts_per_hour": 1000,
+        "max_posts_per_hour": 500,
         "reader": 1,
     },
 }

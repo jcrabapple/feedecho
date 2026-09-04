@@ -31,7 +31,7 @@ from starlette.routing import Match
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from database import as_utc_naive, dialect, get_db, init_db
+from database import as_utc_naive, dialect, get_db, init_db, _column_names
 from _version import __version__ as APP_VERSION
 import auth
 from auth import current_user_id
@@ -734,19 +734,37 @@ def _trial_context(request: Request) -> dict:
     if uid is None:
         return {}
     with get_db() as db:
-        row = db.execute(
-            "SELECT email, plan, trial_ends_at, is_admin, email_verified"
-            " FROM users WHERE id = ?",
-            (uid,),
-        ).fetchone()
+        # subscription_status is a billing-overlay column; tests that flip
+        # BILLING_ENABLED without the billing module won't have it. Include it
+        # in the SELECT only when the column actually exists.
+        has_sub_status = settings.BILLING_ENABLED and "subscription_status" in _column_names(
+            db, "users"
+        )
+        if has_sub_status:
+            row = db.execute(
+                "SELECT email, plan, trial_ends_at, is_admin, email_verified,"
+                " subscription_status FROM users WHERE id = ?",
+                (uid,),
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT email, plan, trial_ends_at, is_admin, email_verified"
+                " FROM users WHERE id = ?",
+                (uid,),
+            ).fetchone()
     if not row:
         return {}
     plan = row["plan"] or "trial"
+    # A card-on-file subscription carries 'trialing' during the free trial,
+    # which means the user has ALREADY subscribed and will renew automatically
+    # — they must not be shown a "Subscribe" CTA.
+    subscription_status = row["subscription_status"] if has_sub_status else None
     ctx = {
         "current_user_email": row["email"],
         "plan": plan,
         "is_admin": bool(row["is_admin"]),
         "email_verified": bool(row["email_verified"]),
+        "subscription_status": subscription_status,
         # Every page can render an accurate paused-posting banner (the
         # scheduler actually skips this user's feeds, so the banner must
         # agree with reality, not just the dashboard's).

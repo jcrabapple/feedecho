@@ -150,6 +150,9 @@ def _safe_url(value) -> str:
 jinja.filters["iso_utc"] = _iso_utc
 jinja.filters["utc_text"] = _utc_text
 jinja.filters["safe_url"] = _safe_url
+# Admin template uses `value is trial_pending` to render the card-gated trial
+# sentinel as "pending card" rather than a nonsense 1999 date.
+jinja.tests["trial_pending"] = lambda value: plans.trial_pending(value)
 
 # Every table that holds one connected destination (one stored credential and
 # one outbound posting path). Plan caps and usage counts sum across ALL of
@@ -737,18 +740,23 @@ def _trial_context(request: Request) -> dict:
         }
     ends = row["trial_ends_at"]
     if ends:
-        end = plans.normalize_trial_ends(ends)
-        if end is not None:
-            now = datetime.now(timezone.utc)
-            if end <= now:
-                ctx["trial_expired"] = True
-            else:
-                ctx["trial_days_left"] = max(1, (end - now).days)
-                # ISO date for a <time class="local-time"> element; the
-                # browser renders it in the viewer's locale (issue #6).
-                ctx["trial_ends_date"] = end.strftime("%Y-%m-%d")
+        if plans.trial_pending(ends):
+            # Card-gated trial not yet started (checkout unfinished). Posting
+            # is paused, but this is NOT "trial ended" — the clock never ran.
+            ctx["trial_pending"] = True
         else:
-            logger.warning("Unparseable trial_ends_at for user %s: %r", uid, ends)
+            end = plans.normalize_trial_ends(ends)
+            if end is not None:
+                now = datetime.now(timezone.utc)
+                if end <= now:
+                    ctx["trial_expired"] = True
+                else:
+                    ctx["trial_days_left"] = max(1, (end - now).days)
+                    # ISO date for a <time class="local-time"> element; the
+                    # browser renders it in the viewer's locale (issue #6).
+                    ctx["trial_ends_date"] = end.strftime("%Y-%m-%d")
+            else:
+                logger.warning("Unparseable trial_ends_at for user %s: %r", uid, ends)
     return ctx
 
 

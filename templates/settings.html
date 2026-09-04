@@ -147,7 +147,11 @@
 <section id="billing">
     <h2>Billing</h2>
     {% if plan == 'trial' %}
+    {% if trial_pending %}
+    <p class="hint">Your 14-day free trial hasn't started yet — add a card to begin. Nothing is charged until the trial ends.</p>
+    {% else %}
     <p class="hint">You're on the free trial{% if trial_ends_date %} — it ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>{% endif %}. Subscribe to unlock higher limits and keep posting.</p>
+    {% endif %}
     <form method="post" action="/api/billing/checkout" class="inline-form">
         <input type="hidden" name="interval" value="monthly">
         <button type="submit">Subscribe — $4/month</button>

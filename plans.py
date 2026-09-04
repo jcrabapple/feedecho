@@ -20,6 +20,13 @@ from datetime import datetime, timezone
 
 import settings
 
+# trial_ends_at sentinel written at registration when billing is enabled: the
+# card-gated trial clock does NOT start until Stripe Checkout completes and the
+# webhook stamps the real trial_end. Posting is paused while this value is
+# active, but the trial has not ENDED — it has not begun. The UI must render
+# this as "finish checkout", not "trial ended".
+TRIAL_PENDING = "2000-01-01 00:00:00"
+
 
 class PlanError(ValueError):
     """Raised when an action would exceed the plan's limits."""
@@ -68,6 +75,16 @@ def trial_state(plan: str, trial_ends_at) -> str:
         # is a direct-DB-edit situation, not a real state).
         return "active"
     return "expired" if end <= datetime.now(timezone.utc) else "active"
+
+
+def trial_pending(trial_ends_at) -> bool:
+    """True when the card-gated trial has NOT started (checkout unfinished).
+
+    Distinct from 'expired': the clock simply hasn't begun. Posting stays
+    paused (the sentinel is a past date), but the message must be 'finish
+    checkout', not 'trial ended'.
+    """
+    return normalize_trial_ends(trial_ends_at) == normalize_trial_ends(TRIAL_PENDING)
 
 
 def posting_paused(plan: str, trial_ends_at) -> bool:

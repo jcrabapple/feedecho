@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 import settings
 import invites
+import plans
 from database import get_db
 from security import SESSION_TTL_SECONDS, hash_password, read_session, sign_session, verify_password
 
@@ -281,9 +282,7 @@ def register_submit(
             # at registration — a past trial_ends_at pauses posting through the
             # existing expired-trial path until the card is collected, when the
             # billing webhook sets the real trial_end from Stripe.
-            trial_end = (
-                "2000-01-01 00:00:00" if settings.BILLING_ENABLED else _trial_end()
-            )
+            trial_end = plans.TRIAL_PENDING if settings.BILLING_ENABLED else _trial_end()
             try:
                 db.execute(
                     """

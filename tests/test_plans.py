@@ -113,6 +113,15 @@ class TestTrialState:
     def test_missing_expiry_treated_as_active(self):
         assert plans.trial_state("trial", None) == "active"
 
+    def test_trial_pending_sentinel(self):
+        # The card-gated sentinel reads as "not started", distinct from expired.
+        assert plans.trial_pending(plans.TRIAL_PENDING) is True
+        assert plans.trial_pending(_past(1)) is False
+        assert plans.trial_pending(_future(5)) is False
+        assert plans.trial_pending(None) is False
+        # Still pauses posting (past date) even though the trial hasn't begun.
+        assert plans.posting_paused("trial", plans.TRIAL_PENDING) is True
+
     def test_both_dialect_timestamp_forms_parse(self):
         # sqlite TEXT form and ISO form must agree
         assert plans.trial_state("trial", "2020-01-01 00:00:00") == "expired"

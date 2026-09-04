@@ -159,15 +159,18 @@ class TestLogoutClearsBothCookies:
         c.cookies.set("feedecho_auth", "s3cret-token")
         resp = c.post("/logout", follow_redirects=False)
         assert resp.status_code == 302
+        # Both cookies are always deleted; assert BOTH carry the flags, not
+        # just the shared-secret one — the multi-mode session cookie is the
+        # one the eviction bug actually concerns.
+        seen = set()
         for h in resp.headers.get_list("set-cookie"):
-            if "feedecho_auth=" not in h:
-                continue
-            lower = h.lower()
-            assert "secure" in lower, h
-            assert "httponly" in lower, h
-            break
-        else:
-            raise AssertionError("logout did not emit feedecho_auth deletion")
+            for name in ("feedecho_auth", "feedecho_session"):
+                if f"{name}=" in h:
+                    lower = h.lower()
+                    assert "secure" in lower, h
+                    assert "httponly" in lower, h
+                    seen.add(name)
+        assert seen == {"feedecho_auth", "feedecho_session"}
 
 
 class TestOAuthCallbackErrorPages:

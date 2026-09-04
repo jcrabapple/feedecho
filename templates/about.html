@@ -10,7 +10,7 @@
     <ul>
         <li><strong>Your account:</strong> email address and a salted scrypt hash of your password. Passwords are never stored in plain text.</li>
         <li><strong>Feeds:</strong> the feed URLs you add and the last item each feed was checked against.</li>
-        <li><strong>Destinations:</strong> credentials for the accounts you connect — Mastodon access tokens, Bluesky app passwords, micro.blog tokens, Matrix access tokens, Discord webhook URLs, and email SMTP credentials. These are required to post on your behalf, and they are encrypted at rest.</li>
+        <li><strong>Destinations:</strong> credentials for the accounts you connect — Mastodon access tokens, Bluesky app passwords, micro.blog tokens, Matrix access tokens, Discord webhook URLs, generic webhook URLs and headers, and email SMTP credentials. These are required to post on your behalf, and they are encrypted at rest.</li>
         <li><strong>Post history:</strong> which items were posted where, and any delivery errors, so failures can be retried and diagnosed.</li>
     </ul>
     <p>Everything lives in a Postgres database on a single VPS we operate. Data is not sold, rented, or shared with anyone.</p>

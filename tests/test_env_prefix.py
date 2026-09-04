@@ -186,6 +186,13 @@ class TestNoStrayLegacySpelling:
             # starts reading FEEDCHO_ directly, this entry must be revisited.
             "nix/README.md",
             "nix/module.nix",
+            # Reads the VPS credential env vars, whose Infisical keys were
+            # deliberately never renamed (FEEDCHO_VPS_IP / FEEDCHO_VPS_USER /
+            # FEEDCHO_VPS_PASSWORD) — see the note in the feedecho skill and
+            # the env-prefix rename issue #15. The script is shell, not
+            # Python, so it cannot go through settings.env()'s shim; it reads
+            # those exact keys directly.
+            "scripts/backup-verify-pull.sh",
         }
         offenders = []
         for rel in tracked:

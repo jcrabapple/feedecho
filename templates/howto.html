@@ -2,7 +2,7 @@
 {% block title %}How To — FeedEcho{% endblock %}
 {% block content %}
 <h1>How To</h1>
-<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, or email. Everything is built from three pieces: feeds, accounts, and echoes.</p>
+<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, Discord, email, or any webhook. Everything is built from three pieces: feeds, accounts, and echoes.</p>
 
 <section>
     <h2>1. Add a feed</h2>
@@ -18,7 +18,7 @@
 
 <section>
     <h2>2. Add an account</h2>
-    <p>An account is a destination FeedEcho can post to. Five kinds are supported.</p>
+    <p>An account is a destination FeedEcho can post to. Seven kinds are supported.</p>
     <h3>Mastodon</h3>
     <ol class="howto-steps">
         <li>Open <a href="/accounts">Accounts</a>.</li>
@@ -49,6 +49,18 @@
         <li>Under <strong>Add email account</strong>, enter a name and the destination address.</li>
         <li>In <a href="/settings">Settings</a>, configure SMTP so FeedEcho can send on your behalf.</li>
         <li>Use the <strong>Test</strong> button to confirm delivery before relying on it.</li>
+    </ol>
+    <h3>Discord</h3>
+    <ol class="howto-steps">
+        <li>In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL.</li>
+        <li>Under <strong>Connect Discord</strong>, paste the webhook URL and an optional display name.</li>
+        <li>Treat the webhook URL like a token — anyone who has it can post to that channel.</li>
+    </ol>
+    <h3>Webhook</h3>
+    <ol class="howto-steps">
+        <li>Under <strong>Connect Webhook</strong>, enter any HTTP endpoint that accepts JSON — Slack or Mattermost incoming webhooks, ntfy or Gotify, Zapier or n8n, or something you run yourself.</li>
+        <li>Add optional headers, one per line, for authentication.</li>
+        <li>Each item arrives as one JSON object; the Echoes page lists the fields you can use in your template.</li>
     </ol>
 </section>
 

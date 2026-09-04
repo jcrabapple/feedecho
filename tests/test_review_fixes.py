@@ -144,6 +144,34 @@ class TestLogoutClearsBothCookies:
         assert 'feedecho_auth=""' in header or "feedecho_auth=;" in header
         assert "max-age=0" in header or "expires=thu, 01 jan 1970" in header
 
+    def test_logout_deletion_matches_secure_and_httponly(self, temp_db, monkeypatch):
+        """The deletion cookie must carry the same Secure/HttpOnly flags the
+        login flow sets, or a Secure session cookie is not reliably evicted
+        (WebKit/Safari) and the browser keeps re-sending a stale session."""
+        import app as app_module
+
+        monkeypatch.setattr(app_module.settings, "MULTI", False)
+        monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", "s3cret-token")
+        monkeypatch.setattr(app_module.settings, "FORCE_SECURE_COOKIE", True)
+        c = TestClient(app_module.app)
+        # The single-mode auth gate sits in front of /logout; authenticate
+        # with the shared-secret cookie so the route actually runs.
+        c.cookies.set("feedecho_auth", "s3cret-token")
+        resp = c.post("/logout", follow_redirects=False)
+        assert resp.status_code == 302
+        # Both cookies are always deleted; assert BOTH carry the flags, not
+        # just the shared-secret one — the multi-mode session cookie is the
+        # one the eviction bug actually concerns.
+        seen = set()
+        for h in resp.headers.get_list("set-cookie"):
+            for name in ("feedecho_auth", "feedecho_session"):
+                if f"{name}=" in h:
+                    lower = h.lower()
+                    assert "secure" in lower, h
+                    assert "httponly" in lower, h
+                    seen.add(name)
+        assert seen == {"feedecho_auth", "feedecho_session"}
+
 
 class TestOAuthCallbackErrorPages:
     """A3: the callback is auth-exempt, so its error paths 401'd in multi mode."""

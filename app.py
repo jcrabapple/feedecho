@@ -311,6 +311,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/reset-password",
         # Public hosted-service disclosure page.
         "/about",
+        # Pricing is a public decision page like the legal pages.
+        "/pricing",
         # Legal pages are for people deciding whether to sign up.
         "/terms",
         "/privacy",
@@ -328,7 +330,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
     # database read. /forgot-password and /reset-password are for people who
     # cannot get in, where anonymous chrome is the honest answer.
     _MULTI_PUBLIC_PAGES = {
-        "/login", "/register", "/about", "/verify-email", "/terms", "/privacy", "/"
+        "/login", "/register", "/about", "/verify-email", "/terms", "/privacy",
+        "/pricing", "/"
     }
 
     async def dispatch(self, request: Request, call_next):
@@ -2189,6 +2192,14 @@ async def privacy_page(request: Request):
 
     _require_multi()  # hosted-service legal page; 404 in self-hosted mode
     return render("privacy.html", request)
+
+
+@app.get("/pricing", response_class=HTMLResponse)
+async def pricing_page(request: Request):
+    from auth import _require_multi
+
+    _require_multi()  # hosted-service page; 404 in self-hosted mode
+    return render("pricing.html", request)
 
 
 def _render_settings(request: Request, **extra) -> HTMLResponse:

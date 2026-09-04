@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Pricing — FeedEcho{% endblock %}
+{% block content %}
+<h1>Pricing</h1>
+<p class="hint">A 14-day free trial, then one plan — $4 a month or $40 a year. Every plan posts to Mastodon, Bluesky, micro.blog, Matrix, Discord, email, and any webhook, and includes the RSS reader.</p>
+
+<section class="pricing-grid">
+    <div class="pricing-card">
+        <h2>Free trial</h2>
+        <p class="pricing-price">$0 <span class="pricing-period">for 14 days</span></p>
+        <p class="pricing-desc">Try the full service before you pay. A card is required up front to keep spam signups out, but nothing is charged until the trial ends.</p>
+        <ul class="pricing-list">
+            <li>Up to <strong>5 feeds</strong></li>
+            <li>Up to <strong>5 connected accounts</strong></li>
+            <li>Check feeds as often as every <strong>15 minutes</strong></li>
+            <li>Up to <strong>60 posts per hour</strong></li>
+            <li>RSS reader included</li>
+            <li>Every destination type</li>
+        </ul>
+        <a href="/register" class="btn btn-landing-secondary">Start your trial</a>
+    </div>
+
+    <div class="pricing-card pricing-card-featured">
+        <h2>FeedEcho</h2>
+        <p class="pricing-price">$4<span class="pricing-period">/month</span></p>
+        <p class="pricing-alt">or $40/year</p>
+        <p class="pricing-desc">The whole service, sized for real use. Cancel anytime; access continues to the end of the billing period.</p>
+        <ul class="pricing-list">
+            <li>Up to <strong>100 feeds</strong></li>
+            <li>Up to <strong>50 connected accounts</strong></li>
+            <li>Check feeds as often as every <strong>minute</strong></li>
+            <li>Up to <strong>1,000 posts per hour</strong></li>
+            <li>RSS reader included</li>
+            <li>Every destination type</li>
+        </ul>
+        <a href="/register" class="btn btn-landing-primary">Start your trial</a>
+    </div>
+</section>
+
+<section>
+    <h2>Good to know</h2>
+    <ul>
+        <li><strong>30-day refund.</strong> Email us within 30 days of a charge and we refund it in full, no questions asked.</li>
+        <li><strong>Pausing is not deleting.</strong> If you cancel or a payment lapses, posting pauses. Your feeds, echoes, and history stay exactly where they are, and everything resumes when you resubscribe. Nothing is deleted and nothing is re-posted as a backlog.</li>
+        <li><strong>No lock-in.</strong> Export your feeds and echoes from the dashboard, and delete your account whenever you want.</li>
+        <li><strong>Support.</strong> Best-effort email support at <a href="mailto:support@feedecho.net">support@feedecho.net</a> — we aim to reply within about 3 business days.</li>
+    </ul>
+</section>
+
+<p class="hint">Questions about plans or billing? Email <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</p>
+{% endblock %}

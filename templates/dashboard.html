@@ -5,7 +5,9 @@
 
 {% if MULTI and plan == 'trial' %}
 <div class="trial-banner">
-    {% if trial_expired %}
+    {% if trial_pending %}
+    <p><strong>Finish checkout to start your trial:</strong> your 14-day free trial hasn't started yet.{% if billing_enabled %} <a href="/settings#billing">Add a card</a> to begin — nothing is charged until the trial ends.{% else %} Contact the operator to activate your account.{% endif %}</p>
+    {% elif trial_expired %}
     <p><strong>Trial ended:</strong> your free trial has ended.{% if billing_enabled %} <a href="/settings#billing">Subscribe to continue</a>{% else %} Paid plans launch soon.{% endif %}</p>
     {% elif trial_ends_date %}
     <p><strong>Trial:</strong> {{ trial_days_left }} day{{ 's' if trial_days_left != 1 else '' }} left — your free trial ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>.{% if billing_enabled %} <a href="/settings#billing">Subscribe now</a> to keep everything running.{% else %} Paid plans launch soon.{% endif %}</p>

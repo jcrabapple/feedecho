@@ -84,9 +84,15 @@
     <main id="main">
         {% if posting_paused %}
         <div class="flash flash-warn" role="status">
+            {% if trial_pending %}
+            <strong>Finish checkout to start your trial:</strong> posting is paused until you
+            complete payment setup. {% if billing_enabled %}<a href="/settings#billing">Add a card to start your 14-day free trial</a>{% else %}upgrade or contact the operator{% endif %} — nothing
+            is charged until the trial ends.
+            {% else %}
             <strong>Posting paused:</strong> your trial has ended, so FeedEcho has stopped
             checking your feeds. Nothing was deleted — {% if billing_enabled %}<a href="/settings#billing">subscribe to continue</a>{% else %}upgrade or contact the operator{% endif %} and
             your feeds pick up exactly where they left off.
+            {% endif %}
         </div>
         {% endif %}
         {% block content %}{% endblock %}

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import database
 import settings
+import plans
 from app import app
 import security
 
@@ -124,6 +125,21 @@ class TestTrialLimitsOnDashboard:
         assert text and "0 of 5 feeds" in text, (
             "an expired-trial user deciding whether to pay still needs the limits visible"
         )
+
+    def test_pending_card_trial_says_finish_checkout_not_ended(self, monkeypatch, tmp_path):
+        # The card-gated sentinel (2000-01-01) means "checkout unfinished", NOT
+        # "trial ended". A user who abandoned checkout must be prompted to
+        # finish, and must never see a nonsense 1999 expiry date.
+        _setup(monkeypatch, tmp_path)
+        with database.get_db() as db:
+            db.execute(
+                "UPDATE users SET trial_ends_at = ? WHERE id = ?",
+                (plans.TRIAL_PENDING, USER_ID),
+            )
+        page = _dashboard(monkeypatch, tmp_path)
+        assert "Finish checkout" in page
+        assert "Trial ended" not in page
+        assert "1999" not in page and "2000-01-01" not in page
 
     def test_banner_paragraphs_styled(self):
         style = (Path(__file__).resolve().parent.parent / "static" / "css" / "style.css").read_text(

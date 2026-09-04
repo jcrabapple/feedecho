@@ -46,7 +46,7 @@
             <tr>
                 <td data-label="Email">{{ u.email }}</td>
                 <td data-label="Plan">
-                    {{ u.plan }}{% if u.plan == 'trial' and u.trial_ends_at %}<br><small><time class="local-time" datetime="{{ u.trial_ends_at | iso_utc }}">ends {{ u.trial_ends_at | utc_text }} UTC</time></small>{% endif %}
+                    {{ u.plan }}{% if u.plan == 'trial' and u.trial_ends_at %}{% if u.trial_ends_at is trial_pending %}<br><small class="muted">pending card</small>{% else %}<br><small><time class="local-time" datetime="{{ u.trial_ends_at | iso_utc }}">ends {{ u.trial_ends_at | utc_text }} UTC</time></small>{% endif %}{% endif %}
                 </td>
                 <td data-label="Verified">{{ 'Yes' if u.email_verified else 'No' }}</td>
                 <td data-label="Status">

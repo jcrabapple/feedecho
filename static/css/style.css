@@ -439,6 +439,32 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     outline-offset: 1px;
 }
 
+/* Accounts "add account" forms stack each field on its own line at every
+   viewport width. .inline-form is row-flex by default, so a multi-field
+   connect form (Bluesky: name + handle + app password; Matrix: server +
+   room + token; etc.) squeezes its inputs into unreadably narrow columns on
+   desktop. Column layout puts the label above a full-width input, one per
+   line, matching how these forms already render on phones. */
+.inline-form.stacked {
+    flex-direction: column;
+    align-items: stretch;
+}
+.inline-form.stacked label {
+    display: block;
+    width: 100%;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 0.15rem;
+}
+.inline-form.stacked input {
+    width: 100%;
+    min-width: 0;
+    flex: none;
+}
+.inline-form.stacked button {
+    align-self: flex-start;
+}
+
 /* History filter bar (issue #16): the .inline-form shape, but its controls are
    selects — .inline-form only styles inputs — plus a Clear link that reads as
    secondary next to the submit button. */

@@ -26,7 +26,7 @@ def test_security_headers_present_on_html(client):
     h = r.headers
     assert h.get("X-Content-Type-Options") == "nosniff"
     assert h.get("X-Frame-Options") == "DENY"
-    assert h.get("Referrer-Policy") == "no-referrer"
+    assert h.get("Referrer-Policy") == "strict-origin-when-cross-origin"
     assert "camera=()" in h.get("Permissions-Policy", "")
     csp = h.get("Content-Security-Policy", "")
     assert "frame-ancestors 'none'" in csp
@@ -54,12 +54,46 @@ def test_csrf_rejects_cross_origin_post(client):
 
 
 def test_csrf_rejects_null_origin(client):
+    # A bare "Origin: null" with no same-origin evidence and no Referer fails
+    # closed (this is what a sandboxed/opaque context forger sends).
     r = client.post(
         "/api/settings/smtp",
         headers={"Origin": "null", "Host": "testserver"},
         data={"smtp_host": "smtp.example.com", "smtp_port": "587"},
     )
     assert r.status_code == 403
+
+
+def test_csrf_allows_null_origin_with_same_origin_fetch_metadata(client):
+    # Browsers send "Origin: null" on a same-origin form POST when a referrer
+    # policy hides the referrer (Firefox/Chromium, WHATWG Fetch). Fetch
+    # Metadata (Sec-Fetch-Site: same-origin) proves it is genuinely same-origin.
+    r = client.post(
+        "/api/settings/smtp",
+        headers={"Origin": "null", "Sec-Fetch-Site": "same-origin", "Host": "testserver"},
+        data={"smtp_host": "smtp.example.com", "smtp_port": "587"},
+    )
+    assert r.status_code != 403
+
+
+def test_csrf_rejects_null_origin_with_cross_site_fetch_metadata(client):
+    # A null Origin from a cross-site context is still rejected.
+    r = client.post(
+        "/api/settings/smtp",
+        headers={"Origin": "null", "Sec-Fetch-Site": "cross-site", "Host": "testserver"},
+        data={"smtp_host": "smtp.example.com", "smtp_port": "587"},
+    )
+    assert r.status_code == 403
+
+
+def test_csrf_allows_null_origin_with_matching_referer(client):
+    # No Fetch Metadata (older client) but a same-origin Referer still passes.
+    r = client.post(
+        "/api/settings/smtp",
+        headers={"Origin": "null", "Referer": "http://testserver/login", "Host": "testserver"},
+        data={"smtp_host": "smtp.example.com", "smtp_port": "587"},
+    )
+    assert r.status_code != 403
 
 
 def test_csrf_allows_same_origin_post(client):

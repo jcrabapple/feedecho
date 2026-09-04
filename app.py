@@ -646,7 +646,7 @@ class CSRFOriginMiddleware(BaseHTTPMiddleware):
         if origin is not None:
             # origin == "null". Trust the browser's own Fetch Metadata claim
             # that this is same-origin; otherwise fall through to Referer.
-            if request.headers.get("sec-fetch-site", "").lower() == "same-origin":
+            if request.headers.get("sec-fetch-site", "").strip().lower() == "same-origin":
                 return True
         referer = request.headers.get("referer")
         if referer is not None:
@@ -658,6 +658,10 @@ class CSRFOriginMiddleware(BaseHTTPMiddleware):
 
 def _host_matches(url_val: str, expect_host: str) -> bool:
     if not url_val or url_val.strip().lower() == "null":
+        return False
+    if not expect_host:
+        # No request Host to compare against (e.g. a malformed HTTP/1.0
+        # request): fail closed rather than letting two empty hosts match.
         return False
     try:
         host = (urlsplit(url_val).hostname or "").lower()

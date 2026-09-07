@@ -212,7 +212,7 @@ function editFeed(feedId) {
     if (kwList.length) {
         chipsHtml = `<div class="mute-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.4rem;">` +
             kwList.map((kw) => `<span class="badge badge-muted mute-chip" style="display:inline-flex; align-items:center; gap:0.3rem;">` +
-                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" onclick="removeFeedMuteChip(${feedId}, '${escapeHTML(kw)}')" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
+                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" data-mute-kw="${escapeHTML(kw)}" onclick="removeFeedMuteChip(${feedId}, this.dataset.muteKw)" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
             `</span>`).join('') +
             `</div>`;
     }

@@ -2261,15 +2261,30 @@ def _flush_queue() -> None:
             """,
             (ttl_expired,),
         )
-        due = db.execute(
-            """
-            SELECT id FROM queued_posts
-             WHERE status = 'queued' AND scheduled_at <= ?
-             ORDER BY scheduled_at ASC
-             LIMIT 50
-            """,
-            (now_ts,),
-        ).fetchall()
+        if settings.MULTI:
+            due = db.execute(
+                """
+                SELECT q.id FROM queued_posts q
+                  JOIN users u ON u.id = q.user_id
+                 WHERE q.status = 'queued' AND q.scheduled_at <= ?
+                   AND u.suspended = 0
+                   AND NOT (u.plan = 'trial' AND u.trial_ends_at IS NOT NULL
+                            AND u.trial_ends_at <= ?)
+                 ORDER BY q.scheduled_at ASC
+                 LIMIT 50
+                """,
+                (now_ts, now_ts),
+            ).fetchall()
+        else:
+            due = db.execute(
+                """
+                SELECT id FROM queued_posts
+                 WHERE status = 'queued' AND scheduled_at <= ?
+                 ORDER BY scheduled_at ASC
+                 LIMIT 50
+                """,
+                (now_ts,),
+            ).fetchall()
 
     for r in due:
         qp_id = r["id"]
@@ -2300,26 +2315,69 @@ def _flush_queue() -> None:
         if not row:
             continue
 
-        # Materialize one-shot echo
-        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        # Enforce max_posts_per_hour for the queue (multi mode only)
+        if settings.MULTI:
+            with get_db() as db:
+                u = db.execute(
+                    "SELECT plan FROM users WHERE id = ?", (row["user_id"],)
+                ).fetchone()
+                if u:
+                    cap = plans.posts_per_hour_cap(u["plan"])
+                    if cap:
+                        hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+                        recent = db.execute(
+                            "SELECT COUNT(*) AS c FROM posted_items pi"
+                            " JOIN echoes e ON pi.echo_id = e.id"
+                            " WHERE e.user_id = ? AND pi.status = 'success'"
+                            " AND pi.posted_at >= ?",
+                            (row["user_id"], hour_ago),
+                        ).fetchone()
+                        if recent and recent["c"] >= cap:
+                            logger.info(
+                                "Queue flush: user %s hit posts_per_hour cap (%d/%d), skipping",
+                                row["user_id"], recent["c"], cap,
+                            )
+                            # Release the claim back to queued for next tick
+                            db.execute(
+                                "UPDATE queued_posts SET status = 'queued', claim_token = NULL, claimed_at = NULL"
+                                " WHERE id = ? AND claim_token = ?",
+                                (qp_id, claim_token),
+                            )
+                            continue
+
+        # Reuse the echo_id stored at enqueue time (idempotency key for crash recovery)
+        echo_id = row["echo_id"]
         with get_db() as db:
-            echo_id = db.execute(
-                """
-                INSERT INTO echoes (feed_id, destination_type, destination_id, template,
-                                   visibility, attach_image, enabled, one_shot, deleted_at, user_id)
-                VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
-                """,
-                (
-                    row["feed_id"],
-                    row["destination_type"],
-                    row["destination_id"],
-                    row["visibility"] or "public",
-                    row["attach_image"],
-                    now_utc,
-                    row["user_id"],
-                ),
-            ).fetchone()["id"]
-            echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+            echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone() if echo_id else None
+
+        # Fallback: create echo if missing (e.g. pre-migration rows without echo_id)
+        if not echo:
+            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            with get_db() as db:
+                new_echo_id = db.execute(
+                    """
+                    INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+                    VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
+                    """,
+                    (
+                        row["feed_id"],
+                        row["destination_type"],
+                        row["destination_id"],
+                        row["visibility"] or "public",
+                        row["attach_image"],
+                        now_utc,
+                        row["user_id"],
+                    ),
+                ).fetchone()["id"]
+                echo = db.execute("SELECT * FROM echoes WHERE id = ?", (new_echo_id,)).fetchone()
+            # Persist the echo_id so future retries reuse it
+            with get_db() as db:
+                db.execute(
+                    "UPDATE queued_posts SET echo_id = ? WHERE id = ?",
+                    (new_echo_id, qp_id),
+                )
+            echo_id = new_echo_id  # update the variable so the status lookup uses the right id
 
         item = {
             "id": row["item_id"],

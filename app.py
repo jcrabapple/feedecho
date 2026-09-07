@@ -1859,7 +1859,7 @@ async def queue_page(request: Request):
             SELECT q.*, f.name AS feed_name
               FROM queued_posts q
               LEFT JOIN feeds f ON q.feed_id = f.id
-             WHERE q.user_id = ? AND q.status IN ('queued', 'sending')
+             WHERE q.user_id = ? AND q.status IN ('queued', 'sending', 'failed')
              ORDER BY q.scheduled_at ASC
             """,
             (uid,),
@@ -1916,24 +1916,31 @@ def queue_post_now(request: Request, post_id: int):
             (post_id, uid),
         ).fetchone()
 
-        # Materialize one-shot echo
-        echo_id = db.execute(
-            """
-            INSERT INTO echoes (feed_id, destination_type, destination_id, template,
-                               visibility, attach_image, enabled, one_shot, deleted_at, user_id)
-            VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
-            """,
-            (
-                row["feed_id"],
-                row["destination_type"],
-                row["destination_id"],
-                row["visibility"] or "public",
-                row["attach_image"],
-                now_utc,
-                uid,
-            ),
-        ).fetchone()["id"]
-        echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+        # Reuse the echo_id stored at enqueue time if available (idempotency)
+        if row["echo_id"]:
+            echo = db.execute("SELECT * FROM echoes WHERE id = ?", (row["echo_id"],)).fetchone()
+            if echo:
+                echo_id = echo["id"]
+            else:
+                echo_id = db.execute(
+                    """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                           visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+                    VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id""",
+                    (row["feed_id"], row["destination_type"], row["destination_id"],
+                     row["visibility"] or "public", row["attach_image"], now_utc, uid),
+                ).fetchone()["id"]
+                echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+        else:
+            echo_id = db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+                VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id""",
+                (row["feed_id"], row["destination_type"], row["destination_id"],
+                 row["visibility"] or "public", row["attach_image"], now_utc, uid),
+            ).fetchone()["id"]
+            echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+            # Persist the echo_id so future operations reuse it
+            db.execute("UPDATE queued_posts SET echo_id = ? WHERE id = ?", (echo_id, post_id))
 
     item = {
         "id": row["item_id"],
@@ -2012,10 +2019,31 @@ def queue_cancel(request: Request, post_id: int):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
-        if row["status"] != "queued":
+        if row["status"] not in ("queued", "failed"):
             raise HTTPException(status_code=400, detail="Cannot cancel post that is already sending or completed")
         db.execute(
-            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'queued'",
+            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status IN ('queued', 'failed')",
+            (post_id, uid),
+        )
+    return RedirectResponse(url="/queue", status_code=303)
+
+
+@app.post("/api/queue/{post_id}/retry")
+def queue_retry(request: Request, post_id: int):
+    """Reset a failed queued post back to 'queued' for re-dispatch."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT id, status, error_message FROM queued_posts WHERE id = ? AND user_id = ?",
+            (post_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Queued post not found")
+        if row["status"] != "failed":
+            raise HTTPException(status_code=400, detail="Can only retry failed posts")
+        db.execute(
+            "UPDATE queued_posts SET status = 'queued', error_message = NULL, attempt_count = 0 WHERE id = ? AND user_id = ?",
             (post_id, uid),
         )
     return RedirectResponse(url="/queue", status_code=303)
@@ -2670,7 +2698,11 @@ async def reader_page(
 
                 for s in saved_searches:
                     s_filters, s_terms = _parse_reader_query(s["query"])
-                    s_where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL", "i.is_read = 0"]
+                    # Default to unread counts, but is:read or is:starred override the default
+                    has_read_state = any(op == "is" and val in ("read", "starred") for op, val in s_filters)
+                    s_where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL"]
+                    if not has_read_state:
+                        s_where.append("i.is_read = 0")
                     s_params: list = [uid]
                     s_text_scope = None
                     for op, val in s_filters:
@@ -4754,6 +4786,7 @@ def reader_toggle_star(request: Request, item_id: int):
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Item not found")
         row = db.execute("SELECT starred FROM feed_items WHERE id = ?", (item_id,)).fetchone()
+    _saved_search_counts_cache.pop(uid, None)
     return {"success": True, "starred": bool(row["starred"])}
 
 
@@ -5163,7 +5196,10 @@ def reader_compose(
     if has_content and content is not None:
         final_content = content
     else:
-        final_content = render_template(template, item, feed_name=row["feed_name"] or "")
+        try:
+            final_content = render_template(template, item, feed_name=row["feed_name"] or "")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Template rendering failed. Check your template syntax.")
 
     results = []
 
@@ -5172,16 +5208,31 @@ def reader_compose(
         for dest_type, destination_id, dk in validated_dests:
             with get_db() as db:
                 if scheduled_at and scheduled_at.strip():
-                    target_time = scheduled_at.strip()
+                    norm_dt = as_utc_naive(scheduled_at.strip())
+                    if not norm_dt:
+                        raise HTTPException(status_code=400, detail="Invalid scheduled_at datetime")
+                    target_time = norm_dt.strftime("%Y-%m-%d %H:%M:%S")
                 else:
                     target_time = _next_free_slot(db, uid, dest_type, destination_id)
+
+                # Create the one-shot echo once at enqueue time so crash-recovery
+                # retries reuse the same echo_id (idempotency key for _claim_post).
+                now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                echo_id = db.execute(
+                    """
+                    INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+                    VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
+                    """,
+                    (row["feed_id"], dest_type, destination_id, visibility, is_attach_image, now_utc, uid),
+                ).fetchone()["id"]
 
                 qp_id = db.execute(
                     """
                     INSERT INTO queued_posts (
                         user_id, feed_item_id, item_id, feed_id, destination_type, destination_id,
-                        content, visibility, attach_image, image_alt, scheduled_at, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued') RETURNING id
+                        content, visibility, attach_image, image_alt, scheduled_at, status, echo_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?) RETURNING id
                     """,
                     (
                         uid,
@@ -5195,6 +5246,7 @@ def reader_compose(
                         is_attach_image,
                         chosen_alt,
                         target_time,
+                        echo_id,
                     ),
                 ).fetchone()["id"]
 

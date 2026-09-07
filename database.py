@@ -805,6 +805,7 @@ def init_db_sqlite() -> None:
             CREATE INDEX IF NOT EXISTS idx_queued_posts_user
             ON queued_posts(user_id, scheduled_at)
         """)
+        _add_column_if_missing(db, "queued_posts", "echo_id", "INTEGER")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS queue_settings (
@@ -1310,6 +1311,7 @@ def init_db_postgres() -> None:
             CREATE INDEX IF NOT EXISTS idx_queued_posts_user
             ON queued_posts(user_id, scheduled_at)
         """)
+        _add_column_if_missing(db, "queued_posts", "echo_id", "INTEGER")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS queue_settings (

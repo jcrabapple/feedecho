@@ -32,19 +32,26 @@
                 <p style="margin: 0; white-space: pre-wrap; font-size: 0.9rem;">{{ post.content }}</p>
             </td>
             <td data-label="Status">
-                <span class="badge {% if post.status == 'queued' %}badge-info{% elif post.status == 'sending' %}badge-warning{% else %}badge-muted{% endif %}">{{ post.status }}</span>
+                <span class="badge {% if post.status == 'queued' %}badge-info{% elif post.status == 'sending' %}badge-warning{% elif post.status == 'failed' %}badge-danger{% else %}badge-muted{% endif %}">{{ post.status }}</span>
+                {% if post.status == 'failed' and post.error_message %}<br><small style="color: var(--text-muted);">{{ post.error_message }}</small>{% endif %}
             </td>
             <td data-label="Actions" class="action-cell">
+                {% if post.status == 'failed' %}
+                <form method="post" action="/api/queue/{{ post.id }}/retry" class="inline">
+                    <button class="btn-sm" type="submit" title="Retry dispatch">Retry</button>
+                </form>
+                {% else %}
                 <button class="btn-sm" type="button" onclick="withBusy(this, () => queuePostNow({{ post.id }}, this))">Post now</button>
                 <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
                     <input type="hidden" name="direction" value="up">
-                    <button class="btn-sm" type="submit" title="Move earlier">↑</button>
+                    <button class="btn-sm" type="submit" title="Move earlier">&uarr;</button>
                 </form>
                 <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
                     <input type="hidden" name="direction" value="down">
-                    <button class="btn-sm" type="submit" title="Move later">↓</button>
+                    <button class="btn-sm" type="submit" title="Move later">&darr;</button>
                 </form>
-                <form method="post" action="/api/queue/{{ post.id }}/cancel" class="inline" onsubmit="return confirm('Cancel this queued post?');">
+                {% endif %}
+                <form method="post" action="/api/queue/{{ post.id }}/cancel" class="inline" onsubmit="return confirm('{% if post.status == 'failed' %}Remove this failed post?{% else %}Cancel this queued post?{% endif %}');">
                     <button class="btn-sm btn-danger" type="submit">Remove</button>
                 </form>
             </td>

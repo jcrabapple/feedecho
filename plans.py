@@ -176,3 +176,8 @@ def reader_enabled(plan: str) -> bool:
     if limits is None:
         return False
     return bool(limits.get("reader", 0))
+
+
+def posts_per_hour_cap(plan: str) -> int:
+    """The max posts/hour ceiling for this plan (0 = unlimited)."""
+    return limit_for(plan, "max_posts_per_hour")

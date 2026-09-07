@@ -237,27 +237,49 @@ def _dedupe_discord_webhook_hashes(db) -> None:
 def prune_feed_items(db, feed_id: int, limit: int | None = None) -> None:
     """Delete a feed's oldest items beyond ``limit``, newest kept.
 
+    Starred rows are exempt from general retention: they are never deleted
+    by the unstarred cap and do not count toward it. If
+    ``settings.READER_MAX_STARRED_PER_FEED`` is non-zero, a separate cap trims
+    oldest starred items beyond that safety threshold.
+
     Ordering is ``published_at IS NULL, published_at DESC, id DESC`` so NULL
     dates are pruned first on BOTH dialects: bare ``published_at DESC`` sorts
     NULLs last on sqlite but first on Postgres, which would keep the wrong
     rows. ``published_at IS NULL`` (0 before 1) normalizes that.
     """
     cap = limit if limit is not None else settings.READER_MAX_ITEMS_PER_FEED
-    if cap <= 0:
-        return
-    db.execute(
-        """
-        DELETE FROM feed_items
-         WHERE feed_id = ?
-           AND id NOT IN (
-               SELECT id FROM feed_items
-                WHERE feed_id = ?
-                ORDER BY published_at IS NULL, published_at DESC, id DESC
-                LIMIT ?
-           )
-        """,
-        (feed_id, feed_id, cap),
-    )
+    if cap > 0:
+        db.execute(
+            """
+            DELETE FROM feed_items
+             WHERE feed_id = ?
+               AND starred = 0
+               AND id NOT IN (
+                   SELECT id FROM feed_items
+                    WHERE feed_id = ? AND starred = 0
+                    ORDER BY published_at IS NULL, published_at DESC, id DESC
+                    LIMIT ?
+               )
+            """,
+            (feed_id, feed_id, cap),
+        )
+
+    starred_cap = getattr(settings, "READER_MAX_STARRED_PER_FEED", 0)
+    if starred_cap > 0:
+        db.execute(
+            """
+            DELETE FROM feed_items
+             WHERE feed_id = ?
+               AND starred = 1
+               AND id NOT IN (
+                   SELECT id FROM feed_items
+                    WHERE feed_id = ? AND starred = 1
+                    ORDER BY published_at IS NULL, published_at DESC, id DESC
+                    LIMIT ?
+               )
+            """,
+            (feed_id, feed_id, starred_cap),
+        )
 
 
 def init_db() -> None:

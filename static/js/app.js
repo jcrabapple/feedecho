@@ -1142,6 +1142,80 @@ function readerShowNewPill(n) {
     pill.textContent = `${n} new — Load`;
 }
 
+// ── Reader keyset load-more ──────────────────────────────────────────────────
+async function readerLoadMore(btn) {
+    if (!btn || btn.classList.contains('is-loading')) return;
+    const url = btn.getAttribute('href');
+    if (!url) return;
+    btn.classList.add('is-loading');
+    const origText = btn.textContent;
+    btn.textContent = 'Loading…';
+    try {
+        const resp = await fetch(url, {
+            headers: { 'X-Requested-With': 'fetch' }
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const html = await resp.text();
+        const list = document.querySelector('.reader-item-list');
+        if (!list) { window.location = url; return; }
+
+        const temp = document.createElement('template');
+        temp.innerHTML = html.trim();
+        const fragment = temp.content;
+        const newEntries = fragment.querySelectorAll('.reader-entry');
+        if (!newEntries.length) {
+            btn.closest('.reader-load-more-wrap')?.remove();
+            return;
+        }
+
+        list.appendChild(fragment);
+
+        // Keyset pagination next cursor: fetch next page URL or remove button
+        // by parsing the new page's next link if present or updating href.
+        // The items endpoint renders reader_items.html which has items, but we need
+        // the next cursor. We can inspect the last appended entry.
+        const lastEntry = list.querySelector('.reader-entry:last-child');
+        const nextCursor = btn.dataset.nextCursor;
+        // In the full reader page next_cursor was passed on render, but for fragment fetches
+        // we can inspect if there were fewer than READER_PAGE_SIZE items or look up next cursor.
+        // If the fragment returned less than 50 items, there are no more items.
+        if (newEntries.length < 50) {
+            btn.closest('.reader-load-more-wrap')?.remove();
+        } else {
+            // Find published_at / id of the last entry to construct the next cursor URL
+            const lastTime = lastEntry ? lastEntry.querySelector('time.local-time') : null;
+            const lastId = lastEntry ? lastEntry.dataset.itemId : null;
+            // The local-time datetime is ISO "YYYY-MM-DDTHH:MM:SSZ"; normalize to "YYYY-MM-DD HH:MM:SS"
+            let pubStr = '';
+            if (lastTime && lastTime.getAttribute('datetime')) {
+                pubStr = lastTime.getAttribute('datetime').replace('T', ' ').replace('Z', '').slice(0, 19);
+            }
+            if (lastId) {
+                const nextCur = `${pubStr}|${lastId}`;
+                btn.dataset.nextCursor = nextCur;
+                const nextUrl = new URL(url, window.location.origin);
+                nextUrl.searchParams.set('after', nextCur);
+                btn.setAttribute('href', nextUrl.pathname + nextUrl.search);
+                btn.classList.remove('is-loading');
+                btn.textContent = origText;
+            } else {
+                btn.closest('.reader-load-more-wrap')?.remove();
+            }
+        }
+
+        // Hydrate timestamps and trigger auto-read if active
+        if (typeof hydrateLocalTimes === 'function') hydrateLocalTimes();
+        if (readerAutoReadActive && typeof readerAutoReadScroll === 'function') {
+            readerAutoReadScroll();
+        }
+    } catch (e) {
+        btn.classList.remove('is-loading');
+        btn.textContent = origText;
+        // Fall back to normal full page navigation
+        window.location = url;
+    }
+}
+
 // ── Reader page init ─────────────────────────────────────────────────────────
 (function () {
     if (!document.querySelector('.reader')) return;

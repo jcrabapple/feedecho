@@ -31,7 +31,7 @@ from starlette.routing import Match
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from database import as_utc_naive, dialect, get_db, init_db, _column_names
+from database import as_utc_naive, dialect, get_db, init_db, timestamp_str, _column_names
 from _version import __version__ as APP_VERSION
 import auth
 from auth import current_user_id
@@ -2083,6 +2083,41 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
     )
 
 
+# ── Reader keyset pagination & search helpers ──────────────────────────────
+READER_PAGE_SIZE = 50
+_CURSOR_RE = re.compile(r"^[0-9 :.\-]*\|\d+$")
+
+
+def _reader_keyset(cursor: str | None) -> tuple[str, list]:
+    """SQL predicate + params selecting rows strictly AFTER `cursor` in reader order.
+
+    Cursor format: "<published_at or ''>|<id>". Two cases, because NULL-dated
+    rows sort as one block after all dated rows:
+      - cursor row HAS a date: dated rows older than it, or same date + lower id,
+        plus every NULL-dated row.
+      - cursor row has NO date: only NULL-dated rows with a lower id.
+    """
+    if not cursor or not _CURSOR_RE.match(cursor):
+        return "", []
+    raw_pub, sep, raw_id = cursor.partition("|")
+    try:
+        item_id = int(raw_id)
+    except ValueError:
+        return "", []
+
+    pub = raw_pub.strip()
+    if pub:
+        sql = (
+            "( i.published_at IS NULL"
+            "  OR i.published_at < ?"
+            "  OR (i.published_at = ? AND i.id < ?) )"
+        )
+        return sql, [pub, pub, item_id]
+    else:
+        sql = "( i.published_at IS NULL AND i.id < ? )"
+        return sql, [item_id]
+
+
 def _parse_reader_query(q: str):
     """Split a reader search query into operator filters and bare text terms.
 
@@ -2114,19 +2149,28 @@ def _escape_like(term: str) -> str:
 
 
 @app.get("/reader", response_class=HTMLResponse)
-async def reader_page(request: Request, feed: str = "", view: str = "unread", q: str = "", fulltext: str = ""):
+async def reader_page(
+    request: Request,
+    feed: str = "",
+    view: str = "unread",
+    q: str = "",
+    fulltext: str = "",
+    after: str = "",
+):
     """Consolidated RSS reading surface (issue #11).
 
     Server-rendered list of stored feed items, newest first, scoped to the
     viewer's feeds. ``view`` is one of all|unread|starred|today; ``feed``
     narrows to a single feed; ``fulltext`` renders the full article body
-    inline instead of the summary teaser. Read/star toggles and the per-feed
+    inline instead of the summary teaser; ``after`` is a keyset cursor
+    ("<published_at>|<id>") for pagination. Read/star toggles and the per-feed
     reading switch live in the reader API routes below.
     """
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
     view = view if view in ("all", "unread", "starred", "today") else "unread"
     q = (q or "").strip()
+    after = (after or "").strip()
     with get_db() as db:
         _require_reader(db, uid)
         feeds = db.execute(
@@ -2197,6 +2241,12 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
             where.append("i.published_at >= ?")
             params.append(cutoff.strftime("%Y-%m-%d %H:%M:%S"))
 
+        if after:
+            cursor_sql, cursor_params = _reader_keyset(after)
+            if cursor_sql:
+                where.append(cursor_sql)
+                params.extend(cursor_params)
+
         # Per-feed keyword mutes (NewsBlur "training-lite"): hide items whose
         # title/body match any muted keyword on their feed, at query time.
         mutes = db.execute(
@@ -2214,7 +2264,7 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
                 )
                 params.extend([mf["id"], like, like, like])
 
-        items = db.execute(
+        raw_items = db.execute(
             f"""
             SELECT i.*, f.name AS feed_name,
                    (SELECT COUNT(*) FROM posted_items p
@@ -2225,10 +2275,18 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
               JOIN feeds f ON i.feed_id = f.id
              WHERE {" AND ".join(where)}
              ORDER BY (i.published_at IS NULL), i.published_at DESC, i.id DESC
-             LIMIT 100
+             LIMIT ?
             """,
-            tuple(params),
+            tuple(params) + (READER_PAGE_SIZE + 1,),
         ).fetchall()
+
+        has_more = len(raw_items) > READER_PAGE_SIZE
+        items = raw_items[:READER_PAGE_SIZE]
+        next_cursor = ""
+        if has_more and items:
+            last_item = items[-1]
+            last_pub = timestamp_str(last_item["published_at"]) if last_item["published_at"] else ""
+            next_cursor = f"{last_pub}|{last_item['id']}"
 
         # Baseline for the "N new" poll: the newest item id across ALL the
         # user's read-enabled feeds (independent of the current view/filter),
@@ -2240,11 +2298,28 @@ async def reader_page(request: Request, feed: str = "", view: str = "unread", q:
             " WHERE f.user_id = ? AND f.read_enabled = 1 AND f.deleted_at IS NULL",
             (uid,),
         ).fetchone()
+
+    # Progressive enhancement: fetch request with X-Requested-With returns the
+    # items fragment alone (for infinite scroll / load more).
+    if request.headers.get("X-Requested-With") == "fetch":
+        return render(
+            "reader_items.html",
+            request,
+            items=items,
+            view=view,
+            fulltext=bool(fulltext),
+            next_cursor=next_cursor,
+            shout_destinations=_shout_destinations(uid),
+            default_template="{{ title }} {{ link }}",
+            template_vars=available_variables(),
+        )
+
     return render(
         "reader.html",
         request,
         feeds=feeds,
         items=items,
+        next_cursor=next_cursor,
         max_item_id=max_row["m"] if max_row else 0,
         current_feed=str(feed_id) if feed_id is not None else "",
         view=view,

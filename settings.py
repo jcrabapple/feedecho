@@ -261,6 +261,14 @@ except ValueError:
     )
     READER_MAX_ITEMS_PER_FEED = 200
 
+try:
+    READER_MAX_STARRED_PER_FEED = int(env("READER_MAX_STARRED_PER_FEED", "0"))
+except ValueError:
+    logging.getLogger("feedecho").warning(
+        "FEEDECHO_READER_MAX_STARRED_PER_FEED is not a valid integer; using default of 0"
+    )
+    READER_MAX_STARRED_PER_FEED = 0
+
 
 def validate_config() -> None:
     """Fail fast on misconfigured multi mode. Called from app startup.

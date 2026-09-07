@@ -61,78 +61,13 @@
 
     {% if items %}
     <ul class="reader-item-list" data-view="{{ view }}">
-      {% for item in items %}
-      <li id="item-{{ item.id }}" class="reader-entry" data-item-id="{{ item.id }}" data-feed-id="{{ item.feed_id }}">
-        <details class="reader-item {% if not item.is_read %}unread{% endif %}">
-          <summary>
-            <span class="reader-item-title">{{ item.title or '(untitled)' }}{% if item.starred %} <span class="reader-item-title-star" aria-label="Starred">{{ star_icon(true) }}</span>{% endif %}</span>
-            <span class="reader-item-meta">
-              {{ item.feed_name }}
-              {% if item.author %} · {{ item.author }}{% endif %}
-              {% if item.published_at %} · <time class="local-time" datetime="{{ item.published_at | iso_utc }}">{{ item.published_at | utc_text }} UTC</time>{% endif %}
-              {% if item.shouted %} · <span class="reader-item-shouted" title="Shouted to an account"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg> Shouted</span>{% endif %}
-            </span>
-          </summary>
-          <div class="reader-item-body">
-            {% if item.image_url | safe_url %}
-            <img class="reader-item-image" src="{{ item.image_url | safe_url }}" alt="{{ item.image_alt }}" loading="lazy" referrerpolicy="no-referrer">
-            {% endif %}
-            {% if fulltext %}
-            <div class="reader-item-content" data-item-id="{{ item.id }}" data-loaded="1">{{ item.content_text or item.content or item.summary }}</div>
-            {% else %}
-            <div class="reader-item-content" data-item-id="{{ item.id }}">{% if item.summary %}{{ item.summary }}{% elif item.content %}{{ item.content | truncate(280) }}{% endif %}</div>
-            {% endif %}
-            {% if item.enclosure_url | safe_url %}
-            <audio class="reader-item-audio" controls preload="none" src="{{ item.enclosure_url | safe_url }}"></audio>
-            {% endif %}
-            <div class="reader-item-actions">
-              {% if item.link | safe_url %}
-              <a class="action-btn action-btn--primary" href="{{ item.link | safe_url }}" target="_blank" rel="noopener">Open original ↗</a>
-              {% endif %}
-              <span class="action-group">
-                <button class="action-btn" type="button" onclick="readerToggleRead({{ item.id }}, this)">{% if item.is_read %}Mark unread{% else %}Mark read{% endif %}</button>
-                <button class="action-btn action-btn--star{% if item.starred %} is-starred{% endif %}" type="button"
-                        onclick="readerToggleStar({{ item.id }}, this)" aria-pressed="{{ 'true' if item.starred else 'false' }}" aria-label="{{ 'Unstar' if item.starred else 'Star' }}">
-                  <span class="action-btn__star" aria-hidden="true">{{ star_icon(item.starred) }}</span>
-                </button>
-              </span>
-              <span class="action-group action-group--echo">
-                <a class="action-btn" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo</a>
-                {% if shout_destinations %}
-                <button class="action-btn reader-shout-open" type="button" onclick="readerOpenShout({{ item.id }})">Shout</button>
-                <dialog class="reader-shout" id="shout-{{ item.id }}" aria-labelledby="shout-title-{{ item.id }}">
-                  <form class="reader-shout-form" onsubmit="readerShout({{ item.id }}, this); return false">
-                    <h3 id="shout-title-{{ item.id }}" class="reader-shout-title">Shout this item</h3>
-                    <p class="reader-shout-subtitle">{{ item.title or '(untitled)' }}</p>
-                    <label for="shout-dest-{{ item.id }}">Destination
-                      <select name="destination" id="shout-dest-{{ item.id }}" required>
-                        {% for d in shout_destinations %}
-                        <option value="{{ d.value }}">{{ d.label }}</option>
-                        {% endfor %}
-                      </select>
-                    </label>
-                    <div class="reader-shout-tpl-head">
-                      <label for="shout-tpl-{{ item.id }}">Template</label>
-                      <button type="button" class="reader-shout-vars" aria-label="Available template variables" aria-describedby="shout-vars-{{ item.id }}" aria-expanded="false" onclick="readerToggleVars(this)">
-                        <span class="reader-shout-vars-trigger" aria-hidden="true">?</span>
-                        <span class="reader-shout-vars-tip" id="shout-vars-{{ item.id }}" role="tooltip">{% for v in template_vars %}<code>{{ v.var }}</code>{% if not loop.last %} {% endif %}{% endfor %}</span>
-                      </button>
-                    </div>
-                    <textarea name="template" id="shout-tpl-{{ item.id }}" rows="3" spellcheck="false">{{ default_template }}</textarea>
-                    <div class="reader-shout-actions">
-                      <button type="button" class="btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
-                      <button type="submit" class="btn-sm reader-shout-submit">Shout</button>
-                    </div>
-                  </form>
-                </dialog>
-                {% endif %}
-              </span>
-            </div>
-          </div>
-        </details>
-      </li>
-      {% endfor %}
+      {% include "reader_items.html" %}
     </ul>
+    {% if next_cursor %}
+    <div class="reader-load-more-wrap">
+      <a class="action-btn reader-load-more" href="/reader?view={{ view }}{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if q %}&q={{ q }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}&after={{ next_cursor }}" onclick="readerLoadMore(this); return false" data-next-cursor="{{ next_cursor }}">Load more</a>
+    </div>
+    {% endif %}
     {% else %}
     <p class="empty-state">
       {% if q %}No results for "{{ q }}".

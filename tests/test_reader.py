@@ -82,6 +82,26 @@ class TestPruneFeedItems:
             ]
         assert ids == ["item-002", "item-003", "item-004"]
 
+    def test_starred_items_exempt_from_prune(self, db_tmp):
+        feed_id = self._seed(5)
+        with get_db() as db:
+            # Star the oldest item (item-000)
+            db.execute(
+                "UPDATE feed_items SET starred = 1 WHERE feed_id = ? AND item_id = ?",
+                (feed_id, "item-000"),
+            )
+            # Prune with limit 2 unstarred
+            prune_feed_items(db, feed_id, limit=2)
+            rows = db.execute(
+                "SELECT item_id, starred FROM feed_items WHERE feed_id = ?"
+                " ORDER BY published_at",
+                (feed_id,),
+            ).fetchall()
+            item_ids = [r["item_id"] for r in rows]
+            # Starred oldest survives, plus exactly 2 newest unstarred survive
+            assert "item-000" in item_ids
+            assert item_ids == ["item-000", "item-003", "item-004"]
+
     def test_prunes_null_published_first(self, db_tmp):
         feed_id = self._seed(2)
         with get_db() as db:

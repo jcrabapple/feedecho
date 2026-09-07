@@ -1603,6 +1603,11 @@ details.account-section > summary:focus-visible {
     background-size: 200% 100%; animation: reader-shimmer 1.2s ease-in-out infinite;
 }
 
+/* Reader load more */
+.reader-load-more-wrap { display: flex; justify-content: center; margin: 1.5rem 0 2rem; }
+.reader-load-more { min-width: 140px; justify-content: center; font-weight: 600; }
+.reader-load-more.is-loading { opacity: 0.6; pointer-events: none; }
+
 /* ── A2: prefers-contrast: more ──────────────────────────────────────────────
    Increases border and text contrast when the user's OS is in high-contrast
    mode. Primarily sharpens the subtle border-on-surface aesthetic and bumps

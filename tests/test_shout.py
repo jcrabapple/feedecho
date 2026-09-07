@@ -91,20 +91,12 @@ class TestShout:
         with TestClient(app) as c:
             resp = c.get("/reader")
         assert resp.status_code == 200
-        assert "Shout" in resp.text
-        assert "readerShout" in resp.text
-        assert "readerOpenShout" in resp.text
+        # Phase 2: unified reader-compose dialog
+        assert "reader-compose" in resp.text
+        assert "readerOpenCompose" in resp.text
         assert "return false" in resp.text
-        assert 'name="destination"' in resp.text
-        # Overlay dialog + variables tooltip, not the old inline <details> form
+        assert 'name="destinations"' in resp.text
         assert '<dialog' in resp.text
-        assert 'class="reader-shout"' in resp.text
-        assert '<details class="reader-shout"' not in resp.text
-        assert 'role="tooltip"' in resp.text
-        assert 'aria-describedby="shout-vars-' in resp.text
-        assert 'readerToggleVars' in resp.text
-        assert 'aria-expanded="false"' in resp.text
-        assert "{{ title }}" in resp.text
 
 
 @pytest.fixture

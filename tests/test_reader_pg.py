@@ -290,3 +290,48 @@ class TestReaderTier2Pg:
         assert '<outline text="PG Folder">' in r_exp.text
         assert 'xmlUrl="https://example.com/pgfeed.xml"' in r_exp.text
 
+    def test_reader_compose_preview_and_post_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+
+        with database.get_db() as db:
+            db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (201, 'c@example.com', '', 'paid')")
+            db.execute("INSERT INTO accounts (id, name, username, instance, access_token, user_id) VALUES (10, 'PG Mastodon', 'pgm', 'https://m.org', 'tok', 201)")
+            db.execute("INSERT INTO feeds (id, name, url, read_enabled, user_id) VALUES (10, 'PG Feed', 'https://f.org', 1, 201)")
+            db.execute("INSERT INTO feed_items (id, feed_id, item_id, title, link, published_at, is_read) VALUES (10, 10, 'pg-item-1', 'Article PG', 'https://f.org/1', '2026-01-01 10:00:00', 0)")
+
+        client = TestClient(app)
+        client.cookies.set("feedecho_session", security.sign_session(201, "c@example.com"))
+
+        # Preview
+        prev = client.get("/api/reader/10/compose")
+        assert prev.status_code == 200
+        assert prev.json()["item"]["title"] == "Article PG"
+        assert len(prev.json()["destinations"]) == 1
+
+        # Post
+        sent = []
+        monkeypatch.setattr(scheduler, "post_status", lambda instance, access_token, content, **kw: sent.append(content) or {"id": "pg-posted-1"})
+
+        post_resp = client.post(
+            "/api/reader/10/compose",
+            data={
+                "destinations": "mastodon:10",
+                "content": "PG Compose Content {{ no_expand }}",
+            },
+        )
+        assert post_resp.status_code == 200
+        data = post_resp.json()
+        assert data["success"] is True
+        assert len(sent) == 1
+        assert sent[0] == "PG Compose Content {{ no_expand }}"
+

@@ -169,6 +169,16 @@ DESTINATION_TABLES_BY_TYPE = {
 }
 DESTINATION_TABLES = tuple(DESTINATION_TABLES_BY_TYPE.values())
 
+DESTINATION_LIMITS = {
+    "mastodon": 500,
+    "bluesky": 300,
+    "discord": 2000,
+    "matrix": None,
+    "email": None,
+    "microblog": None,
+    "webhook": None,
+}
+
 OAUTH_SESSION_COOKIE = "feedecho_oauth_session"
 OAUTH_SESSION_MAX_AGE = 10 * 60
 
@@ -1116,23 +1126,24 @@ def _get_all_accounts(user_id: int = 1):
 
 def _shout_destinations(user_id: int):
     """One option per connected account, encoded ``type:id`` for the reader's
-    Shout picker. Labels carry the type so a flat <select> is unambiguous."""
+    Compose/Shout picker. Labels carry the type so a destination is unambiguous.
+    Includes per-destination character/grapheme limit."""
     (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows) = _get_all_accounts(user_id)
     out = []
     for row in mastodon:
-        out.append({"value": f"mastodon:{row['id']}", "label": f"Mastodon · {row['name']}"})
+        out.append({"value": f"mastodon:{row['id']}", "label": f"Mastodon · {row['name']}", "limit": DESTINATION_LIMITS.get("mastodon")})
     for row in email:
-        out.append({"value": f"email:{row['id']}", "label": f"Email · {row['name']}"})
+        out.append({"value": f"email:{row['id']}", "label": f"Email · {row['name']}", "limit": DESTINATION_LIMITS.get("email")})
     for row in bluesky:
-        out.append({"value": f"bluesky:{row['id']}", "label": f"Bluesky · {row['name']}"})
+        out.append({"value": f"bluesky:{row['id']}", "label": f"Bluesky · {row['name']}", "limit": DESTINATION_LIMITS.get("bluesky")})
     for row in microblog:
-        out.append({"value": f"microblog:{row['id']}", "label": f"Micro.blog · {row['name']}"})
+        out.append({"value": f"microblog:{row['id']}", "label": f"Micro.blog · {row['name']}", "limit": DESTINATION_LIMITS.get("microblog")})
     for row in matrix_rows:
-        out.append({"value": f"matrix:{row['id']}", "label": f"Matrix · {row['name']}"})
+        out.append({"value": f"matrix:{row['id']}", "label": f"Matrix · {row['name']}", "limit": DESTINATION_LIMITS.get("matrix")})
     for row in discord_rows:
-        out.append({"value": f"discord:{row['id']}", "label": f"Discord · {row['name']}"})
+        out.append({"value": f"discord:{row['id']}", "label": f"Discord · {row['name']}", "limit": DESTINATION_LIMITS.get("discord")})
     for row in webhook_rows:
-        out.append({"value": f"webhook:{row['id']}", "label": f"Webhook · {row['name']}"})
+        out.append({"value": f"webhook:{row['id']}", "label": f"Webhook · {row['name']}", "limit": DESTINATION_LIMITS.get("webhook")})
     return out
 
 
@@ -4311,6 +4322,189 @@ def reader_new_count(request: Request, since_id: int = 0):
     return {"count": row["c"]}
 
 
+@app.get("/api/reader/{item_id}/compose")
+def reader_compose_preview(
+    request: Request,
+    item_id: int,
+    template: str = "{{ title }} {{ link }}",
+):
+    """Return JSON preview state for an item in the Compose desk (Phase 2)."""
+    uid = current_user_id(request)
+    _validate_echo_template(template)
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT i.*, f.name AS feed_name FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ? AND f.deleted_at IS NULL",
+            (item_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+    item_dict = {
+        "id": row["item_id"],
+        "title": row["title"] or "",
+        "link": row["link"] or "",
+        "summary": row["summary"] or "",
+        "content": row["content"] or "",
+        "content_text": row["content_text"] or "",
+        "content_link": row["content_link"] or "",
+        "author": row["author"] or "",
+        "date": timestamp_str(row["published_at"]) if row["published_at"] else "",
+        "image_url": row["image_url"] or "",
+        "image_alt": row["image_alt"] or "",
+    }
+
+    try:
+        rendered_text = render_template(template, item_dict, feed_name=row["feed_name"] or "")
+    except Exception as e:
+        rendered_text = ""
+
+    dests = _shout_destinations(uid)
+    rendered_map = {}
+    for d in dests:
+        rendered_map[d["value"]] = rendered_text
+
+    return {
+        "item": {
+            "id": row["id"],
+            "title": row["title"] or "",
+            "link": row["link"] or "",
+            "summary": row["summary"] or "",
+            "image_url": row["image_url"] or "",
+            "image_alt": row["image_alt"] or "",
+        },
+        "destinations": dests,
+        "default_template": "{{ title }} {{ link }}",
+        "rendered": rendered_map,
+    }
+
+
+@app.post("/api/reader/{item_id}/compose")
+def reader_compose(
+    request: Request,
+    item_id: int,
+    destinations: str = Form(...),
+    content: str | None = Form(None),
+    template: str = Form("{{ title }} {{ link }}"),
+    visibility: str = Form("public"),
+    attach_image: str = Form("0"),
+    image_alt: str | None = Form(None),
+):
+    """Post an edited body or template to 1..5 destinations (Phase 2)."""
+    uid = current_user_id(request)
+    dest_keys = [d.strip() for d in destinations.split(",") if d.strip()]
+    if not (1 <= len(dest_keys) <= 5):
+        raise HTTPException(status_code=400, detail="Must select between 1 and 5 destinations")
+    if visibility not in VALID_VISIBILITY:
+        raise HTTPException(status_code=400, detail="Invalid visibility")
+
+    has_content = content is not None and content.strip() != ""
+    if content is not None and not has_content:
+        # User provided an explicitly empty or whitespace-only content body
+        raise HTTPException(status_code=400, detail="Post body cannot be empty")
+    if not has_content:
+        if not template or not template.strip():
+            raise HTTPException(status_code=400, detail="Post body or template cannot be empty")
+        _validate_echo_template(template)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    is_attach_image = 1 if attach_image in ("1", "true", "on") else 0
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT i.*, f.name AS feed_name FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ? AND f.deleted_at IS NULL",
+            (item_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        validated_dests = []
+        for dk in dest_keys:
+            dest_type, sep, raw_id = dk.partition(":")
+            if not sep or dest_type not in VALID_DEST_TYPES:
+                raise HTTPException(status_code=400, detail=f"Invalid destination: {dk}")
+            destination_id = _filter_int(raw_id)
+            if destination_id is None:
+                raise HTTPException(status_code=400, detail=f"Invalid destination: {dk}")
+            dest_table = DESTINATION_TABLES_BY_TYPE[dest_type]
+            dest = db.execute(
+                f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
+                (destination_id, uid),
+            ).fetchone()
+            if not dest:
+                raise HTTPException(status_code=404, detail=f"Destination not found: {dk}")
+            validated_dests.append((dest_type, destination_id, dk))
+
+    # Determine image_alt override: if caller passed image_alt explicitly, use it
+    # (even if empty, to allow clearing feed alt text or letting AI alt text run);
+    # otherwise fall back to row["image_alt"].
+    if image_alt is not None:
+        chosen_alt = image_alt.strip()
+    else:
+        chosen_alt = (row["image_alt"] or "").strip()
+
+    item = {
+        "id": row["item_id"],
+        "title": row["title"] or "",
+        "link": row["link"] or "",
+        "summary": row["summary"] or "",
+        "content": row["content"] or "",
+        "content_text": row["content_text"] or "",
+        "content_link": row["content_link"] or "",
+        "author": row["author"] or "",
+        "date": timestamp_str(row["published_at"]) if row["published_at"] else "",
+        "image_url": row["image_url"] or "",
+        "image_alt": chosen_alt,
+    }
+
+    results = []
+    override_val = content if has_content else None
+
+    for dest_type, destination_id, dk in validated_dests:
+        with get_db() as db:
+            echo_id = db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id""",
+                (row["feed_id"], dest_type, destination_id, template, visibility, is_attach_image, now, uid),
+            ).fetchone()["id"]
+            echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+
+        ok = process_echo(
+            echo,
+            item,
+            feed_name=row["feed_name"] or "",
+            override_content=override_val,
+        )
+
+        with get_db() as db:
+            pi = db.execute(
+                "SELECT status, post_url, error_message FROM posted_items"
+                " WHERE echo_id = ? AND item_id = ?",
+                (echo_id, row["item_id"]),
+            ).fetchone()
+
+        is_success = bool(pi and pi["status"] == "success")
+        results.append({
+            "destination": dk,
+            "success": is_success,
+            "status": pi["status"] if pi else "unknown",
+            "post_url": pi["post_url"] if pi else None,
+            "error_message": pi["error_message"] if pi else None,
+        })
+
+    all_success = all(r["success"] for r in results)
+    return {
+        "success": all_success,
+        "results": results,
+    }
+
+
 @app.post("/api/reader/{item_id}/shout")
 def reader_shout(
     request: Request,
@@ -4319,74 +4513,23 @@ def reader_shout(
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
 ):
-    """Shout: post one stored reader item to one account, once (issue #11).
-
-    Materializes a one-shot echo (enabled=0 + soft-deleted, so neither /echoes
-    nor the scheduler picks it up) and runs it through the normal
-    ``process_echo`` pipeline, so the result lands in /history unchanged.
-    """
-    uid = current_user_id(request)
-    dest_type, sep, raw_id = destination.partition(":")
-    if not sep or dest_type not in VALID_DEST_TYPES:
-        raise HTTPException(status_code=400, detail="Invalid destination")
-    destination_id = _filter_int(raw_id)
-    if destination_id is None:
-        raise HTTPException(status_code=400, detail="Invalid destination")
-    if visibility not in VALID_VISIBILITY:
-        raise HTTPException(status_code=400, detail="Invalid visibility")
-    _validate_echo_template(template)
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    with get_db() as db:
-        _require_reader(db, uid)
-        row = db.execute(
-            "SELECT i.*, f.name AS feed_name FROM feed_items i"
-            " JOIN feeds f ON i.feed_id = f.id"
-            " WHERE i.id = ? AND f.user_id = ?",
-            (item_id, uid),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Item not found")
-
-        dest_table = DESTINATION_TABLES_BY_TYPE[dest_type]
-        dest = db.execute(
-            f"SELECT id FROM {dest_table} WHERE id = ? AND user_id = ?",
-            (destination_id, uid),
-        ).fetchone()
-        if not dest:
-            raise HTTPException(status_code=404, detail="Destination not found")
-
-        echo_id = db.execute(
-            """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
-                                   visibility, enabled, one_shot, deleted_at, user_id)
-               VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id""",
-            (row["feed_id"], dest_type, destination_id, template, visibility, now, uid),
-        ).fetchone()["id"]
-        echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
-
-    item = {
-        "id": row["item_id"],
-        "title": row["title"] or "",
-        "link": row["link"] or "",
-        "summary": row["summary"] or "",
-        "content": row["content"] or "",
-        "content_link": row["content_link"] or "",
-        "author": row["author"] or "",
-        "date": row["published_at"] or "",
-    }
-    ok = process_echo(echo, item, feed_name=row["feed_name"] or "")
-    with get_db() as db:
-        pi = db.execute(
-            "SELECT status, post_url, error_message FROM posted_items"
-            " WHERE echo_id = ? AND item_id = ?",
-            (echo_id, row["item_id"]),
-        ).fetchone()
+    """Shout alias for Compose (Phase 2 backwards compatibility)."""
+    res = reader_compose(
+        request=request,
+        item_id=item_id,
+        destinations=destination,
+        content=None,
+        template=template,
+        visibility=visibility,
+        attach_image="0",
+        image_alt=None,
+    )
+    first_res = res["results"][0] if res.get("results") else None
     return {
-        "success": bool(ok),
-        "status": pi["status"] if pi else "unknown",
-        "post_url": pi["post_url"] if pi else None,
-        "error_message": pi["error_message"] if pi else None,
+        "success": res["success"],
+        "status": first_res["status"] if first_res else "unknown",
+        "post_url": first_res["post_url"] if first_res else None,
+        "error_message": first_res["error_message"] if first_res else None,
     }
 
 

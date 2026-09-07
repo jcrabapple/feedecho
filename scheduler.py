@@ -693,7 +693,12 @@ def _record_filtered(echo_id: int, item: dict) -> None:
         )
 
 
-def process_echo(echo, item: dict, feed_name: str = "") -> bool:
+def process_echo(
+    echo,
+    item: dict,
+    feed_name: str = "",
+    override_content: str | None = None,
+) -> bool:
     """Deliver one item to one echo using an atomic pending-row claim.
 
     Items past a drip rate limit are held in the drip queue (status
@@ -701,6 +706,8 @@ def process_echo(echo, item: dict, feed_name: str = "") -> bool:
     them as the rate window allows.
 
     feed_name is optional context for template rendering ({{ feed_name }}).
+    When override_content is provided, template rendering is skipped and
+    that content is dispatched directly (e.g. from Reader Compose).
     """
     echo_id = echo["id"]
     item_id = item["id"]
@@ -734,9 +741,13 @@ def process_echo(echo, item: dict, feed_name: str = "") -> bool:
         with _drip_lock(echo_id):
             if _drip_rate(echo_id) >= _drip_limit(echo):
                 return _queue_for_drip(echo, item, posted_id, claim_token)
-            return _render_and_dispatch(echo, item, feed_name, posted_id, claim_token)
+            return _render_and_dispatch(
+                echo, item, feed_name, posted_id, claim_token, override_content=override_content
+            )
 
-    return _render_and_dispatch(echo, item, feed_name, posted_id, claim_token)
+    return _render_and_dispatch(
+        echo, item, feed_name, posted_id, claim_token, override_content=override_content
+    )
 
 
 def _drip_limit(echo) -> int:
@@ -886,27 +897,41 @@ def _render_and_dispatch(
     feed_name: str,
     posted_id: int,
     claim_token: str,
+    override_content: str | None = None,
 ) -> bool:
     """Render the echo template and dispatch to the destination sender.
 
     Shared by process_echo (fresh feed items) and flush_drips (released
     queue items) so both paths get identical rendering, failure handling,
-    and image/alt-text/CW behavior.
+    and image/alt-text/CW behavior. When override_content is not None,
+    template rendering is skipped.
     """
     echo_id = echo["id"]
     item_id = item["id"]
 
-    try:
-        content = render_template(echo["template"], item, feed_name=feed_name)
-    except Exception as e:
-        logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
-        gave_up = _fail_post(
-            posted_id,
-            claim_token,
-            echo_id,
-            f"Template rendering failed: {e}",
-        )
-        return gave_up
+    if override_content is not None:
+        content = override_content
+        from template_engine import _MAX_OUTPUT
+        if len(content) > _MAX_OUTPUT:
+            gave_up = _fail_post(
+                posted_id,
+                claim_token,
+                echo_id,
+                f"Content exceeds {_MAX_OUTPUT}-char cap",
+            )
+            return gave_up
+    else:
+        try:
+            content = render_template(echo["template"], item, feed_name=feed_name)
+        except Exception as e:
+            logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
+            gave_up = _fail_post(
+                posted_id,
+                claim_token,
+                echo_id,
+                f"Template rendering failed: {e}",
+            )
+            return gave_up
 
     if not content.strip():
         gave_up = _fail_post(posted_id, claim_token, echo_id, "Rendered content was empty")

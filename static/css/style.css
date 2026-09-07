@@ -1620,6 +1620,36 @@ details.account-section > summary:focus-visible {
 .reader-folder-group.is-collapsed .reader-feed-list { display: none; }
 .reader-folder-group.is-collapsed .reader-folder-arrow { transform: rotate(-90deg); }
 
+/* Reader Compose Desk */
+.reader-compose { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); padding: 1.25rem 1.5rem; max-width: 580px; width: 92%; box-sizing: border-box; }
+.reader-compose::backdrop { background: rgba(0, 0, 0, 0.45); }
+.compose-header { margin-bottom: 1rem; }
+.compose-title { margin: 0 0 0.25rem; font-size: 1.15rem; font-weight: 700; }
+.compose-subtitle { margin: 0; color: var(--text-muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.compose-section { margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.compose-label { font-size: 0.85rem; font-weight: 600; color: var(--text); text-transform: uppercase; letter-spacing: 0.04em; }
+.compose-dest-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.compose-dest-label { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-light); font-size: 0.85rem; cursor: pointer; user-select: none; }
+.compose-dest-label:hover { border-color: var(--primary); }
+.compose-dest-label:has(input:checked) { border-color: var(--primary); background: var(--primary-wash); color: var(--primary); font-weight: 600; }
+.compose-dest-counter { font-size: 0.78rem; color: var(--text-muted); margin-left: 0.2rem; }
+.compose-dest-counter.is-over { color: #dc2626; font-weight: 700; }
+.compose-body-head { display: flex; align-items: center; justify-content: space-between; }
+.compose-comment-input { flex: 1; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 0.85rem; margin-right: 0.4rem; }
+.reader-compose textarea { width: 100%; box-sizing: border-box; padding: 0.6rem 0.8rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-family: inherit; font-size: 0.95rem; resize: vertical; min-height: 90px; }
+.reader-compose textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
+.compose-media-row { display: flex; gap: 1rem; align-items: flex-start; padding: 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-light); }
+.compose-image-thumb { width: 80px; height: 80px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0; }
+.compose-media-controls { flex: 1; display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.compose-checkbox-inline { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+.compose-alt-label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+.compose-alt-label input { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 0.85rem; width: 100%; box-sizing: border-box; }
+.compose-actions { display: flex; justify-content: flex-end; align-items: center; gap: 0.5rem; margin-top: 1.25rem; }
+.compose-results { margin-top: 1rem; padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.compose-res-item { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.compose-res-item.is-success { color: #16a34a; }
+.compose-res-item.is-error { color: #dc2626; }
+
 /* ── A2: prefers-contrast: more ──────────────────────────────────────────────
    Increases border and text contrast when the user's OS is in high-contrast
    mode. Primarily sharpens the subtle border-on-surface aesthetic and bumps

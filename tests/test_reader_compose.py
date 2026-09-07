@@ -159,6 +159,30 @@ def test_compose_destination_ownership_isolation(compose_env):
     assert "not found" in resp.text.lower()
 
 
+def test_compose_destination_permanent_failure_reports_failed(compose_env, monkeypatch):
+    """Permanent delivery failure (gave_up) reports success=False in compose results."""
+    def fake_discord_send(*args, **kwargs):
+        raise scheduler.DiscordAuthError("Invalid Webhook Token")
+
+    monkeypatch.setattr(scheduler, "discord_send_webhook", fake_discord_send)
+
+    client = TestClient(app)
+    _as_u1(client)
+
+    resp = client.post(
+        "/api/reader/1/compose",
+        data={
+            "destinations": "discord:1",
+            "content": "Testing failure report",
+        },
+    )
+    assert resp.status_code == 200
+    res = resp.json()
+    assert res["success"] is False
+    assert res["results"][0]["success"] is False
+    assert res["results"][0]["status"] in ("failed", "gave_up")
+
+
 def test_compose_empty_body_rejected(compose_env):
     client = TestClient(app)
     _as_u1(client)

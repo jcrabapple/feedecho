@@ -4440,9 +4440,12 @@ def reader_compose(
                 raise HTTPException(status_code=404, detail=f"Destination not found: {dk}")
             validated_dests.append((dest_type, destination_id, dk))
 
-    # Determine image_alt override
-    chosen_alt = (image_alt or "").strip()
-    if not chosen_alt:
+    # Determine image_alt override: if caller passed image_alt explicitly, use it
+    # (even if empty, to allow clearing feed alt text or letting AI alt text run);
+    # otherwise fall back to row["image_alt"].
+    if image_alt is not None:
+        chosen_alt = image_alt.strip()
+    else:
         chosen_alt = (row["image_alt"] or "").strip()
 
     item = {
@@ -4454,7 +4457,7 @@ def reader_compose(
         "content_text": row["content_text"] or "",
         "content_link": row["content_link"] or "",
         "author": row["author"] or "",
-        "date": row["published_at"] or "",
+        "date": timestamp_str(row["published_at"]) if row["published_at"] else "",
         "image_url": row["image_url"] or "",
         "image_alt": chosen_alt,
     }
@@ -4486,9 +4489,10 @@ def reader_compose(
                 (echo_id, row["item_id"]),
             ).fetchone()
 
+        is_success = bool(pi and pi["status"] == "success")
         results.append({
             "destination": dk,
-            "success": bool(ok),
+            "success": is_success,
             "status": pi["status"] if pi else "unknown",
             "post_url": pi["post_url"] if pi else None,
             "error_message": pi["error_message"] if pi else None,

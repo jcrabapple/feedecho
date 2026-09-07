@@ -439,3 +439,39 @@ class TestReaderTier2Pg:
         r_restored = client.get("/reader")
         assert "PG Badge Article" in r_restored.text
 
+    def test_saved_searches_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+
+        with database.get_db() as db:
+            db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (501, 'ss_pg@example.com', '', 'paid')")
+            db.execute("INSERT INTO feeds (id, name, url, read_enabled, user_id) VALUES (50, 'PG SS Feed', 'https://f.org/ss', 1, 501)")
+            db.execute("INSERT INTO feed_items (id, feed_id, item_id, title, content, summary, published_at, is_read) VALUES (50, 50, 'ss-item-1', 'PG Search Term Article', 'Full content', '', '2026-01-01 10:00:00', 0)")
+
+        client = TestClient(app)
+        client.cookies.set("feedecho_session", security.sign_session(501, "ss_pg@example.com"))
+
+        # Create saved search
+        r_create = client.post(
+            "/api/saved-searches",
+            data={"name": "PG Search", "query": "Search Term"},
+            headers={"Accept": "application/json"},
+        )
+        assert r_create.status_code == 200
+        s_id = r_create.json()["id"]
+
+        # View reader with saved search
+        r_page = client.get(f"/reader?saved={s_id}")
+        assert r_page.status_code == 200
+        assert "PG Search" in r_page.text
+        assert "PG Search Term Article" in r_page.text
+

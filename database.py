@@ -326,6 +326,21 @@ def init_db_sqlite() -> None:
                 )
 
         db.execute("""
+            CREATE TABLE IF NOT EXISTS saved_searches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                query TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_searches_user_name
+            ON saved_searches(user_id, LOWER(name))
+        """)
+
+        db.execute("""
             CREATE TABLE IF NOT EXISTS folders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL DEFAULT 1,
@@ -994,6 +1009,21 @@ def init_db_postgres() -> None:
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS saved_searches (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                query TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_searches_user_name
+            ON saved_searches(user_id, LOWER(name))
         """)
 
         db.execute("""

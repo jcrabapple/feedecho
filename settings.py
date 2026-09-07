@@ -162,6 +162,7 @@ DEFAULT_PLAN_LIMITS = {
         "max_posts_per_hour": 60,
         "reader": 1,
         "queue_depth": 10,
+        "saved_searches": 3,
     },
     "beta": {
         "max_feeds": 25,
@@ -170,6 +171,7 @@ DEFAULT_PLAN_LIMITS = {
         "max_posts_per_hour": 240,
         "reader": 1,
         "queue_depth": 100,
+        "saved_searches": 20,
     },
     "paid": {
         "max_feeds": 50,
@@ -178,6 +180,7 @@ DEFAULT_PLAN_LIMITS = {
         "max_posts_per_hour": 500,
         "reader": 1,
         "queue_depth": 500,
+        "saved_searches": 20,
     },
 }
 

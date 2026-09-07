@@ -370,4 +370,4 @@ class TestAppJsP2:
 
     def test_asset_versions_bumped(self):
         base = _tpl("base.html")
-        assert 'style.css?v=54' in base and 'app.js?v=48' in base
+        assert 'style.css?v=55' in base and 'app.js?v=49' in base

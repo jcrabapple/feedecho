@@ -945,6 +945,63 @@ function readerUpdateComposeCounters() {
     });
 }
 
+// ── Saved Searches (Phase 5) ──────────────────────────────────────────────
+
+function readerOpenSaveSearch(query) {
+    const dlg = document.getElementById('reader-save-search-dialog');
+    if (!dlg) return;
+    const form = document.getElementById('reader-save-search-form');
+    if (form) form.reset();
+
+    const queryInput = document.getElementById('save-search-query-input');
+    if (queryInput) queryInput.value = query || '';
+    const nameInput = document.getElementById('save-search-name-input');
+
+    // Pre-fill name based on clean query terms if possible
+    if (nameInput) {
+        let suggested = (query || '').replace(/is:\w+|feed:\w+|folder:\w+|in:\w+/gi, '').trim();
+        nameInput.value = suggested.slice(0, 60) || 'My Search';
+    }
+
+    dlg.showModal();
+    nameInput?.focus();
+}
+
+async function readerSubmitSaveSearch(form) {
+    const btn = document.getElementById('save-search-submit-btn');
+    if (!btn || btn.disabled) return false;
+    const name = document.getElementById('save-search-name-input').value.trim();
+    const query = document.getElementById('save-search-query-input').value.trim();
+
+    if (!name || !query) return false;
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Saving...';
+
+    try {
+        const resp = await fetch('/api/saved-searches', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+            body: new URLSearchParams({ name, query }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showStatus(btn, data.detail || 'Failed to save search', 'error');
+            return false;
+        }
+
+        document.getElementById('reader-save-search-dialog')?.close();
+        location.href = `/reader?saved=${data.id}`;
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
+    return false;
+}
+
 // ── Reader Mute Training (Phase 4) ──────────────────────────────────────────
 
 function readerOpenMute(itemId, defaultTitle = '') {

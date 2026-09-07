@@ -132,6 +132,16 @@ def check_queue_allowance(current_count: int, plan: str) -> None:
         )
 
 
+def check_saved_search_allowance(current_count: int, plan: str) -> None:
+    """Raise PlanError when creating one more saved search would exceed the plan."""
+    cap = limit_for(plan, "saved_searches")
+    if cap and current_count >= cap:
+        raise PlanError(
+            f"Your plan allows {cap} saved search{'es' if cap != 1 else ''}. "
+            "Delete an existing saved search or upgrade your plan."
+        )
+
+
 def clamp_poll_interval(minutes: int, plan: str) -> int:
     """Clamp a requested poll interval down to the plan's floor.
 

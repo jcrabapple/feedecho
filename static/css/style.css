@@ -1574,6 +1574,7 @@ details.account-section > summary:focus-visible {
 .reader-item-shouted { color: var(--primary); font-weight: 600; }
 .reader-badge-delivery { text-decoration: none; font-size: 0.72rem; padding: 0.15rem 0.4rem; vertical-align: middle; }
 .reader-badge-delivery:hover { opacity: 0.85; text-decoration: underline; }
+.reader-save-search-btn { font-size: 0.85rem; padding: 0.4rem 0.75rem; white-space: nowrap; }
 .reader-new-pill { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 110; background: var(--primary-wash); color: var(--primary); border: 1px solid var(--primary); border-radius: 999px; padding: 0.4rem 0.9rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
 @media (max-width: 720px) {
     .reader-new-pill { top: 116px; }

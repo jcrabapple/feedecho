@@ -9,6 +9,26 @@
 <div class="reader" data-max-item-id="{{ max_item_id }}">
   <aside class="reader-feeds" aria-label="Feeds">
     <button class="reader-feeds-close" type="button" onclick="readerToggleFeeds()" aria-label="Close feeds">×</button>
+    {% if saved_searches %}
+    <div class="reader-saved-searches" style="margin-bottom: 1.25rem;">
+      <h2 style="font-size: 0.95rem; margin-bottom: 0.4rem;">Saved Searches</h2>
+      <ul class="reader-feed-list">
+        {% for s in saved_searches %}
+        <li class="reader-feed {% if current_saved_search == s.id | string %}active{% endif %}">
+          <a class="reader-feed-link" href="/reader?saved={{ s.id }}{% if fulltext %}&fulltext=1{% endif %}">
+            <span class="reader-feed-avatar" aria-hidden="true" style="background:var(--primary-wash); color:var(--primary);">🔍</span>
+            <span class="reader-feed-name" title="{{ s.query }}">{{ s.name }}</span>
+            <span class="reader-feed-meta">
+              {% if saved_search_counts and saved_search_counts[s.id] %}
+              <span class="reader-feed-unread">{{ saved_search_counts[s.id] }}</span>
+              {% endif %}
+            </span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
     <h2>Feeds</h2>
     <p class="reader-feeds-hint">Only feeds with reading enabled appear here. <a href="/feeds">Enable reading</a> on the Feeds page.</p>
     {% if feeds %}
@@ -94,7 +114,10 @@
         {% if current_feed %}<input type="hidden" name="feed" value="{{ current_feed }}">{% endif %}
         {% if fulltext %}<input type="hidden" name="fulltext" value="1">{% endif %}
         <button type="submit" class="btn-sm">Search</button>
-        {% if q %}<a class="reader-search-clear" href="/reader{% if current_feed or fulltext %}?{% endif %}{% if current_feed %}feed={{ current_feed }}{% endif %}{% if current_feed and fulltext %}&{% endif %}{% if fulltext %}fulltext=1{% endif %}">Clear</a>{% endif %}
+        {% if q %}
+        <button type="button" class="btn-sm reader-save-search-btn" onclick="readerOpenSaveSearch('{{ q | e }}')">Save</button>
+        <a class="reader-search-clear" href="/reader{% if current_feed or fulltext %}?{% endif %}{% if current_feed %}feed={{ current_feed }}{% endif %}{% if current_feed and fulltext %}&{% endif %}{% if fulltext %}fulltext=1{% endif %}">Clear</a>
+        {% endif %}
       </form>
       <div class="reader-toolbar-right">
         {% if items and not q %}
@@ -228,6 +251,25 @@
     <div class="compose-actions" style="margin-top: 1rem;">
       <button type="button" class="btn-sm" onclick="document.getElementById('reader-mute-dialog').close()">Cancel</button>
       <button type="submit" class="btn-sm btn-primary" id="mute-submit-btn">Mute</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="reader-save-search-dialog" class="reader-compose" aria-labelledby="save-search-dialog-title">
+  <form id="reader-save-search-form" onsubmit="readerSubmitSaveSearch(this); return false;">
+    <h3 id="save-search-dialog-title" style="margin-top:0;">Save Search</h3>
+    <p class="hint">Save this search query to your sidebar as a smart feed with unread counts.</p>
+    <div class="form-row">
+      <label>Name
+        <input type="text" name="name" id="save-search-name-input" maxlength="60" required placeholder="e.g. AI News">
+      </label>
+      <label>Query
+        <input type="text" name="query" id="save-search-query-input" required readonly style="background:var(--bg-card); opacity:0.85;">
+      </label>
+    </div>
+    <div class="compose-actions" style="margin-top: 1rem;">
+      <button type="button" class="btn-sm" onclick="document.getElementById('reader-save-search-dialog').close()">Cancel</button>
+      <button type="submit" class="btn-sm btn-primary" id="save-search-submit-btn">Save search</button>
     </div>
   </form>
 </dialog>

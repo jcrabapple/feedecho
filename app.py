@@ -2350,6 +2350,7 @@ async def history_page(request: Request, feed: str = "", account: str = "", item
 # ── Reader keyset pagination & search helpers ──────────────────────────────
 READER_PAGE_SIZE = 50
 _CURSOR_RE = re.compile(r"^[0-9 :.\-]*\|\d+$")
+_saved_search_counts_cache: dict[int, tuple[int, float, dict[int, int]]] = {}
 
 
 def _reader_keyset(cursor: str | None) -> tuple[str, list]:
@@ -2430,12 +2431,14 @@ async def reader_page(
     q: str = "",
     fulltext: str = "",
     after: str = "",
+    saved: str = "",
 ):
     """Consolidated RSS reading surface (issue #11).
 
     Server-rendered list of stored feed items, newest first, scoped to the
     viewer's feeds. ``view`` is one of all|unread|starred|today; ``feed``
     narrows to a single feed; ``folder`` narrows to feeds in a folder;
+    ``saved`` loads a saved search query;
     ``fulltext`` renders the full article body inline instead of the summary
     teaser; ``after`` is a keyset cursor ("<published_at>|<id>") for
     pagination. Read/star toggles and the per-feed reading switch live in the
@@ -2444,11 +2447,27 @@ async def reader_page(
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
     folder_id = _filter_int(folder)
+    saved_id = _filter_int(saved)
     view = view if view in ("all", "unread", "starred", "today") else "unread"
     q = (q or "").strip()
     after = (after or "").strip()
     with get_db() as db:
         _require_reader(db, uid)
+        saved_searches = db.execute(
+            "SELECT * FROM saved_searches WHERE user_id = ? ORDER BY position, name",
+            (uid,),
+        ).fetchall()
+
+        # If saved search ID provided and no query override, load query from stored search
+        active_saved_search = None
+        if saved_id is not None:
+            for s in saved_searches:
+                if s["id"] == saved_id:
+                    active_saved_search = s
+                    if not q:
+                        q = s["query"]
+                    break
+
         folders = db.execute(
             "SELECT * FROM folders WHERE user_id = ? ORDER BY position, name",
             (uid,),
@@ -2632,6 +2651,65 @@ async def reader_page(
             " WHERE f.user_id = ? AND f.read_enabled = 1 AND f.deleted_at IS NULL",
             (uid,),
         ).fetchone()
+        max_item_id = max_row["m"] if max_row else 0
+
+        # Compute unread counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
+        saved_search_counts: dict[int, int] = {}
+        if saved_searches:
+            now_time = time.time()
+            cached = _saved_search_counts_cache.get(uid)
+            if cached and cached[0] == max_item_id and (now_time - cached[1]) < 60:
+                saved_search_counts = cached[2]
+            else:
+                for s in saved_searches:
+                    s_filters, s_terms = _parse_reader_query(s["query"])
+                    s_where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL", "i.is_read = 0"]
+                    s_params: list = [uid]
+                    s_text_scope = None
+                    for op, val in s_filters:
+                        if op == "is":
+                            if val == "starred":
+                                s_where.append("i.starred = 1")
+                            elif val == "unread":
+                                pass
+                            elif val == "read":
+                                s_where.append("i.is_read = 1")
+                        elif op == "feed":
+                            s_where.append("LOWER(f.name) LIKE ? ESCAPE '!'")
+                            s_params.append(f"%{_escape_like(val)}%")
+                        elif op == "folder":
+                            s_where.append("LOWER(fo.name) LIKE ? ESCAPE '!'")
+                            s_params.append(f"%{_escape_like(val)}%")
+                        elif op == "in":
+                            if val in ("title", "body"):
+                                s_text_scope = val
+                    if s_terms:
+                        s_like = f"%{_escape_like(' '.join(s_terms))}%"
+                        if s_text_scope == "title":
+                            s_where.append("LOWER(i.title) LIKE ? ESCAPE '!'")
+                            s_params.append(s_like)
+                        elif s_text_scope == "body":
+                            s_where.append("(LOWER(i.content) LIKE ? ESCAPE '!' OR LOWER(i.summary) LIKE ? ESCAPE '!')")
+                            s_params.extend([s_like, s_like])
+                        else:
+                            s_where.append(
+                                "(LOWER(i.title) LIKE ? ESCAPE '!' OR LOWER(i.content) LIKE ? ESCAPE '!'"
+                                " OR LOWER(i.summary) LIKE ? ESCAPE '!')"
+                            )
+                            s_params.extend([s_like, s_like, s_like])
+
+                    cnt_row = db.execute(
+                        f"""
+                        SELECT COUNT(*) AS c
+                          FROM feed_items i
+                          JOIN feeds f ON i.feed_id = f.id
+                          LEFT JOIN folders fo ON fo.id = f.folder_id
+                         WHERE {" AND ".join(s_where)}
+                        """,
+                        tuple(s_params),
+                    ).fetchone()
+                    saved_search_counts[s["id"]] = cnt_row["c"] if cnt_row else 0
+                _saved_search_counts_cache[uid] = (max_item_id, now_time, saved_search_counts)
 
     # Progressive enhancement: fetch request with X-Requested-With returns the
     # items fragment alone (for infinite scroll / load more).
@@ -2661,6 +2739,10 @@ async def reader_page(
         max_item_id=max_row["m"] if max_row else 0,
         current_feed=str(feed_id) if feed_id is not None else "",
         current_folder=str(folder_id) if folder_id is not None else "",
+        saved_searches=saved_searches,
+        saved_search_counts=saved_search_counts,
+        current_saved_search=str(saved_id) if saved_id is not None else "",
+        active_saved_search=active_saved_search,
         view=view,
         q=q,
         fulltext=bool(fulltext),
@@ -2895,6 +2977,7 @@ def _hard_delete_user(db, uid: int) -> None:
         "echoes",
         "feeds",
         "folders",
+        "saved_searches",
         "queued_posts",
         "queue_settings",
         "accounts",
@@ -3865,6 +3948,119 @@ def test_alt_text(request: Request):
         return {"success": True, "message": "API reachable (empty response to test image)"}
     except Exception as e:
         return {"success": False, "message": f"API test failed: {e}"}
+
+
+# ── Saved Searches API (Phase 5) ──────────────────────────────────────────
+
+@app.post("/api/saved-searches")
+def create_saved_search(
+    request: Request,
+    name: str = Form(...),
+    query: str = Form(...),
+):
+    uid = current_user_id(request)
+    name = " ".join(name.strip().split())
+    query = query.strip()
+    if not (1 <= len(name) <= 60):
+        raise HTTPException(status_code=400, detail="Name must be between 1 and 60 characters")
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        if settings.MULTI:
+            plan = _user_plan(db, uid)
+            current_count = db.execute(
+                "SELECT COUNT(*) AS c FROM saved_searches WHERE user_id = ?",
+                (uid,),
+            ).fetchone()["c"]
+            try:
+                plans.check_saved_search_allowance(current_count, plan)
+            except PlanError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
+        existing = db.execute(
+            "SELECT id FROM saved_searches WHERE user_id = ? AND LOWER(name) = ?",
+            (uid, name.lower()),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Saved search already exists")
+
+        max_pos = db.execute(
+            "SELECT COALESCE(MAX(position), 0) AS m FROM saved_searches WHERE user_id = ?",
+            (uid,),
+        ).fetchone()["m"]
+        row = db.execute(
+            """
+            INSERT INTO saved_searches (user_id, name, query, position)
+            VALUES (?, ?, ?, ?) RETURNING id
+            """,
+            (uid, name, query, max_pos + 1),
+        ).fetchone()
+
+    # Invalidate count cache for this user
+    _saved_search_counts_cache.pop(uid, None)
+
+    if request.headers.get("accept", "").startswith("application/json"):
+        return {"success": True, "id": row["id"], "name": name, "query": query}
+    return RedirectResponse(url=f"/reader?saved={row['id']}", status_code=303)
+
+
+@app.post("/api/saved-searches/{search_id}/rename")
+def rename_saved_search(request: Request, search_id: int, name: str = Form(...)):
+    uid = current_user_id(request)
+    name = " ".join(name.strip().split())
+    if not (1 <= len(name) <= 60):
+        raise HTTPException(status_code=400, detail="Name must be between 1 and 60 characters")
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT id FROM saved_searches WHERE id = ? AND user_id = ?",
+            (search_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Saved search not found")
+
+        dup = db.execute(
+            "SELECT id FROM saved_searches WHERE user_id = ? AND LOWER(name) = ? AND id != ?",
+            (uid, name.lower(), search_id),
+        ).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail="Saved search with this name already exists")
+
+        db.execute(
+            "UPDATE saved_searches SET name = ? WHERE id = ? AND user_id = ?",
+            (name, search_id, uid),
+        )
+
+    _saved_search_counts_cache.pop(uid, None)
+    if request.headers.get("accept", "").startswith("application/json"):
+        return {"success": True, "name": name}
+    return RedirectResponse(url=f"/reader?saved={search_id}", status_code=303)
+
+
+@app.post("/api/saved-searches/{search_id}/delete")
+def delete_saved_search(request: Request, search_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT id FROM saved_searches WHERE id = ? AND user_id = ?",
+            (search_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Saved search not found")
+
+        db.execute(
+            "DELETE FROM saved_searches WHERE id = ? AND user_id = ?",
+            (search_id, uid),
+        )
+
+    _saved_search_counts_cache.pop(uid, None)
+    if request.headers.get("accept", "").startswith("application/json"):
+        return {"success": True}
+    return RedirectResponse(url="/reader", status_code=303)
 
 
 # ── Folders API ─────────────────────────────────────────────────────────────

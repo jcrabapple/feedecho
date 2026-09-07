@@ -193,7 +193,7 @@ _instance_id = secrets.token_urlsafe(16)
 # released in a finally block. The TTL is the crash-safety net.
 FLUSH_DIGEST_LEASE_SECONDS = 15 * 60
 FLUSH_DRIP_LEASE_SECONDS = 5 * 60
-FLUSH_QUEUE_LEASE_SECONDS = 5 * 60
+FLUSH_QUEUE_LEASE_SECONDS = 10 * 60
 
 
 def _acquire_job_lease(job_name: str, ttl_seconds: int) -> bool:
@@ -2263,6 +2263,7 @@ def _flush_queue() -> None:
             SELECT id FROM queued_posts
              WHERE status = 'queued' AND scheduled_at <= ?
              ORDER BY scheduled_at ASC
+             LIMIT 50
             """,
             (now_ts,),
         ).fetchall()
@@ -2346,32 +2347,45 @@ def _flush_queue() -> None:
                         "image_url": fi["image_url"] or "",
                     })
 
-        ok = process_echo(
-            echo,
-            item,
-            feed_name=row["feed_name"] or "",
-            override_content=row["content"],
-        )
-
-        with get_db() as db:
-            pi = db.execute(
-                "SELECT id, status, post_url, error_message FROM posted_items"
-                " WHERE echo_id = ? AND item_id = ?",
-                (echo_id, row["item_id"]),
-            ).fetchone()
-
-            final_status = "sent" if (pi and pi["status"] == "success") else "failed"
-            err_msg = pi["error_message"] if pi else "Unknown dispatch error"
-            pi_id = pi["id"] if pi else None
-            db.execute(
-                """
-                UPDATE queued_posts
-                   SET status = ?, posted_item_id = ?, error_message = ?,
-                       attempt_count = attempt_count + 1
-                 WHERE id = ? AND claim_token = ?
-                """,
-                (final_status, pi_id, err_msg if final_status == "failed" else None, qp_id, claim_token),
+        try:
+            ok = process_echo(
+                echo,
+                item,
+                feed_name=row["feed_name"] or "",
+                override_content=row["content"],
             )
+
+            with get_db() as db:
+                pi = db.execute(
+                    "SELECT id, status, post_url, error_message FROM posted_items"
+                    " WHERE echo_id = ? AND item_id = ?",
+                    (echo_id, row["item_id"]),
+                ).fetchone()
+
+                final_status = "sent" if (pi and pi["status"] == "success") else "failed"
+                err_msg = pi["error_message"] if pi else "Unknown dispatch error"
+                pi_id = pi["id"] if pi else None
+                db.execute(
+                    """
+                    UPDATE queued_posts
+                       SET status = ?, posted_item_id = ?, error_message = ?,
+                           attempt_count = attempt_count + 1
+                     WHERE id = ? AND claim_token = ?
+                    """,
+                    (final_status, pi_id, err_msg if final_status == "failed" else None, qp_id, claim_token),
+                )
+        except Exception as exc:
+            logger.exception("Queue flush: error processing queued post %s", qp_id)
+            with get_db() as db:
+                db.execute(
+                    """
+                    UPDATE queued_posts
+                       SET status = 'failed', error_message = ?,
+                           attempt_count = attempt_count + 1
+                     WHERE id = ? AND claim_token = ?
+                    """,
+                    (f"Dispatch exception: {exc}", qp_id, claim_token),
+                )
 
 
 def flush_drips() -> None:

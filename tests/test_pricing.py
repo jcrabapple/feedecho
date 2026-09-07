@@ -69,7 +69,9 @@ class TestPricingPage:
         assert trial["max_destinations"] == 5
         assert trial["min_poll_interval"] == 15
         assert trial["max_posts_per_hour"] == 60
+        assert trial["queue_depth"] == 10
         assert paid["max_feeds"] == 50
         assert paid["max_destinations"] == 50
         assert paid["min_poll_interval"] == 5
         assert paid["max_posts_per_hour"] == 500
+        assert paid["queue_depth"] == 500

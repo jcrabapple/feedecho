@@ -17,6 +17,7 @@ import logging
 import threading
 import time
 import uuid
+import secrets
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -1890,8 +1891,21 @@ async def queue_page(request: Request):
 def queue_post_now(request: Request, post_id: int):
     uid = current_user_id(request)
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    claim_token = secrets.token_urlsafe(16)
     with get_db() as db:
         _require_reader(db, uid)
+        # Atomically transition from queued to sending to prevent races with flush_queue
+        claimed = db.execute(
+            """
+            UPDATE queued_posts
+               SET status = 'sending', claim_token = ?, claimed_at = ?
+             WHERE id = ? AND user_id = ? AND status = 'queued'
+            """,
+            (claim_token, now_utc, post_id, uid),
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Post is already sending or has been processed")
+
         row = db.execute(
             """
             SELECT q.*, f.name AS feed_name
@@ -1901,8 +1915,6 @@ def queue_post_now(request: Request, post_id: int):
             """,
             (post_id, uid),
         ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Queued post not found")
 
         # Materialize one-shot echo
         echo_id = db.execute(
@@ -1948,12 +1960,24 @@ def queue_post_now(request: Request, post_id: int):
                     "image_url": fi["image_url"] or "",
                 })
 
-    ok = process_echo(
-        echo,
-        item,
-        feed_name=row["feed_name"] or "",
-        override_content=row["content"],
-    )
+    try:
+        ok = process_echo(
+            echo,
+            item,
+            feed_name=row["feed_name"] or "",
+            override_content=row["content"],
+        )
+    except Exception as exc:
+        with get_db() as db:
+            db.execute(
+                """
+                UPDATE queued_posts
+                   SET status = 'failed', error_message = ?, attempt_count = attempt_count + 1
+                 WHERE id = ? AND claim_token = ?
+                """,
+                (f"Dispatch exception: {exc}", post_id, claim_token),
+            )
+        return {"success": False, "status": "failed", "error": str(exc)}
 
     with get_db() as db:
         pi = db.execute(
@@ -1968,12 +1992,13 @@ def queue_post_now(request: Request, post_id: int):
             UPDATE queued_posts
                SET status = ?, posted_item_id = ?, error_message = ?,
                    attempt_count = attempt_count + 1
-             WHERE id = ? AND user_id = ?
+             WHERE id = ? AND claim_token = ?
             """,
-            (final_status, pi_id, err_msg if final_status == "failed" else None, post_id, uid),
+            (final_status, pi_id, err_msg if final_status == "failed" else None, post_id, claim_token),
         )
 
-    return {"success": bool(ok), "status": final_status, "post_url": pi["post_url"] if pi else None}
+    is_success = (final_status == "sent")
+    return {"success": is_success, "status": final_status, "post_url": pi["post_url"] if pi else None}
 
 
 @app.post("/api/queue/{post_id}/cancel")
@@ -1982,13 +2007,15 @@ def queue_cancel(request: Request, post_id: int):
     with get_db() as db:
         _require_reader(db, uid)
         row = db.execute(
-            "SELECT id FROM queued_posts WHERE id = ? AND user_id = ?",
+            "SELECT id, status FROM queued_posts WHERE id = ? AND user_id = ?",
             (post_id, uid),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
+        if row["status"] != "queued":
+            raise HTTPException(status_code=400, detail="Cannot cancel post that is already sending or completed")
         db.execute(
-            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ?",
+            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'queued'",
             (post_id, uid),
         )
     return RedirectResponse(url="/queue", status_code=303)
@@ -2006,17 +2033,24 @@ def queue_edit(
     if not content:
         raise HTTPException(status_code=400, detail="Content cannot be empty")
     scheduled_at = scheduled_at.strip()
+    norm_dt = as_utc_naive(scheduled_at)
+    if not norm_dt:
+        raise HTTPException(status_code=400, detail="Invalid scheduled_at datetime")
+    normalized_scheduled_at = norm_dt.strftime("%Y-%m-%d %H:%M:%S")
+
     with get_db() as db:
         _require_reader(db, uid)
         row = db.execute(
-            "SELECT id FROM queued_posts WHERE id = ? AND user_id = ?",
+            "SELECT id, status FROM queued_posts WHERE id = ? AND user_id = ?",
             (post_id, uid),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
+        if row["status"] != "queued":
+            raise HTTPException(status_code=400, detail="Cannot edit post that is already sending or completed")
         db.execute(
-            "UPDATE queued_posts SET content = ?, scheduled_at = ? WHERE id = ? AND user_id = ?",
-            (content, scheduled_at, post_id, uid),
+            "UPDATE queued_posts SET content = ?, scheduled_at = ? WHERE id = ? AND user_id = ? AND status = 'queued'",
+            (content, normalized_scheduled_at, post_id, uid),
         )
     return RedirectResponse(url="/queue", status_code=303)
 
@@ -3929,7 +3963,7 @@ def _next_free_slot(db, uid: int, dest_type: str, dest_id: int) -> str:
         (uid, dest_type, dest_id),
     ).fetchone()
 
-    now_dt = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
     if last_row and last_row["scheduled_at"]:
         last_dt = as_utc_naive(last_row["scheduled_at"])
         base_dt = max(now_dt, last_dt) if last_dt else now_dt
@@ -4728,8 +4762,9 @@ def reader_compose(
                 "SELECT COUNT(*) AS c FROM queued_posts WHERE user_id = ? AND status IN ('queued', 'sending')",
                 (uid,),
             ).fetchone()["c"]
+            needed = current_q_count + len(validated_dests) - 1
             try:
-                plans.check_queue_allowance(current_q_count, plan)
+                plans.check_queue_allowance(needed, plan)
             except PlanError as e:
                 raise HTTPException(status_code=402, detail=str(e))
 

@@ -84,6 +84,18 @@ def test_enqueue_post_from_compose(queue_env):
     assert row["status"] == "queued"
     assert row["user_id"] == 101
 
+    # Second enqueue for same destination exercises _next_free_slot with existing row
+    resp2 = client.post(
+        "/api/reader/1/compose",
+        data={
+            "destinations": "mastodon:1",
+            "content": "Second post",
+            "enqueue": "1",
+        },
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["success"] is True
+
 
 def test_flush_queue_dispatches_due_post_and_pruned_feed_item_survives(queue_env, monkeypatch):
     """Due post dispatches via flush_queue; pruned feed_items do not break dispatch."""
@@ -209,7 +221,11 @@ def test_queue_depth_allowance_enforced_multi(queue_env):
 def test_queue_page_and_actions(queue_env, monkeypatch):
     """Test /queue UI, Post now, Cancel, Edit, and Reorder actions."""
     dispatched = []
-    monkeypatch.setattr(scheduler, "post_status", lambda *args, **kw: dispatched.append(args) or {"id": "m-instant"})
+    def fake_post_status(instance, access_token, content, **kw):
+        dispatched.append(content)
+        return {"id": "m-instant"}
+
+    monkeypatch.setattr(scheduler, "post_status", fake_post_status)
 
     client = TestClient(app)
     _as_u1(client)
@@ -259,9 +275,17 @@ def test_queue_page_and_actions(queue_env, monkeypatch):
         r10_sent = db.execute("SELECT status FROM queued_posts WHERE id = 10").fetchone()
     assert r10_sent["status"] == "sent"
 
+    # Post now again should 409 because it is already sent
+    r_now_again = client.post("/api/queue/10/post-now")
+    assert r_now_again.status_code == 409
+
     # 5. Cancel
     r_cancel = client.post("/api/queue/20/cancel", follow_redirects=False)
     assert r_cancel.status_code == 303
     with database.get_db() as db:
         r20_cancel = db.execute("SELECT status FROM queued_posts WHERE id = 20").fetchone()
     assert r20_cancel["status"] == "cancelled"
+
+    # Cannot cancel or edit already cancelled post
+    assert client.post("/api/queue/20/cancel").status_code == 400
+    assert client.post("/api/queue/20/edit", data={"content": "x", "scheduled_at": "2026-09-01 10:00:00"}).status_code == 400

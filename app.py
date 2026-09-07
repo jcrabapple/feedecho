@@ -2102,11 +2102,19 @@ def _reader_keyset(cursor: str | None) -> tuple[str, list]:
     raw_pub, sep, raw_id = cursor.partition("|")
     try:
         item_id = int(raw_id)
+        if not (0 < item_id <= 9223372036854775807):
+            return "", []
     except ValueError:
         return "", []
 
     pub = raw_pub.strip()
     if pub:
+        # Validate that pub parses as a real datetime before passing to Postgres,
+        # otherwise PG raises InvalidDatetimeFormat / DatetimeFieldOverflow (500).
+        try:
+            datetime.strptime(pub, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return "", []
         sql = (
             "( i.published_at IS NULL"
             "  OR i.published_at < ?"
@@ -2302,7 +2310,7 @@ async def reader_page(
     # Progressive enhancement: fetch request with X-Requested-With returns the
     # items fragment alone (for infinite scroll / load more).
     if request.headers.get("X-Requested-With") == "fetch":
-        return render(
+        resp = render(
             "reader_items.html",
             request,
             items=items,
@@ -2313,6 +2321,9 @@ async def reader_page(
             default_template="{{ title }} {{ link }}",
             template_vars=available_variables(),
         )
+        if next_cursor:
+            resp.headers["X-Next-Cursor"] = next_cursor
+        return resp
 
     return render(
         "reader.html",

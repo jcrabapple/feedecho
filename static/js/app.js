@@ -1170,37 +1170,17 @@ async function readerLoadMore(btn) {
 
         list.appendChild(fragment);
 
-        // Keyset pagination next cursor: fetch next page URL or remove button
-        // by parsing the new page's next link if present or updating href.
-        // The items endpoint renders reader_items.html which has items, but we need
-        // the next cursor. We can inspect the last appended entry.
-        const lastEntry = list.querySelector('.reader-entry:last-child');
-        const nextCursor = btn.dataset.nextCursor;
-        // In the full reader page next_cursor was passed on render, but for fragment fetches
-        // we can inspect if there were fewer than READER_PAGE_SIZE items or look up next cursor.
-        // If the fragment returned less than 50 items, there are no more items.
-        if (newEntries.length < 50) {
-            btn.closest('.reader-load-more-wrap')?.remove();
+        // Keyset pagination next cursor from X-Next-Cursor response header
+        const nextCur = resp.headers.get('X-Next-Cursor');
+        if (nextCur) {
+            btn.dataset.nextCursor = nextCur;
+            const nextUrl = new URL(url, window.location.origin);
+            nextUrl.searchParams.set('after', nextCur);
+            btn.setAttribute('href', nextUrl.pathname + nextUrl.search);
+            btn.classList.remove('is-loading');
+            btn.textContent = origText;
         } else {
-            // Find published_at / id of the last entry to construct the next cursor URL
-            const lastTime = lastEntry ? lastEntry.querySelector('time.local-time') : null;
-            const lastId = lastEntry ? lastEntry.dataset.itemId : null;
-            // The local-time datetime is ISO "YYYY-MM-DDTHH:MM:SSZ"; normalize to "YYYY-MM-DD HH:MM:SS"
-            let pubStr = '';
-            if (lastTime && lastTime.getAttribute('datetime')) {
-                pubStr = lastTime.getAttribute('datetime').replace('T', ' ').replace('Z', '').slice(0, 19);
-            }
-            if (lastId) {
-                const nextCur = `${pubStr}|${lastId}`;
-                btn.dataset.nextCursor = nextCur;
-                const nextUrl = new URL(url, window.location.origin);
-                nextUrl.searchParams.set('after', nextCur);
-                btn.setAttribute('href', nextUrl.pathname + nextUrl.search);
-                btn.classList.remove('is-loading');
-                btn.textContent = origText;
-            } else {
-                btn.closest('.reader-load-more-wrap')?.remove();
-            }
+            btn.closest('.reader-load-more-wrap')?.remove();
         }
 
         // Hydrate timestamps and trigger auto-read if active

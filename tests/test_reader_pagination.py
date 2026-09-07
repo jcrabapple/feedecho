@@ -81,6 +81,12 @@ def test_reader_keyset_walk_120_items(pagination_env):
     assert r_bad.status_code == 200
     assert r_bad.text.count('class="reader-entry"') == 50
 
+    # Malformed / overflow cursor dates / ids do not 500
+    for bad_cursor in ("--|1", ":::|1", "2026-02-31 00:00:00|1", "|99999999999999999999999"):
+        rb = client.get(f"/reader?view=all&after={bad_cursor}")
+        assert rb.status_code == 200
+        assert rb.text.count('class="reader-entry"') == 50
+
     # Walk pages
     collected_ids = []
     collected_item_ids = []
@@ -142,7 +148,7 @@ def test_reader_keyset_walk_120_items(pagination_env):
 
 
 def test_reader_load_more_fetch_fragment(pagination_env):
-    """X-Requested-With: fetch returns only reader_items.html fragment."""
+    """X-Requested-With: fetch returns only reader_items.html fragment and X-Next-Cursor."""
     with database.get_db() as db:
         for i in range(10):
             db.execute(
@@ -160,3 +166,5 @@ def test_reader_load_more_fetch_fragment(pagination_env):
     assert "<footer" not in resp.text
     # Must contain reader entries
     assert 'class="reader-entry"' in resp.text
+    # 10 items < READER_PAGE_SIZE (50), so no next cursor header
+    assert "X-Next-Cursor" not in resp.headers

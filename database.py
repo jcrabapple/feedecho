@@ -393,6 +393,7 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "feed_items", "image_url", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_alt", "TEXT")
         _add_column_if_missing(db, "feed_items", "enclosure_url", "TEXT")
+        _add_column_if_missing(db, "feed_items", "starred", "INTEGER NOT NULL DEFAULT 0")
 
         echo_columns = _column_names(db, "echoes")
         if (
@@ -996,6 +997,7 @@ def init_db_postgres() -> None:
         _add_column_if_missing(db, "feed_items", "image_url", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_alt", "TEXT")
         _add_column_if_missing(db, "feed_items", "enclosure_url", "TEXT")
+        _add_column_if_missing(db, "feed_items", "starred", "INTEGER NOT NULL DEFAULT 0")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS echoes (

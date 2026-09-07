@@ -233,3 +233,60 @@ class TestReaderTier2Pg:
             # today view (items have no published_at, so empty but 200)
             assert c.get("/reader", params={"view": "today"}).status_code == 200
 
+    def test_folders_and_opml_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'paid')",
+                (11, "r@example.com"),
+            )
+
+        client = TestClient(app)
+        client.cookies.set("feedecho_session", security.sign_session(11, "r@example.com"))
+
+        # Create folder
+        r = client.post("/api/folders", data={"name": "PG Folder"}, follow_redirects=False)
+        assert r.status_code == 303
+        with database.get_db() as db:
+            fol = db.execute("SELECT id FROM folders WHERE user_id = 11 AND name = 'PG Folder'").fetchone()
+            assert fol is not None
+            fid = fol["id"]
+
+        # Duplicate folder -> 409
+        assert client.post("/api/folders", data={"name": "pg folder"}).status_code == 409
+
+        # OPML import with nested folder
+        opml = (
+            '<?xml version="1.0"?><opml version="2.0"><body>'
+            '<outline text="PG Folder">'
+            '  <outline text="PG Feed" xmlUrl="https://example.com/pgfeed.xml"/>'
+            '</outline>'
+            '</body></opml>'
+        )
+        r_imp = client.post(
+            "/api/feeds/opml",
+            files={"file": ("pg.opml", opml.encode("utf-8"), "text/x-opml")},
+            follow_redirects=False,
+        )
+        assert r_imp.status_code == 303
+        with database.get_db() as db:
+            f = db.execute("SELECT folder_id FROM feeds WHERE url = 'https://example.com/pgfeed.xml' AND user_id = 11").fetchone()
+            assert f is not None
+            assert f["folder_id"] == fid
+
+        # OPML export carries nested outline
+        r_exp = client.get("/api/feeds/opml")
+        assert r_exp.status_code == 200
+        assert '<outline text="PG Folder">' in r_exp.text
+        assert 'xmlUrl="https://example.com/pgfeed.xml"' in r_exp.text
+

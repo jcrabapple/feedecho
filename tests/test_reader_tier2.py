@@ -66,6 +66,79 @@ class TestOpml:
             r = c.post("/api/feeds/opml", data={"opml": "not xml at all"})
         assert r.status_code == 400
 
+    def test_import_file_upload_and_nested_folders(self, env):
+        opml = (
+            '<?xml version="1.0"?><opml version="2.0"><body>'
+            '<outline text="Tech">'
+            '  <outline text="Ars" xmlUrl="https://example.com/ars.xml"/>'
+            '  <outline text="Verge" xmlUrl="https://example.com/verge.xml"/>'
+            '</outline>'
+            '<outline text="Standalone" xmlUrl="https://example.com/standalone.xml"/>'
+            "</body></opml>"
+        )
+        with TestClient(app) as c:
+            # Test file upload path
+            r = c.post(
+                "/api/feeds/opml",
+                files={"file": ("test.opml", opml.encode("utf-8"), "text/x-opml")},
+                follow_redirects=False,
+            )
+        assert r.status_code == 303
+        assert "imported=3" in r.headers["location"]
+        assert "duplicate=0" in r.headers["location"]
+
+        with database.get_db() as db:
+            folder = db.execute("SELECT id, name FROM folders WHERE name = 'Tech'").fetchone()
+            assert folder is not None
+            ars = db.execute("SELECT folder_id FROM feeds WHERE url = 'https://example.com/ars.xml'").fetchone()
+            standalone = db.execute("SELECT folder_id FROM feeds WHERE url = 'https://example.com/standalone.xml'").fetchone()
+        assert ars["folder_id"] == folder["id"]
+        assert standalone["folder_id"] is None
+
+        # Test export nesting
+        with TestClient(app) as c:
+            export_resp = c.get("/api/feeds/opml")
+        assert export_resp.status_code == 200
+        text = export_resp.text
+        assert '<outline text="Tech">' in text
+        assert 'xmlUrl="https://example.com/ars.xml"' in text
+
+    def test_import_oversize_upload_rejected(self, env):
+        oversize = b"a" * (2_000_001)
+        with TestClient(app) as c:
+            r = c.post(
+                "/api/feeds/opml",
+                files={"file": ("big.opml", oversize, "text/x-opml")},
+            )
+        assert r.status_code == 400
+        assert "exceeds 2 MB limit" in r.json()["detail"]
+
+
+def test_import_opml_with_xml_namespace(env):
+    opml = (
+        '<opml xmlns="http://opml.org/spec2" version="2.0">'
+        '  <body>'
+        '    <outline text="Namespaced Folder">'
+        '      <outline text="NS Feed" xmlUrl="https://example.com/nsfeed.xml"/>'
+        '    </outline>'
+        '  </body>'
+        '</opml>'
+    )
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/feeds/opml",
+            files={"file": ("ns.opml", opml.encode("utf-8"), "text/x-opml")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "imported=1" in r.headers["location"]
+    with database.get_db() as db:
+        fol = db.execute("SELECT id FROM folders WHERE name = 'Namespaced Folder'").fetchone()
+        assert fol is not None
+        f = db.execute("SELECT folder_id FROM feeds WHERE url = 'https://example.com/nsfeed.xml'").fetchone()
+        assert f is not None
+        assert f["folder_id"] == fol["id"]
+
 
 class TestMuteKeywords:
     def test_muted_items_hidden(self, env):

@@ -1819,6 +1819,10 @@ async def admin_revoke_invite(request: Request):
 async def feeds_page(request: Request):
     uid = current_user_id(request)
     with get_db() as db:
+        folders = db.execute(
+             "SELECT * FROM folders WHERE user_id = ? ORDER BY position, name",
+             (uid,),
+        ).fetchall()
         feeds = db.execute(
             "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
             (uid,),
@@ -1829,7 +1833,7 @@ async def feeds_page(request: Request):
                 "SELECT COUNT(*) as c FROM echoes WHERE feed_id = ? AND deleted_at IS NULL AND user_id = ?",
                 (f["id"], uid),
             ).fetchone()["c"]
-    return render("feeds.html", request, feeds=feeds, feed_echoes=feed_echoes)
+    return render("feeds.html", request, feeds=feeds, folders=folders, feed_echoes=feed_echoes)
 
 
 @app.get("/accounts", response_class=HTMLResponse)
@@ -2132,6 +2136,7 @@ def _parse_reader_query(q: str):
     Returns ``(filters, terms)``. Operators (lowercased) are:
       is:starred | is:unread | is:read
       feed:NAME   (substring match on the feed name)
+      folder:NAME (substring match on the folder name)
       in:title | in:body  (scope the free-text terms)
     Anything without a recognized ``op:value`` shape becomes a bare term.
     """
@@ -2139,7 +2144,7 @@ def _parse_reader_query(q: str):
     terms = []
     for token in q.split():
         op, sep, val = token.partition(":")
-        if sep and op.lower() in ("is", "feed", "in") and val:
+        if sep and op.lower() in ("is", "feed", "folder", "in") and val:
             filters.append((op.lower(), val.lower()))
         else:
             terms.append(token.lower())
@@ -2160,6 +2165,7 @@ def _escape_like(term: str) -> str:
 async def reader_page(
     request: Request,
     feed: str = "",
+    folder: str = "",
     view: str = "unread",
     q: str = "",
     fulltext: str = "",
@@ -2169,18 +2175,25 @@ async def reader_page(
 
     Server-rendered list of stored feed items, newest first, scoped to the
     viewer's feeds. ``view`` is one of all|unread|starred|today; ``feed``
-    narrows to a single feed; ``fulltext`` renders the full article body
-    inline instead of the summary teaser; ``after`` is a keyset cursor
-    ("<published_at>|<id>") for pagination. Read/star toggles and the per-feed
-    reading switch live in the reader API routes below.
+    narrows to a single feed; ``folder`` narrows to feeds in a folder;
+    ``fulltext`` renders the full article body inline instead of the summary
+    teaser; ``after`` is a keyset cursor ("<published_at>|<id>") for
+    pagination. Read/star toggles and the per-feed reading switch live in the
+    reader API routes below.
     """
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
+    folder_id = _filter_int(folder)
     view = view if view in ("all", "unread", "starred", "today") else "unread"
     q = (q or "").strip()
     after = (after or "").strip()
     with get_db() as db:
         _require_reader(db, uid)
+        folders = db.execute(
+            "SELECT * FROM folders WHERE user_id = ? ORDER BY position, name",
+            (uid,),
+        ).fetchall()
+
         feeds = db.execute(
             """
             SELECT f.*,
@@ -2196,11 +2209,14 @@ async def reader_page(
             (uid,),
         ).fetchall()
 
-        where = ["f.user_id = ?", "f.read_enabled = 1"]
+        where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL"]
         params: list = [uid]
         if feed_id is not None:
             where.append("i.feed_id = ?")
             params.append(feed_id)
+        if folder_id is not None:
+            where.append("f.folder_id = ?")
+            params.append(folder_id)
         if q:
             # Full-text search with operators (issue #11, Tier 1). The
             # unread/starred view filter is skipped so a search surfaces
@@ -2217,6 +2233,9 @@ async def reader_page(
                         where.append("i.is_read = 1")
                 elif op == "feed":
                     where.append("LOWER(f.name) LIKE ? ESCAPE '!'")
+                    params.append(f"%{_escape_like(val)}%")
+                elif op == "folder":
+                    where.append("LOWER(fo.name) LIKE ? ESCAPE '!'")
                     params.append(f"%{_escape_like(val)}%")
                 elif op == "in":
                     if val in ("title", "body"):
@@ -2281,6 +2300,7 @@ async def reader_page(
                       AND p.item_id = i.item_id AND p.status = 'success') AS shouted
               FROM feed_items i
               JOIN feeds f ON i.feed_id = f.id
+              LEFT JOIN folders fo ON fo.id = f.folder_id
              WHERE {" AND ".join(where)}
              ORDER BY (i.published_at IS NULL), i.published_at DESC, i.id DESC
              LIMIT ?
@@ -2329,10 +2349,12 @@ async def reader_page(
         "reader.html",
         request,
         feeds=feeds,
+        folders=folders,
         items=items,
         next_cursor=next_cursor,
         max_item_id=max_row["m"] if max_row else 0,
         current_feed=str(feed_id) if feed_id is not None else "",
+        current_folder=str(folder_id) if folder_id is not None else "",
         view=view,
         q=q,
         fulltext=bool(fulltext),
@@ -2566,6 +2588,7 @@ def _hard_delete_user(db, uid: int) -> None:
     for table in (
         "echoes",
         "feeds",
+        "folders",
         "accounts",
         "email_accounts",
         "bluesky_accounts",
@@ -3536,6 +3559,119 @@ def test_alt_text(request: Request):
         return {"success": False, "message": f"API test failed: {e}"}
 
 
+# ── Folders API ─────────────────────────────────────────────────────────────
+
+@app.post("/api/folders")
+def create_folder(request: Request, name: str = Form(...)):
+    uid = current_user_id(request)
+    name = " ".join(name.strip().split())
+    if not (1 <= len(name) <= 60):
+        raise HTTPException(status_code=400, detail="Folder name must be between 1 and 60 characters")
+    with get_db() as db:
+        existing = db.execute(
+            "SELECT id FROM folders WHERE user_id = ? AND LOWER(name) = ?",
+            (uid, name.lower()),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Folder already exists")
+        max_pos = db.execute(
+            "SELECT COALESCE(MAX(position), 0) AS m FROM folders WHERE user_id = ?",
+            (uid,),
+        ).fetchone()["m"]
+        db.execute(
+            "INSERT INTO folders (user_id, name, position) VALUES (?, ?, ?)",
+            (uid, name, max_pos + 1),
+        )
+    return RedirectResponse(url="/feeds", status_code=303)
+
+
+@app.post("/api/folders/{folder_id}/rename")
+def rename_folder(request: Request, folder_id: int, name: str = Form(...)):
+    uid = current_user_id(request)
+    name = " ".join(name.strip().split())
+    if not (1 <= len(name) <= 60):
+        raise HTTPException(status_code=400, detail="Folder name must be between 1 and 60 characters")
+    with get_db() as db:
+        folder = db.execute(
+            "SELECT id FROM folders WHERE id = ? AND user_id = ?",
+            (folder_id, uid),
+        ).fetchone()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        dup = db.execute(
+            "SELECT id FROM folders WHERE user_id = ? AND LOWER(name) = ? AND id != ?",
+            (uid, name.lower(), folder_id),
+        ).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail="Folder already exists")
+        db.execute(
+            "UPDATE folders SET name = ? WHERE id = ? AND user_id = ?",
+            (name, folder_id, uid),
+        )
+    return RedirectResponse(url="/feeds", status_code=303)
+
+
+@app.post("/api/folders/{folder_id}/delete")
+def delete_folder(request: Request, folder_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        folder = db.execute(
+            "SELECT id FROM folders WHERE id = ? AND user_id = ?",
+            (folder_id, uid),
+        ).fetchone()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        # Null out folder_id on feeds belonging to this user first
+        db.execute(
+            "UPDATE feeds SET folder_id = NULL WHERE folder_id = ? AND user_id = ?",
+            (folder_id, uid),
+        )
+        db.execute(
+            "DELETE FROM folders WHERE id = ? AND user_id = ?",
+            (folder_id, uid),
+        )
+    return RedirectResponse(url="/feeds", status_code=303)
+
+
+@app.post("/api/feeds/{feed_id}/folder")
+def set_feed_folder(request: Request, feed_id: int, folder_id: str = Form("")):
+    uid = current_user_id(request)
+    target_folder_id = _filter_int(folder_id)
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT id FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+            (feed_id, uid),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        if target_folder_id is not None:
+            folder = db.execute(
+                "SELECT id FROM folders WHERE id = ? AND user_id = ?",
+                (target_folder_id, uid),
+            ).fetchone()
+            if not folder:
+                raise HTTPException(status_code=404, detail="Folder not found")
+        db.execute(
+            "UPDATE feeds SET folder_id = ? WHERE id = ? AND user_id = ?",
+            (target_folder_id, feed_id, uid),
+        )
+    return {"success": True, "folder_id": target_folder_id}
+
+
+@app.post("/api/folders/reorder")
+def reorder_folders(request: Request, ids: str = Form(...)):
+    uid = current_user_id(request)
+    id_list = [_filter_int(i.strip()) for i in ids.split(",") if i.strip()]
+    id_list = [i for i in id_list if i is not None]
+    with get_db() as db:
+        for pos, fid in enumerate(id_list):
+            db.execute(
+                "UPDATE folders SET position = ? WHERE id = ? AND user_id = ?",
+                (pos, fid, uid),
+            )
+    return {"success": True}
+
+
 # ── API: Feeds ──────────────────────────────────────────────────────────────
 
 @app.post("/api/feeds")
@@ -3544,11 +3680,20 @@ async def add_feed(
     name: str = Form(...),
     url: str = Form(...),
     poll_interval: int = Form(15),
+    folder_id: str = Form(""),
 ):
     uid = current_user_id(request)
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
+    target_folder_id = _filter_int(folder_id)
     with get_db() as db:
+        if target_folder_id is not None:
+            folder = db.execute(
+                "SELECT id FROM folders WHERE id = ? AND user_id = ?",
+                (target_folder_id, uid),
+            ).fetchone()
+            if not folder:
+                target_folder_id = None
         if settings.MULTI:
             plan = _user_plan(db, uid)
             count = db.execute(
@@ -3561,25 +3706,52 @@ async def add_feed(
                 raise HTTPException(status_code=402, detail=str(e))
             poll_interval = plans.clamp_poll_interval(poll_interval, plan)
         db.execute(
-            "INSERT INTO feeds (name, url, poll_interval, user_id) VALUES (?, ?, ?, ?)",
-            (name, url, poll_interval, uid),
+            "INSERT INTO feeds (name, url, poll_interval, user_id, folder_id) VALUES (?, ?, ?, ?, ?)",
+            (name, url, poll_interval, uid, target_folder_id),
         )
     return RedirectResponse(url="/feeds", status_code=303)
 
 
 @app.get("/api/feeds/opml")
 def export_opml(request: Request):
-    """Export this user's feeds as an OPML 2.0 document (issue #11, Tier 2)."""
+    """Export this user's feeds as an OPML 2.0 document (issue #11, Tier 2 & Phase 1)."""
     uid = current_user_id(request)
     with get_db() as db:
-        feeds = db.execute(
-            "SELECT name, url FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+        folders = db.execute(
+            "SELECT id, name FROM folders WHERE user_id = ? ORDER BY position, name",
             (uid,),
         ).fetchall()
-    outlines = "\n".join(
-        f'    <outline text={quoteattr(f["name"])} type="rss" xmlUrl={quoteattr(f["url"])} />'
-        for f in feeds
-    )
+        feeds = db.execute(
+            "SELECT name, url, folder_id FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+            (uid,),
+        ).fetchall()
+
+    folder_map = {f["id"]: [] for f in folders}
+    uncategorized = []
+    for f in feeds:
+        if f["folder_id"] and f["folder_id"] in folder_map:
+            folder_map[f["folder_id"]].append(f)
+        else:
+            uncategorized.append(f)
+
+    outline_lines = []
+    for fol in folders:
+        fol_feeds = folder_map[fol["id"]]
+        if not fol_feeds:
+            continue
+        outline_lines.append(f'    <outline text={quoteattr(fol["name"])}>')
+        for f in fol_feeds:
+            outline_lines.append(
+                f'      <outline text={quoteattr(f["name"])} type="rss" xmlUrl={quoteattr(f["url"])} />'
+            )
+        outline_lines.append("    </outline>")
+
+    for f in uncategorized:
+        outline_lines.append(
+            f'    <outline text={quoteattr(f["name"])} type="rss" xmlUrl={quoteattr(f["url"])} />'
+        )
+
+    outlines = "\n".join(outline_lines)
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<opml version="2.0">\n'
@@ -3597,56 +3769,130 @@ def export_opml(request: Request):
 
 
 @app.post("/api/feeds/opml")
-async def import_opml(request: Request, opml: str = Form("")):
-    """Bulk-add feeds from an OPML document (issue #11, Tier 2)."""
+def import_opml(
+    request: Request,
+    opml: str = Form(""),
+    file: UploadFile = File(None),
+):
+    """Bulk-add feeds from an OPML document or file upload (issue #11, Tier 2 & Phase 1)."""
     uid = current_user_id(request)
+    content_str = ""
+    if file is not None and file.filename:
+        raw_bytes = file.file.read(2_000_001)
+        if len(raw_bytes) > 2_000_000:
+            raise HTTPException(status_code=400, detail="OPML file exceeds 2 MB limit")
+        try:
+            content_str = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="OPML file is not valid UTF-8 text")
+    elif opml:
+        if len(opml.encode("utf-8")) > 2_000_000:
+            raise HTTPException(status_code=400, detail="OPML content exceeds 2 MB limit")
+        content_str = opml
+    else:
+        raise HTTPException(status_code=400, detail="No OPML data or file provided")
+
     # Reject DTD/entity declarations before parsing: ElementTree doesn't fetch
     # external entities, but a <!DOCTYPE> subset can still trigger entity
     # expansion (billion-laughs) DoS.
-    if "<!DOCTYPE" in opml.upper() or "<!ENTITY" in opml.upper():
+    if "<!DOCTYPE" in content_str.upper() or "<!ENTITY" in content_str.upper():
         raise HTTPException(status_code=400, detail="OPML must not contain a DOCTYPE or entity declarations")
     try:
-        root = ElementTree.fromstring(opml)
+        root = ElementTree.fromstring(content_str)
     except ElementTree.ParseError:
         raise HTTPException(status_code=400, detail="Invalid OPML XML")
+
     with get_db() as db:
         reader_allowed = not settings.MULTI or plans.reader_enabled(_user_plan(db, uid))
-        existing = {
+        existing_urls = {
             r["url"] for r in db.execute(
                 "SELECT url FROM feeds WHERE deleted_at IS NULL AND user_id = ?", (uid,)
             ).fetchall()
         }
-        added = skipped = 0
-        for o in root.iter("outline"):
-            url = (o.get("xmlUrl") or "").strip()
-            if not url:
-                continue
-            try:
-                url = validate_url(url)
-            except HTTPException:
-                skipped += 1
-                continue
-            if url in existing:
-                skipped += 1
-                continue
-            if settings.MULTI:
-                count = db.execute(
-                    "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
-                    (uid,),
-                ).fetchone()["c"]
-                try:
-                    plans.check_feed_allowance(count, _user_plan(db, uid))
-                except PlanError:
-                    skipped += 1
+        # Pre-fetch user's folders
+        folder_rows = db.execute(
+            "SELECT id, name FROM folders WHERE user_id = ?", (uid,)
+        ).fetchall()
+        folders_by_lower = {r["name"].lower(): r["id"] for r in folder_rows}
+
+        imported = duplicate = invalid = capped = 0
+        total_outlines = 0
+
+        def _local_tag(elem):
+            tag = elem.tag
+            return tag.split("}", 1)[1] if "}" in tag else tag
+
+        def walk(node, current_folder_id: int | None, depth: int):
+            nonlocal imported, duplicate, invalid, capped, total_outlines
+            if depth > 10:
+                return
+            for child in node:
+                if _local_tag(child).lower() != "outline":
                     continue
-            title = (o.get("title") or o.get("text") or "").strip() or url
-            db.execute(
-                "INSERT INTO feeds (name, url, read_enabled, user_id) VALUES (?, ?, ?, ?)",
-                (title, url, 1 if reader_allowed else 0, uid),
-            )
-            existing.add(url)
-            added += 1
-    return RedirectResponse(url=f"/feeds?imported={added}&skipped={skipped}", status_code=303)
+                total_outlines += 1
+                if total_outlines > 1000:
+                    break
+                xml_url = (child.get("xmlUrl") or "").strip()
+                if xml_url:
+                    # Feed outline
+                    try:
+                        valid_url = validate_url(xml_url)
+                    except HTTPException:
+                        invalid += 1
+                        continue
+                    if valid_url in existing_urls:
+                        duplicate += 1
+                        continue
+                    if settings.MULTI:
+                        count = db.execute(
+                            "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
+                            (uid,),
+                        ).fetchone()["c"]
+                        try:
+                            plans.check_feed_allowance(count, _user_plan(db, uid))
+                        except PlanError:
+                            capped += 1
+                            continue
+                    title = (child.get("title") or child.get("text") or "").strip() or valid_url
+                    db.execute(
+                        "INSERT INTO feeds (name, url, read_enabled, user_id, folder_id) VALUES (?, ?, ?, ?, ?)",
+                        (title, valid_url, 1 if reader_allowed else 0, uid, current_folder_id),
+                    )
+                    existing_urls.add(valid_url)
+                    imported += 1
+                else:
+                    # Folder / container outline
+                    folder_name = (child.get("title") or child.get("text") or "").strip()
+                    folder_name = " ".join(folder_name.split())[:60]
+                    folder_id_to_pass = current_folder_id
+                    if folder_name:
+                        low_name = folder_name.lower()
+                        if low_name in folders_by_lower:
+                            folder_id_to_pass = folders_by_lower[low_name]
+                        else:
+                            max_pos = db.execute(
+                                "SELECT COALESCE(MAX(position), 0) AS m FROM folders WHERE user_id = ?",
+                                (uid,),
+                            ).fetchone()["m"]
+                            new_fid = db.execute(
+                                "INSERT INTO folders (user_id, name, position) VALUES (?, ?, ?) RETURNING id",
+                                (uid, folder_name, max_pos + 1),
+                            ).fetchone()["id"]
+                            folders_by_lower[low_name] = new_fid
+                            folder_id_to_pass = new_fid
+                    walk(child, folder_id_to_pass, depth + 1)
+
+        body_elem = None
+        for child in root:
+            if _local_tag(child).lower() == "body":
+                body_elem = child
+                break
+        walk(body_elem if body_elem is not None else root, None, 1)
+
+    return RedirectResponse(
+        url=f"/feeds?imported={imported}&duplicate={duplicate}&invalid={invalid}&capped={capped}",
+        status_code=303,
+    )
 
 
 @app.post("/api/feeds/{feed_id}/edit")
@@ -3657,8 +3903,9 @@ async def edit_feed(
     url: str = Form(...),
     poll_interval: int = Form(15),
     mute_keywords: str = Form(""),
+    folder_id: str | None = Form(None),
 ):
-    """Update a feed's name, URL, poll interval, or mute keywords (issues #3, #11).
+    """Update a feed's name, URL, poll interval, mute keywords, or folder (issues #3, #11).
 
     Changing the URL invalidates the cursor: last_item_id belonged to the
     old feed, and comparing it against the new feed's item IDs could
@@ -3673,7 +3920,15 @@ async def edit_feed(
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     mute_keywords = (mute_keywords or "").strip()
+    target_folder_id = _filter_int(folder_id) if folder_id is not None else None
     with get_db() as db:
+        if target_folder_id is not None:
+            fol = db.execute(
+                "SELECT id FROM folders WHERE id = ? AND user_id = ?",
+                (target_folder_id, uid),
+            ).fetchone()
+            if not fol:
+                target_folder_id = None
         if settings.MULTI:
             # Clamp to the plan's floor, never reject: tightening an existing
             # feed's cadence is fine, lowering it below the plan is not.
@@ -3681,26 +3936,30 @@ async def edit_feed(
                 poll_interval, _user_plan(db, uid)
             )
         feed = db.execute(
-            "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            "SELECT url, folder_id FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
             (feed_id, uid),
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
+
+        # If folder_id was omitted entirely from the form, preserve existing folder
+        final_folder_id = target_folder_id if folder_id is not None else feed["folder_id"]
+
         if feed["url"] != url:
             db.execute(
                 """
                 UPDATE feeds
                    SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?,
-                       last_item_id = NULL
+                       folder_id = ?, last_item_id = NULL
                  WHERE id = ? AND deleted_at IS NULL AND user_id = ?
                 """,
-                (name, url, poll_interval, mute_keywords, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
             )
         else:
             db.execute(
-                "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ? "
+                "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?, folder_id = ? "
                 "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (name, url, poll_interval, mute_keywords, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
             )
     return RedirectResponse(url="/feeds", status_code=303)
 
@@ -3912,7 +4171,11 @@ def reader_toggle_star(request: Request, item_id: int):
 
 
 @app.post("/api/reader/mark-all-read")
-def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
+def reader_mark_all_read(
+    request: Request,
+    feed_id: int = Form(None),
+    folder_id: int = Form(None),
+):
     uid = current_user_id(request)
     with get_db() as db:
         _require_reader(db, uid)
@@ -3928,8 +4191,25 @@ def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
                 (feed_id,),
             ).fetchall()
             db.execute(
-                "UPDATE feed_items SET is_read = 1 WHERE feed_id = ?",
+                "UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND feed_id = ?",
                 (feed_id,),
+            )
+        elif folder_id is not None:
+            owns_folder = db.execute(
+                "SELECT id FROM folders WHERE id = ? AND user_id = ?",
+                (folder_id, uid),
+            ).fetchone()
+            if not owns_folder:
+                raise HTTPException(status_code=404, detail="Folder not found")
+            rows = db.execute(
+                "SELECT id FROM feed_items WHERE is_read = 0 AND feed_id IN"
+                " (SELECT id FROM feeds WHERE user_id = ? AND folder_id = ? AND deleted_at IS NULL)",
+                (uid, folder_id),
+            ).fetchall()
+            db.execute(
+                "UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND feed_id IN"
+                " (SELECT id FROM feeds WHERE user_id = ? AND folder_id = ? AND deleted_at IS NULL)",
+                (uid, folder_id),
             )
         else:
             rows = db.execute(
@@ -3938,7 +4218,7 @@ def reader_mark_all_read(request: Request, feed_id: int = Form(None)):
                 (uid,),
             ).fetchall()
             db.execute(
-                "UPDATE feed_items SET is_read = 1 WHERE feed_id IN"
+                "UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND feed_id IN"
                 " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
                 (uid,),
             )

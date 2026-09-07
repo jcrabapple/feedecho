@@ -24,7 +24,7 @@ from feed_parser import (
     _parse_item_date,
     truncate,
 )
-from filters import is_filtered
+from filters import is_filtered, match_reason
 from mastodon import post_status, upload_media
 from bluesky import (
     BLUESKY_IMAGE_TYPES,
@@ -673,12 +673,12 @@ def _post_succeeded(echo_id: int, item_id: str) -> bool:
     return _row_state(echo_id, item_id) in ("success", "filtered", "gave_up", "queued")
 
 
-def _record_filtered(echo_id: int, item: dict) -> None:
+def _record_filtered(echo_id: int, item: dict, reason: str | None = None) -> None:
     """Record an item suppressed by the echo's keyword filter.
 
     Uses status 'filtered' so history shows what was dropped and the claim
     logic never retries it (only 'failed' and stale 'pending' rows are
-    reclaimable).
+    reclaimable). Storing the filter reason explains why it was dropped.
     """
     with get_db() as db:
         db.execute(
@@ -687,10 +687,12 @@ def _record_filtered(echo_id: int, item: dict) -> None:
                 echo_id, item_id, item_title, item_url, status,
                 attempt_count, error_message
             )
-            VALUES (?, ?, ?, ?, 'filtered', 0, NULL)
-            ON CONFLICT(echo_id, item_id) DO NOTHING
+            VALUES (?, ?, ?, ?, 'filtered', 0, ?)
+            ON CONFLICT(echo_id, item_id) DO UPDATE SET
+                error_message = excluded.error_message
+            WHERE posted_items.status = 'filtered'
             """,
-            (echo_id, item["id"], item.get("title", ""), item.get("link", "")),
+            (echo_id, item["id"], item.get("title", ""), item.get("link", ""), reason),
         )
 
 
@@ -721,9 +723,10 @@ def process_echo(
         filter_mode = echo["filter_mode"]
     except (KeyError, IndexError):
         filter_kw, filter_mode = None, None
-    if is_filtered(item, filter_kw, filter_mode):
-        _record_filtered(echo_id, item)
-        logger.info("Echo %s: item %s suppressed by keyword filter", echo_id, item_id)
+    reason = match_reason(item, filter_kw, filter_mode)
+    if reason is not None:
+        _record_filtered(echo_id, item, reason=reason)
+        logger.info("Echo %s: item %s suppressed by keyword filter: %s", echo_id, item_id, reason)
         return True
 
     claimed = _claim_post(echo_id, item)

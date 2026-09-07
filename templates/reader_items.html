@@ -12,6 +12,10 @@
         {% if item.author %} · {{ item.author }}{% endif %}
         {% if item.published_at %} · <time class="local-time" datetime="{{ item.published_at | iso_utc }}">{{ item.published_at | utc_text }} UTC</time>{% endif %}
         {% if item.shouted %} · <span class="reader-item-shouted" title="Shouted to an account"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg> Shouted</span>{% endif %}
+        {% if item.n_sent %} · <a href="/history?feed={{ item.feed_id }}&item_id={{ item.item_id | urlencode }}" class="badge badge-success reader-badge-delivery" title="Delivered to {{ item.n_sent }} destination{{ 's' if item.n_sent != 1 else '' }}">Echoed</a>{% endif %}
+        {% if item.n_queued %} · <a href="/history?feed={{ item.feed_id }}&item_id={{ item.item_id | urlencode }}" class="badge badge-info reader-badge-delivery" title="Queued for delivery">Queued</a>{% endif %}
+        {% if item.n_filtered %} · <a href="/history?feed={{ item.feed_id }}&item_id={{ item.item_id | urlencode }}" class="badge badge-warning reader-badge-delivery" title="Filtered{% if item.filter_reason %}: {{ item.filter_reason }}{% endif %}">Filtered</a>{% endif %}
+        {% if item.n_failed %} · <a href="/history?feed={{ item.feed_id }}&item_id={{ item.item_id | urlencode }}" class="badge badge-danger reader-badge-delivery" title="Delivery failed or gave up">Failed</a>{% endif %}
       </span>
     </summary>
     <div class="reader-item-body">
@@ -38,6 +42,7 @@
           </button>
         </span>
         <span class="action-group action-group--echo">
+          <button class="action-btn reader-mute-btn" type="button" onclick="readerOpenMute({{ item.id }}, '{{ (item.title or '') | e }}')">Mute…</button>
           <a class="action-btn" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo</a>
           {% if shout_destinations %}
           <button class="action-btn reader-compose-open" type="button" data-item-id="{{ item.id }}" onclick="readerOpenCompose({{ item.id }})">Compose</button>

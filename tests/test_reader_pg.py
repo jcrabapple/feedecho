@@ -395,3 +395,47 @@ class TestReaderTier2Pg:
             assert row["status"] == "sent"
             assert row["posted_item_id"] is not None
 
+    def test_delivery_badges_and_mute_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+
+        with database.get_db() as db:
+            db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (401, 'mute_pg@example.com', '', 'paid')")
+            db.execute("INSERT INTO feeds (id, name, url, read_enabled, user_id) VALUES (40, 'PG Feed Badges', 'https://f.org/badges', 1, 401)")
+            db.execute("INSERT INTO feed_items (id, feed_id, item_id, title, link, published_at, is_read) VALUES (40, 40, 'badge-item-1', 'PG Badge Article', 'https://f.org/b1', '2026-01-01 10:00:00', 0)")
+            db.execute("INSERT INTO echoes (id, feed_id, destination_type, destination_id, template, enabled, one_shot, user_id) VALUES (40, 40, 'mastodon', 1, '{{ title }}', 1, 0, 401)")
+            db.execute("INSERT INTO posted_items (echo_id, item_id, item_title, item_url, status, error_message) VALUES (40, 'badge-item-1', 'PG Badge Article', 'https://f.org/b1', 'success', NULL)")
+
+        client = TestClient(app)
+        client.cookies.set("feedecho_session", security.sign_session(401, "mute_pg@example.com"))
+
+        # Reader page displays Echoed delivery badge
+        r = client.get("/reader")
+        assert r.status_code == 200
+        assert "Echoed" in r.text
+        assert "badge-item-1" in r.text
+
+        # Mute API
+        r_mute = client.post("/api/reader/40/mute", data={"phrase": "Badge", "scope": "feed"})
+        assert r_mute.status_code == 200
+        assert r_mute.json()["success"] is True
+
+        # After mute, item is filtered out from reader query on PG
+        r_after = client.get("/reader")
+        assert "PG Badge Article" not in r_after.text
+
+        # Unmute API
+        r_unmute = client.post("/api/reader/unmute", data={"phrase": "Badge", "feed_ids": "40"})
+        assert r_unmute.status_code == 200
+        r_restored = client.get("/reader")
+        assert "PG Badge Article" in r_restored.text
+

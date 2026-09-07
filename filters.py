@@ -27,19 +27,33 @@ def _item_text(item: dict) -> str:
     return " ".join(parts).casefold()
 
 
-def is_filtered(item: dict, keywords: str | None, mode: str | None) -> bool:
-    """Return True when the item should NOT be delivered for this filter.
+def match_reason(item: dict, keywords: str | None, mode: str | None) -> str | None:
+    """Return a human-readable explanation if the item should be filtered, or None if kept.
 
     ``keywords`` is the raw comma-separated string stored on the echo.
     ``mode`` is 'exclude' or 'include' (anything else is treated as exclude).
     """
     parsed = parse_keywords(keywords)
     if not parsed:
-        return False
+        return None
 
     text = _item_text(item)
-    any_match = any(kw.casefold() in text for kw in parsed)
+    matched_kws = [kw for kw in parsed if kw.casefold() in text]
 
     if mode == "include":
-        return not any_match
-    return any_match
+        if not matched_kws:
+            return "no include keyword matched"
+        return None
+
+    if matched_kws:
+        return f'matched "{matched_kws[0]}"'
+    return None
+
+
+def is_filtered(item: dict, keywords: str | None, mode: str | None) -> bool:
+    """Return True when the item should NOT be delivered for this filter.
+
+    ``keywords`` is the raw comma-separated string stored on the echo.
+    ``mode`` is 'exclude' or 'include' (anything else is treated as exclude).
+    """
+    return match_reason(item, keywords, mode) is not None

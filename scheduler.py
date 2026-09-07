@@ -2439,13 +2439,14 @@ def _flush_queue() -> None:
 
                 new_attempt = row["attempt_count"] + 1
                 if final_status == "failed":
-                    # Clear the stale posted_items row so _claim_post can create
-                    # a fresh one on the next auto-retry attempt.
-                    if pi:
-                        db.execute("DELETE FROM posted_items WHERE id = ?", (pi["id"],))
-                    # Auto-retry with backoff: up to 3 attempts, then terminal
+                    # Auto-retry with backoff: up to 3 attempts, then terminal.
+                    # On non-terminal attempts, clear the stale posted_items row
+                    # so _claim_post can create a fresh one on the next try.
+                    # On the terminal attempt, leave the posted_items row intact
+                    # so the failure is visible in /history (audit trail).
                     if new_attempt < 3:
-                        final_status = "queued"
+                        if pi:
+                            db.execute("DELETE FROM posted_items WHERE id = ?", (pi["id"],))
                         backoff_minutes = new_attempt * 10
                         retry_at = (datetime.now(timezone.utc) + timedelta(minutes=backoff_minutes)).strftime("%Y-%m-%d %H:%M:%S")
                         db.execute(
@@ -2455,10 +2456,12 @@ def _flush_queue() -> None:
                             (err_msg, new_attempt, retry_at, qp_id, claim_token),
                         )
                     else:
+                        # Terminal: keep the posted_items row for history, don't write posted_item_id
+                        # since the row's status already records the failure with the error.
                         db.execute(
-                            "UPDATE queued_posts SET status = 'failed', posted_item_id = ?, error_message = ?,"
+                            "UPDATE queued_posts SET status = 'failed', error_message = ?,"
                             " attempt_count = ? WHERE id = ? AND claim_token = ?",
-                            (pi_id, err_msg, new_attempt, qp_id, claim_token),
+                            (err_msg, new_attempt, qp_id, claim_token),
                         )
                 else:
                     db.execute(
@@ -2466,6 +2469,9 @@ def _flush_queue() -> None:
                         " attempt_count = ? WHERE id = ? AND claim_token = ?",
                         (pi_id, new_attempt, qp_id, claim_token),
                     )
+                    # Increment the in-memory hourly counter so the cap
+                    # enforcement sees this dispatch within the same tick.
+                    user_hourly_counts[row["user_id"]] = user_hourly_counts.get(row["user_id"], 0) + 1
         except Exception as exc:
             logger.exception("Queue flush: error processing queued post %s", qp_id)
             new_attempt = row["attempt_count"] + 1

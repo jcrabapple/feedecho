@@ -192,3 +192,64 @@ def test_auto_retry_with_backoff(fix_env, monkeypatch):
         assert qp["status"] == "failed"
         assert qp["attempt_count"] == 3
         assert qp["error_message"] is not None
+
+        # The terminal failure must leave a posted_items row visible in history
+        echo_id = db.execute("SELECT echo_id FROM queued_posts WHERE id = ?", (qp_id,)).fetchone()["echo_id"]
+        pi = db.execute("SELECT status, error_message FROM posted_items WHERE echo_id = ?", (echo_id,)).fetchone()
+        assert pi is not None
+        assert pi["status"] in ("failed", "gave_up")
+
+
+def test_cap_enforcement_increments_within_tick(fix_env, monkeypatch):
+    """The hoisted max_posts_per_hour count must be incremented as posts
+    dispatch within the same tick, not just snapshotted once."""
+
+    # Create a paid user (queue_depth=500, max_posts_per_hour=500) and override the cap to 5
+    with database.get_db() as db:
+        db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (701, 'cap@example.com', '', 'paid')")
+        db.execute("INSERT INTO accounts (id, name, username, instance, access_token, user_id) VALUES (2, 'M2', 'm2', 'https://m.social', 'tok', 701)")
+        db.execute("INSERT INTO feeds (id, name, url, read_enabled, user_id) VALUES (2, 'F2', 'https://e.com/f2', 1, 701)")
+        for i in range(10):
+            db.execute(
+                "INSERT INTO feed_items (id, feed_id, item_id, title, link, published_at, is_read)"
+                " VALUES (?, 2, ?, ?, ?, '2026-01-01 00:00:00', 0)",
+                (100 + i, f"cap-item-{i}", f"Title {i}", f"https://e.com/{i}"),
+            )
+
+    # Override the cap for this test: paid's max_posts_per_hour = 5
+    monkeypatch.setattr(settings, "PLAN_LIMITS", {
+        "paid": {**settings.DEFAULT_PLAN_LIMITS["paid"], "max_posts_per_hour": 5},
+        "trial": settings.DEFAULT_PLAN_LIMITS["trial"],
+        "beta": settings.DEFAULT_PLAN_LIMITS["beta"],
+    })
+
+    client = TestClient(app)
+    client.cookies.set("feedecho_session", security.sign_session(701, "cap@example.com"))
+
+    # Enqueue 10 posts (overridden cap is 5)
+    for i in range(10):
+        r = client.post("/api/reader/" + str(100 + i) + "/compose", data={
+            "destinations": "mastodon:2", "content": f"Post {i}", "enqueue": "1",
+        })
+        assert r.status_code == 200
+
+    # Set all to due
+    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    with database.get_db() as db:
+        db.execute("UPDATE queued_posts SET scheduled_at = ? WHERE user_id = 701", (past,))
+
+    # Mock successful dispatch
+    monkeypatch.setattr(scheduler, "post_status", lambda instance, access_token, content, **kw: {"id": "m-cap"})
+
+    scheduler.flush_queue()
+
+    with database.get_db() as db:
+        sent = db.execute(
+            "SELECT COUNT(*) AS c FROM queued_posts WHERE user_id = 701 AND status = 'sent'"
+        ).fetchone()["c"]
+        queued = db.execute(
+            "SELECT COUNT(*) AS c FROM queued_posts WHERE user_id = 701 AND status = 'queued'"
+        ).fetchone()["c"]
+    # Cap is 5, so exactly 5 should be sent and 5 remain queued
+    assert sent == 5
+    assert queued == 5

@@ -2022,12 +2022,13 @@ def queue_cancel(request: Request, post_id: int):
             raise HTTPException(status_code=404, detail="Queued post not found")
         if row["status"] not in ("queued", "failed"):
             raise HTTPException(status_code=400, detail="Cannot cancel post that is already sending or completed")
-        # Delete the orphaned one-shot echo created at enqueue time
+        # Delete the orphaned one-shot echo and any posted_items row, atomically
+        # with the status check (same transaction).
         if row["echo_id"]:
             db.execute("DELETE FROM posted_items WHERE echo_id = ?", (row["echo_id"],))
             db.execute("DELETE FROM echoes WHERE id = ?", (row["echo_id"],))
         db.execute(
-            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status IN ('queued', 'failed')",
+            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ?",
             (post_id, uid),
         )
     return RedirectResponse(url="/queue", status_code=303)

@@ -206,6 +206,17 @@ function editFeed(feedId) {
         });
     }
 
+    // Build chips for muted keywords
+    const kwList = muteKeywords.split(',').map(s => s.trim()).filter(Boolean);
+    let chipsHtml = '';
+    if (kwList.length) {
+        chipsHtml = `<div class="mute-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.4rem;">` +
+            kwList.map((kw) => `<span class="badge badge-muted mute-chip" style="display:inline-flex; align-items:center; gap:0.3rem;">` +
+                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" onclick="removeFeedMuteChip(${feedId}, '${escapeHTML(kw)}')" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
+            `</span>`).join('') +
+            `</div>`;
+    }
+
     row.innerHTML = `<td colspan="6">
         <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form" aria-label="Edit feed">
             <div class="form-row">
@@ -224,7 +235,8 @@ function editFeed(feedId) {
                     </select>
                 </label>
                 <label>Mute keywords (comma-separated)
-                    <input type="text" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
+                    <input type="text" id="feed-mute-input-${feedId}" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
+                    ${chipsHtml}
                 </label>
             </div>
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
@@ -238,6 +250,17 @@ function editFeed(feedId) {
     // innerHTML replacement above destroyed the focused Edit button; drop
     // focus into the form it opened instead of leaving it on <body>.
     row.querySelector('input, select, textarea')?.focus();
+}
+
+function removeFeedMuteChip(feedId, kwToRemove) {
+    const input = document.getElementById(`feed-mute-input-${feedId}`);
+    if (!input) return;
+    const existing = input.value.split(',').map(s => s.trim()).filter(Boolean);
+    const updated = existing.filter(k => k.toLowerCase() !== kwToRemove.toLowerCase());
+    input.value = updated.join(', ');
+    const row = document.getElementById(`feed-row-${feedId}`);
+    if (row) row.dataset.muteKeywords = input.value;
+    editFeed(feedId);
 }
 
 async function retryPost(postedId, btn) {
@@ -922,6 +945,67 @@ function readerUpdateComposeCounters() {
     });
 }
 
+// ── Reader Mute Training (Phase 4) ──────────────────────────────────────────
+
+function readerOpenMute(itemId, defaultTitle = '') {
+    const dlg = document.getElementById('reader-mute-dialog');
+    if (!dlg) return;
+    const form = document.getElementById('reader-mute-form');
+    if (form) form.reset();
+    document.getElementById('mute-item-id').value = itemId;
+
+    // Check if user has highlighted text inside this item
+    let phrase = '';
+    const sel = window.getSelection ? window.getSelection().toString().trim() : '';
+    if (sel && sel.length <= 60) {
+        phrase = sel;
+    } else if (defaultTitle) {
+        phrase = defaultTitle.slice(0, 60);
+    }
+    const input = document.getElementById('mute-phrase-input');
+    if (input) input.value = phrase;
+
+    dlg.showModal();
+    input?.focus();
+}
+
+async function readerSubmitMute(form) {
+    const btn = document.getElementById('mute-submit-btn');
+    if (!btn || btn.disabled) return false;
+    const itemId = document.getElementById('mute-item-id').value;
+    const phrase = document.getElementById('mute-phrase-input').value.trim();
+    const scopeEl = form.querySelector('input[name="scope"]:checked');
+    const scope = scopeEl ? scopeEl.value : 'feed';
+
+    if (!phrase) return false;
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Muting...';
+
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/mute`, {
+            method: 'POST',
+            body: new URLSearchParams({ phrase, scope }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showStatus(btn, data.detail || 'Failed to mute phrase', 'error');
+            return false;
+        }
+
+        document.getElementById('reader-mute-dialog')?.close();
+        readerMuteUndoToast(phrase, data.affected_feed_ids);
+        reloadPreservingScroll();
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
+    return false;
+}
+
 async function readerOpenCompose(itemId) {
     const dlg = document.getElementById('reader-compose');
     if (!dlg) return;
@@ -1266,6 +1350,31 @@ function readerUndoToast(ids) {
     toast.appendChild(btn);
     document.body.appendChild(toast);
     setTimeout(() => { toast.remove(); sessionStorage.removeItem('feedecho-reader-undo'); }, 5000);
+}
+
+function readerMuteUndoToast(phrase, feedIds) {
+    const toast = document.createElement('div');
+    toast.className = 'reader-undo-toast';
+    toast.setAttribute('role', 'status');
+    toast.appendChild(document.createTextNode(`Muted "${phrase}"`));
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Undo';
+    btn.onclick = async () => {
+        toast.remove();
+        try {
+            await fetch('/api/reader/unmute', {
+                method: 'POST',
+                body: new URLSearchParams({ phrase, feed_ids: (feedIds || []).join(',') }),
+            });
+            reloadPreservingScroll();
+        } catch (e) {
+            reloadPreservingScroll();
+        }
+    };
+    toast.appendChild(btn);
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.remove(); }, 6000);
 }
 
 async function readerUndo(ids) {

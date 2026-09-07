@@ -5,6 +5,7 @@
 
 {% if feed_options or destination_options or filtered %}
 <form method="get" action="/history" class="inline-form filter-form">
+    {% if filters.item_id %}<input type="hidden" name="item_id" value="{{ filters.item_id }}">{% endif %}
     <label for="history-feed">Feed</label>
     <select name="feed" id="history-feed">
         <option value="">All feeds</option>

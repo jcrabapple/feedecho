@@ -206,4 +206,29 @@
     <div id="compose-results" class="compose-results" style="display: none;"></div>
   </form>
 </dialog>
+
+<dialog id="reader-mute-dialog" class="reader-compose" aria-labelledby="mute-dialog-title">
+  <form id="reader-mute-form" onsubmit="readerSubmitMute(this); return false;">
+    <input type="hidden" name="item_id" id="mute-item-id" value="">
+    <h3 id="mute-dialog-title" style="margin-top:0;">Mute phrase</h3>
+    <p class="hint">Hide articles containing this phrase from your reader view.</p>
+    <div class="form-row">
+      <label>Phrase to mute
+        <input type="text" name="phrase" id="mute-phrase-input" maxlength="60" required placeholder="e.g. sponsored, deal">
+      </label>
+    </div>
+    <div class="form-row" style="margin-top: 0.5rem;">
+      <label style="display:inline-flex; align-items:center; gap: 0.4rem; margin-right: 1rem;">
+        <input type="radio" name="scope" value="feed" checked> This feed only
+      </label>
+      <label style="display:inline-flex; align-items:center; gap: 0.4rem;">
+        <input type="radio" name="scope" value="all"> All read-enabled feeds
+      </label>
+    </div>
+    <div class="compose-actions" style="margin-top: 1rem;">
+      <button type="button" class="btn-sm" onclick="document.getElementById('reader-mute-dialog').close()">Cancel</button>
+      <button type="submit" class="btn-sm btn-primary" id="mute-submit-btn">Mute</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

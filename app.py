@@ -2265,21 +2265,15 @@ def _parse_destination_filter(value: str) -> tuple[str | None, int | None]:
 
 
 @app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request, feed: str = "", account: str = ""):
-    """Post history, newest first, optionally filtered by feed and destination.
+async def history_page(request: Request, feed: str = "", account: str = "", item_id: str = ""):
+    """Post history, newest first, optionally filtered by feed, destination, and item_id.
 
-    Both filters are applied in SQL, before the LIMIT (issue #16). Narrowing
-    the already-truncated page client-side would only ever search the newest
-    100 rows across every feed — the exact case where a per-feed view is
-    wanted is the one it could not answer.
-
-    The dropdown options come from rows that actually exist in this user's
-    history, so a filter can never select an empty result, and they ignore the
-    active filter so choosing one does not remove the others.
+    Filters are applied in SQL, before the LIMIT (issue #16).
     """
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
     dest_type, dest_id = _parse_destination_filter(account)
+    item_id_filter = item_id.strip() if item_id else ""
 
     where = ["e.user_id = ?"]
     params: list = [uid]
@@ -2290,6 +2284,9 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
         where.append("e.destination_type = ?")
         where.append("e.destination_id = ?")
         params.extend([dest_type, dest_id])
+    if item_id_filter:
+        where.append("pi.item_id = ?")
+        params.append(item_id_filter)
 
     with get_db() as db:
         posts = db.execute(f"""
@@ -2344,8 +2341,9 @@ async def history_page(request: Request, feed: str = "", account: str = ""):
         filters={
             "feed": str(feed_id) if feed_id is not None else "",
             "account": f"{dest_type}:{dest_id}" if dest_type is not None else "",
+            "item_id": item_id_filter,
         },
-        filtered=feed_id is not None or dest_type is not None,
+        filtered=feed_id is not None or dest_type is not None or bool(item_id_filter),
     )
 
 
@@ -2571,7 +2569,53 @@ async def reader_page(
         ).fetchall()
 
         has_more = len(raw_items) > READER_PAGE_SIZE
-        items = raw_items[:READER_PAGE_SIZE]
+        raw_page_items = raw_items[:READER_PAGE_SIZE]
+
+        # Delivery badges: compute aggregate status specifically for the items on this page
+        # (avoid scanning entire user posted_items history on every reader page load).
+        if raw_page_items:
+            pairs = [(it["item_id"], it["feed_id"]) for it in raw_page_items]
+            pair_clauses = " OR ".join("(p.item_id = ? AND e.feed_id = ?)" for _ in pairs)
+            pair_params = [uid]
+            for it_id, f_id in pairs:
+                pair_params.extend([it_id, f_id])
+
+            delivery_rows = db.execute(
+                f"""
+                SELECT p.item_id, e.feed_id,
+                       SUM(CASE WHEN p.status = 'success'  THEN 1 ELSE 0 END) AS n_sent,
+                       SUM(CASE WHEN p.status = 'filtered' THEN 1 ELSE 0 END) AS n_filtered,
+                       SUM(CASE WHEN p.status IN ('failed','gave_up') THEN 1 ELSE 0 END) AS n_failed,
+                       SUM(CASE WHEN p.status = 'queued'   THEN 1 ELSE 0 END) AS n_queued,
+                       MAX(CASE WHEN p.status = 'filtered' THEN p.error_message ELSE NULL END) AS filter_reason
+                  FROM posted_items p
+                  JOIN echoes e ON e.id = p.echo_id
+                 WHERE e.user_id = ? AND e.one_shot = 0 AND ({pair_clauses})
+                 GROUP BY p.item_id, e.feed_id
+                """,
+                tuple(pair_params),
+            ).fetchall()
+
+            delivery_map = {(r["item_id"], r["feed_id"]): r for r in delivery_rows}
+            items = []
+            for it in raw_page_items:
+                d = dict(it)
+                deliv = delivery_map.get((it["item_id"], it["feed_id"]))
+                if deliv:
+                    d["n_sent"] = deliv["n_sent"]
+                    d["n_filtered"] = deliv["n_filtered"]
+                    d["n_failed"] = deliv["n_failed"]
+                    d["n_queued"] = deliv["n_queued"]
+                    d["filter_reason"] = deliv["filter_reason"]
+                else:
+                    d["n_sent"] = 0
+                    d["n_filtered"] = 0
+                    d["n_failed"] = 0
+                    d["n_queued"] = 0
+                    d["filter_reason"] = None
+                items.append(d)
+        else:
+            items = []
         next_cursor = ""
         if has_more and items:
             last_item = items[-1]
@@ -4618,6 +4662,111 @@ def reader_item_body(request: Request, item_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
     return {"content": row["content_text"] or row["content"] or row["summary"] or ""}
+
+
+# ── Reader Mute Training (Phase 4) ──────────────────────────────────────────
+
+@app.post("/api/reader/{item_id}/mute")
+def reader_mute(
+    request: Request,
+    item_id: int,
+    phrase: str = Form(...),
+    scope: str = Form("feed"),
+):
+    """Append a phrase to mute_keywords for this feed or all read-enabled feeds."""
+    uid = current_user_id(request)
+    phrase = phrase.strip()
+    if not phrase or len(phrase) > 60:
+        raise HTTPException(status_code=400, detail="Phrase must be between 1 and 60 characters")
+    if "," in phrase:
+        raise HTTPException(status_code=400, detail="Phrase cannot contain commas")
+    if scope not in ("feed", "all"):
+        raise HTTPException(status_code=400, detail="Invalid scope (must be 'feed' or 'all')")
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        item = db.execute(
+            "SELECT i.id, i.feed_id FROM feed_items i"
+            " JOIN feeds f ON i.feed_id = f.id"
+            " WHERE i.id = ? AND f.user_id = ? AND f.deleted_at IS NULL",
+            (item_id, uid),
+        ).fetchone()
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        if scope == "feed":
+            target_feeds = db.execute(
+                "SELECT id, mute_keywords FROM feeds WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                (item["feed_id"], uid),
+            ).fetchall()
+        else:
+            target_feeds = db.execute(
+                "SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND read_enabled = 1 AND deleted_at IS NULL",
+                (uid,),
+            ).fetchall()
+
+        affected_feed_ids = []
+        for tf in target_feeds:
+            existing = [k.strip() for k in (tf["mute_keywords"] or "").split(",") if k.strip()]
+            if not any(k.casefold() == phrase.casefold() for k in existing):
+                existing.append(phrase)
+                new_kw_str = ", ".join(existing)
+                db.execute(
+                    "UPDATE feeds SET mute_keywords = ? WHERE id = ? AND user_id = ?",
+                    (new_kw_str, tf["id"], uid),
+                )
+                affected_feed_ids.append(tf["id"])
+
+    return {
+        "success": True,
+        "phrase": phrase,
+        "scope": scope,
+        "affected_feed_ids": affected_feed_ids,
+    }
+
+
+@app.post("/api/reader/unmute")
+def reader_unmute(
+    request: Request,
+    phrase: str = Form(...),
+    feed_ids: str = Form(...),
+):
+    """Remove a previously muted phrase from specified feeds (undo support)."""
+    uid = current_user_id(request)
+    phrase = phrase.strip()
+    if not phrase:
+        raise HTTPException(status_code=400, detail="Phrase cannot be empty")
+
+    fids = []
+    for part in feed_ids.split(","):
+        fid = _filter_int(part.strip())
+        if fid is not None:
+            fids.append(fid)
+
+    if not fids:
+        return {"success": True, "phrase": phrase, "count": 0}
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        placeholders = ", ".join("?" for _ in fids)
+        target_feeds = db.execute(
+            f"SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND id IN ({placeholders}) AND deleted_at IS NULL",
+            (uid, *fids),
+        ).fetchall()
+
+        count = 0
+        for tf in target_feeds:
+            existing = [k.strip() for k in (tf["mute_keywords"] or "").split(",") if k.strip()]
+            filtered = [k for k in existing if k.casefold() != phrase.casefold()]
+            if len(filtered) != len(existing):
+                new_kw_str = ", ".join(filtered)
+                db.execute(
+                    "UPDATE feeds SET mute_keywords = ? WHERE id = ? AND user_id = ?",
+                    (new_kw_str, tf["id"], uid),
+                )
+                count += 1
+
+    return {"success": True, "phrase": phrase, "count": count}
 
 
 @app.get("/api/reader/new-count")

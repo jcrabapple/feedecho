@@ -852,6 +852,10 @@ def init_db_sqlite() -> None:
             ON posted_items(echo_id, item_id)
         """)
         db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_items_item_id
+            ON posted_items(item_id)
+        """)
+        db.execute("""
             CREATE INDEX IF NOT EXISTS idx_posted_items_reclaim
             ON posted_items(status, claimed_at)
         """)
@@ -1334,6 +1338,10 @@ def init_db_postgres() -> None:
         db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_posted_items_echo_item
             ON posted_items(echo_id, item_id)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_items_item_id
+            ON posted_items(item_id)
         """)
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_posted_items_reclaim

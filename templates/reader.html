@@ -147,4 +147,63 @@
   </table>
   <p><button class="btn-sm" type="button" onclick="document.getElementById('reader-shortcuts').close()">Close</button></p>
 </dialog>
+
+<dialog id="reader-compose" class="reader-compose" aria-labelledby="compose-dialog-title">
+  <form id="reader-compose-form" onsubmit="readerSubmitCompose(this); return false;">
+    <input type="hidden" name="item_id" id="compose-item-id">
+    <div class="compose-header">
+      <h3 id="compose-dialog-title" class="compose-title">Compose post</h3>
+      <p id="compose-subtitle" class="compose-subtitle"></p>
+    </div>
+
+    <div class="compose-section">
+      <span class="compose-label">Destinations</span>
+      <div id="compose-destinations" class="compose-dest-list">
+        {% for d in shout_destinations %}
+        <label class="compose-dest-label">
+          <input type="checkbox" name="destinations" value="{{ d.value }}" data-limit="{{ d.limit or '' }}">
+          <span>{{ d.label }}</span>
+          <span class="compose-dest-counter" data-dest="{{ d.value }}"></span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="compose-section">
+      <div class="compose-body-head">
+        <label for="compose-body" class="compose-label">Post body</label>
+        <button type="button" class="btn-sm" onclick="readerToggleCommentary()" id="compose-comment-toggle">+ Add commentary</button>
+      </div>
+      <div id="compose-comment-wrap" style="display: none; margin-bottom: 0.5rem;">
+        <input type="text" id="compose-commentary" placeholder="Your thoughts or note to prepend…" class="compose-comment-input">
+        <button type="button" class="btn-sm" onclick="readerInsertCommentary()">Insert</button>
+      </div>
+      <textarea name="content" id="compose-body" rows="4" spellcheck="true" required></textarea>
+    </div>
+
+    <div class="compose-section compose-media-section" id="compose-media-wrap" style="display: none;">
+      <span class="compose-label">Image</span>
+      <div class="compose-media-row">
+        <img id="compose-image-preview" src="" alt="" class="compose-image-thumb">
+        <div class="compose-media-controls">
+          <label class="compose-checkbox-inline">
+            <input type="checkbox" name="attach_image" id="compose-attach-image" value="1">
+            <span>Attach image</span>
+          </label>
+          <label for="compose-image-alt" class="compose-alt-label">Alt text
+            <input type="text" name="image_alt" id="compose-image-alt" placeholder="Describe image for screen readers">
+          </label>
+          <small id="compose-alt-hint" class="hint"></small>
+        </div>
+      </div>
+    </div>
+
+    <div class="compose-actions">
+      <button type="button" class="btn-sm" onclick="document.getElementById('reader-compose').close()">Cancel</button>
+      <button type="button" class="btn-sm" id="compose-queue-btn" disabled title="Queue coming in Phase 3">Add to queue</button>
+      <button type="submit" class="btn-sm btn-primary" id="compose-submit-btn">Post now</button>
+    </div>
+    <div id="compose-results" class="compose-results" style="display: none;"></div>
+  </form>
+</dialog>
 {% endblock %}

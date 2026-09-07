@@ -882,13 +882,222 @@ function readerApplyFolderCollapses() {
     });
 }
 
-function readerOpenShout(itemId) {
-    const dlg = document.getElementById('shout-' + itemId);
+// ── Reader Compose Dialog (Phase 2) ──────────────────────────────────────────
+let readerComposeItemData = null;
+
+function readerCountGraphemes(str) {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+        return Array.from(seg.segment(str)).length;
+    }
+    // Fallback: array split handles surrogate pairs
+    return Array.from(str).length;
+}
+
+function readerUpdateComposeCounters() {
+    const textarea = document.getElementById('compose-body');
+    if (!textarea) return;
+    const text = textarea.value;
+    const graphemeCount = readerCountGraphemes(text);
+    const charCount = text.length;
+
+    document.querySelectorAll('#compose-destinations .compose-dest-label').forEach((label) => {
+        const input = label.querySelector('input[type="checkbox"]');
+        const counter = label.querySelector('.compose-dest-counter');
+        if (!input || !counter) return;
+        const limitStr = input.dataset.limit;
+        if (!limitStr) {
+            counter.textContent = '';
+            return;
+        }
+        const limit = parseInt(limitStr, 10);
+        const isBluesky = input.value.startsWith('bluesky:');
+        const currentCount = isBluesky ? graphemeCount : charCount;
+        counter.textContent = `${currentCount}/${limit}`;
+        if (currentCount > limit) {
+            counter.classList.add('is-over');
+        } else {
+            counter.classList.remove('is-over');
+        }
+    });
+}
+
+async function readerOpenCompose(itemId) {
+    const dlg = document.getElementById('reader-compose');
     if (!dlg) return;
-    // Every open starts from the defaults; Cancel/Esc therefore discards edits.
-    const form = dlg.querySelector('form');
+
+    const form = document.getElementById('reader-compose-form');
     if (form) form.reset();
+    document.getElementById('compose-item-id').value = itemId;
+    document.getElementById('compose-results').style.display = 'none';
+    document.getElementById('compose-results').innerHTML = '';
+    document.getElementById('compose-comment-wrap').style.display = 'none';
+    document.getElementById('compose-commentary').value = '';
+
+    // Restore last selected destinations from localStorage
+    try {
+        const saved = JSON.parse(localStorage.getItem('feedecho-compose-destinations') || '[]');
+        if (Array.isArray(saved) && saved.length) {
+            document.querySelectorAll('#compose-destinations input[type="checkbox"]').forEach((cb) => {
+                cb.checked = saved.includes(cb.value);
+            });
+        }
+    } catch (e) {}
+
     dlg.showModal();
+
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/compose`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        readerComposeItemData = data;
+
+        document.getElementById('compose-subtitle').textContent = data.item.title || '(untitled)';
+        const textarea = document.getElementById('compose-body');
+        const firstDest = document.querySelector('#compose-destinations input[type="checkbox"]:checked') ||
+                          document.querySelector('#compose-destinations input[type="checkbox"]');
+        const defaultVal = (firstDest && data.rendered && data.rendered[firstDest.value]) ||
+                           (data.item.title + (data.item.link ? ' ' + data.item.link : ''));
+        textarea.value = defaultVal;
+
+        // Image section
+        const mediaWrap = document.getElementById('compose-media-wrap');
+        const imgPrev = document.getElementById('compose-image-preview');
+        const altInput = document.getElementById('compose-image-alt');
+        const altHint = document.getElementById('compose-alt-hint');
+
+        if (data.item.image_url) {
+            mediaWrap.style.display = 'flex';
+            imgPrev.src = data.item.image_url;
+            altInput.value = data.item.image_alt || '';
+            document.getElementById('compose-attach-image').checked = true;
+            if (data.item.image_alt) {
+                altHint.textContent = 'Alt text extracted from feed.';
+            } else {
+                altHint.textContent = 'AI alt text will be generated if configured in Settings.';
+            }
+        } else {
+            mediaWrap.style.display = 'none';
+        }
+
+        readerUpdateComposeCounters();
+    } catch (e) {
+        showStatus(document.getElementById('compose-submit-btn'), 'Failed to load preview: ' + e.message, 'error');
+    }
+}
+
+function readerToggleCommentary() {
+    const wrap = document.getElementById('compose-comment-wrap');
+    if (!wrap) return;
+    const isHidden = wrap.style.display === 'none';
+    wrap.style.display = isHidden ? 'flex' : 'none';
+    if (isHidden) {
+        document.getElementById('compose-commentary')?.focus();
+    }
+}
+
+function readerInsertCommentary() {
+    const input = document.getElementById('compose-commentary');
+    const textarea = document.getElementById('compose-body');
+    if (!input || !textarea) return;
+    const comment = input.value.trim();
+    if (!comment) return;
+    textarea.value = comment + '\n\n' + textarea.value;
+    input.value = '';
+    document.getElementById('compose-comment-wrap').style.display = 'none';
+    textarea.focus();
+    readerUpdateComposeCounters();
+}
+
+async function readerSubmitCompose(form) {
+    const btn = document.getElementById('compose-submit-btn');
+    if (btn.disabled) return false;
+
+    const checkedBoxes = Array.from(document.querySelectorAll('#compose-destinations input[type="checkbox"]:checked'));
+    if (!checkedBoxes.length) {
+        showStatus(btn, 'Please select at least one destination.', 'error');
+        return false;
+    }
+    if (checkedBoxes.length > 5) {
+        showStatus(btn, 'You can select at most 5 destinations.', 'error');
+        return false;
+    }
+
+    // Save destination selection to localStorage
+    try {
+        const destVals = checkedBoxes.map((cb) => cb.value);
+        localStorage.setItem('feedecho-compose-destinations', JSON.stringify(destVals));
+    } catch (e) {}
+
+    const itemId = document.getElementById('compose-item-id').value;
+    const content = document.getElementById('compose-body').value.trim();
+    if (!content) {
+        showStatus(btn, 'Post body cannot be empty.', 'error');
+        return false;
+    }
+
+    const attachImage = document.getElementById('compose-attach-image')?.checked ? '1' : '0';
+    const imageAlt = document.getElementById('compose-image-alt')?.value || '';
+
+    const body = new URLSearchParams({
+        destinations: checkedBoxes.map((cb) => cb.value).join(','),
+        content: content,
+        attach_image: attachImage,
+        image_alt: imageAlt,
+    });
+
+    btn.disabled = true;
+    const resultsContainer = document.getElementById('compose-results');
+    resultsContainer.style.display = 'none';
+    resultsContainer.innerHTML = '';
+
+    try {
+        const resp = await fetch(`/api/reader/${itemId}/compose`, { method: 'POST', body });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showStatus(btn, 'Compose failed: ' + (data.detail || resp.statusText), 'error');
+            return false;
+        }
+
+        resultsContainer.style.display = 'flex';
+        let anyFailed = false;
+
+        data.results.forEach((res) => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'compose-res-item ' + (res.success ? 'is-success' : 'is-error');
+            const destLabel = res.destination;
+            if (res.success) {
+                itemDiv.textContent = `✓ ${destLabel}: posted successfully` + (res.post_url ? ' (view in History)' : '');
+            } else {
+                anyFailed = true;
+                itemDiv.textContent = `✗ ${destLabel}: ${res.error_message || 'failed'}`;
+            }
+            resultsContainer.appendChild(itemDiv);
+        });
+
+        if (!anyFailed) {
+            setTimeout(() => {
+                document.getElementById('reader-compose')?.close();
+                readerToast('Posted successfully to ' + data.results.length + ' destination(s)');
+            }, 1200);
+        }
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+    return false;
+}
+
+// Live character / grapheme counter updates
+document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'compose-body') {
+        readerUpdateComposeCounters();
+    }
+});
+
+function readerOpenShout(itemId) {
+    readerOpenCompose(itemId);
 }
 
 // Toggle the variables tooltip (tap/click/Enter on the ⓘ trigger). On touch

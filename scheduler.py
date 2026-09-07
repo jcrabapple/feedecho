@@ -2286,6 +2286,24 @@ def _flush_queue() -> None:
                 (now_ts,),
             ).fetchall()
 
+    # Pre-compute per-user hourly post counts once per tick (hoisted out of the loop)
+    user_hourly_counts: dict[int, int] = {}
+    user_caps: dict[int, int] = {}
+    if settings.MULTI:
+        hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        with get_db() as db:
+            counts = db.execute(
+                """
+                SELECT e.user_id AS uid, COUNT(*) AS c
+                  FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id
+                 WHERE pi.status = 'success' AND pi.posted_at >= ?
+                 GROUP BY e.user_id
+                """,
+                (hour_ago,),
+            ).fetchall()
+            for r in counts:
+                user_hourly_counts[r["uid"]] = r["c"]
+
     for r in due:
         qp_id = r["id"]
         claim_token = secrets.token_urlsafe(16)
@@ -2315,35 +2333,27 @@ def _flush_queue() -> None:
         if not row:
             continue
 
-        # Enforce max_posts_per_hour for the queue (multi mode only)
+        # Enforce max_posts_per_hour for the queue (multi mode only, using hoisted counts)
         if settings.MULTI:
-            with get_db() as db:
-                u = db.execute(
-                    "SELECT plan FROM users WHERE id = ?", (row["user_id"],)
-                ).fetchone()
-                if u:
-                    cap = plans.posts_per_hour_cap(u["plan"])
-                    if cap:
-                        hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-                        recent = db.execute(
-                            "SELECT COUNT(*) AS c FROM posted_items pi"
-                            " JOIN echoes e ON pi.echo_id = e.id"
-                            " WHERE e.user_id = ? AND pi.status = 'success'"
-                            " AND pi.posted_at >= ?",
-                            (row["user_id"], hour_ago),
-                        ).fetchone()
-                        if recent and recent["c"] >= cap:
-                            logger.info(
-                                "Queue flush: user %s hit posts_per_hour cap (%d/%d), skipping",
-                                row["user_id"], recent["c"], cap,
-                            )
-                            # Release the claim back to queued for next tick
-                            db.execute(
-                                "UPDATE queued_posts SET status = 'queued', claim_token = NULL, claimed_at = NULL"
-                                " WHERE id = ? AND claim_token = ?",
-                                (qp_id, claim_token),
-                            )
-                            continue
+            uid = row["user_id"]
+            if uid not in user_caps:
+                with get_db() as db:
+                    u = db.execute("SELECT plan FROM users WHERE id = ?", (uid,)).fetchone()
+                    user_caps[uid] = plans.posts_per_hour_cap(u["plan"]) if u else 0
+            cap = user_caps.get(uid, 0)
+            if cap and user_hourly_counts.get(uid, 0) >= cap:
+                logger.info(
+                    "Queue flush: user %s hit posts_per_hour cap (%d/%d), skipping",
+                    uid, user_hourly_counts.get(uid, 0), cap,
+                )
+                # Release the claim back to queued for next tick
+                with get_db() as db:
+                    db.execute(
+                        "UPDATE queued_posts SET status = 'queued', claim_token = NULL, claimed_at = NULL"
+                        " WHERE id = ? AND claim_token = ?",
+                        (qp_id, claim_token),
+                    )
+                continue
 
         # Reuse the echo_id stored at enqueue time (idempotency key for crash recovery)
         echo_id = row["echo_id"]
@@ -2426,27 +2436,55 @@ def _flush_queue() -> None:
                 final_status = "sent" if (pi and pi["status"] == "success") else "failed"
                 err_msg = pi["error_message"] if pi else "Unknown dispatch error"
                 pi_id = pi["id"] if pi else None
-                db.execute(
-                    """
-                    UPDATE queued_posts
-                       SET status = ?, posted_item_id = ?, error_message = ?,
-                           attempt_count = attempt_count + 1
-                     WHERE id = ? AND claim_token = ?
-                    """,
-                    (final_status, pi_id, err_msg if final_status == "failed" else None, qp_id, claim_token),
-                )
+
+                new_attempt = row["attempt_count"] + 1
+                if final_status == "failed":
+                    # Clear the stale posted_items row so _claim_post can create
+                    # a fresh one on the next auto-retry attempt.
+                    if pi:
+                        db.execute("DELETE FROM posted_items WHERE id = ?", (pi["id"],))
+                    # Auto-retry with backoff: up to 3 attempts, then terminal
+                    if new_attempt < 3:
+                        final_status = "queued"
+                        backoff_minutes = new_attempt * 10
+                        retry_at = (datetime.now(timezone.utc) + timedelta(minutes=backoff_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+                        db.execute(
+                            "UPDATE queued_posts SET status = 'queued', error_message = ?,"
+                            " attempt_count = ?, scheduled_at = ?, claim_token = NULL, claimed_at = NULL"
+                            " WHERE id = ? AND claim_token = ?",
+                            (err_msg, new_attempt, retry_at, qp_id, claim_token),
+                        )
+                    else:
+                        db.execute(
+                            "UPDATE queued_posts SET status = 'failed', posted_item_id = ?, error_message = ?,"
+                            " attempt_count = ? WHERE id = ? AND claim_token = ?",
+                            (pi_id, err_msg, new_attempt, qp_id, claim_token),
+                        )
+                else:
+                    db.execute(
+                        "UPDATE queued_posts SET status = 'sent', posted_item_id = ?, error_message = NULL,"
+                        " attempt_count = ? WHERE id = ? AND claim_token = ?",
+                        (pi_id, new_attempt, qp_id, claim_token),
+                    )
         except Exception as exc:
             logger.exception("Queue flush: error processing queued post %s", qp_id)
-            with get_db() as db:
-                db.execute(
-                    """
-                    UPDATE queued_posts
-                       SET status = 'failed', error_message = ?,
-                           attempt_count = attempt_count + 1
-                     WHERE id = ? AND claim_token = ?
-                    """,
-                    (f"Dispatch exception: {exc}", qp_id, claim_token),
-                )
+            new_attempt = row["attempt_count"] + 1
+            if new_attempt < 3:
+                with get_db() as db:
+                    retry_at = (datetime.now(timezone.utc) + timedelta(minutes=new_attempt * 10)).strftime("%Y-%m-%d %H:%M:%S")
+                    db.execute(
+                        "UPDATE queued_posts SET status = 'queued', error_message = ?,"
+                        " attempt_count = ?, scheduled_at = ?, claim_token = NULL, claimed_at = NULL"
+                        " WHERE id = ? AND claim_token = ?",
+                        (f"Dispatch exception: {exc}", new_attempt, retry_at, qp_id, claim_token),
+                    )
+            else:
+                with get_db() as db:
+                    db.execute(
+                        "UPDATE queued_posts SET status = 'failed', error_message = ?,"
+                        " attempt_count = ? WHERE id = ? AND claim_token = ?",
+                        (f"Dispatch exception: {exc}", new_attempt, qp_id, claim_token),
+                    )
 
 
 def flush_drips() -> None:

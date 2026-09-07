@@ -1882,6 +1882,7 @@ async def queue_page(request: Request):
                 "scheduled_at": r["scheduled_at"],
                 "status": r["status"],
                 "attempt_count": r["attempt_count"],
+                "error_message": r["error_message"],
             })
 
     return render("queue.html", request, posts=posts)
@@ -2014,13 +2015,17 @@ def queue_cancel(request: Request, post_id: int):
     with get_db() as db:
         _require_reader(db, uid)
         row = db.execute(
-            "SELECT id, status FROM queued_posts WHERE id = ? AND user_id = ?",
+            "SELECT id, status, echo_id FROM queued_posts WHERE id = ? AND user_id = ?",
             (post_id, uid),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
         if row["status"] not in ("queued", "failed"):
             raise HTTPException(status_code=400, detail="Cannot cancel post that is already sending or completed")
+        # Delete the orphaned one-shot echo created at enqueue time
+        if row["echo_id"]:
+            db.execute("DELETE FROM posted_items WHERE echo_id = ?", (row["echo_id"],))
+            db.execute("DELETE FROM echoes WHERE id = ?", (row["echo_id"],))
         db.execute(
             "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status IN ('queued', 'failed')",
             (post_id, uid),
@@ -2035,13 +2040,20 @@ def queue_retry(request: Request, post_id: int):
     with get_db() as db:
         _require_reader(db, uid)
         row = db.execute(
-            "SELECT id, status, error_message FROM queued_posts WHERE id = ? AND user_id = ?",
+            "SELECT id, status, error_message, echo_id FROM queued_posts WHERE id = ? AND user_id = ?",
             (post_id, uid),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
         if row["status"] != "failed":
             raise HTTPException(status_code=400, detail="Can only retry failed posts")
+        # Clear the stale posted_items row from the failed attempt so _claim_post
+        # can create a fresh pending row on the next dispatch attempt.
+        if row["echo_id"]:
+            db.execute(
+                "DELETE FROM posted_items WHERE echo_id = ?",
+                (row["echo_id"],),
+            )
         db.execute(
             "UPDATE queued_posts SET status = 'queued', error_message = NULL, attempt_count = 0 WHERE id = ? AND user_id = ?",
             (post_id, uid),
@@ -5211,6 +5223,10 @@ def reader_compose(
                     norm_dt = as_utc_naive(scheduled_at.strip())
                     if not norm_dt:
                         raise HTTPException(status_code=400, detail="Invalid scheduled_at datetime")
+                    # Cap scheduling horizon to 365 days out
+                    max_dt = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=365)
+                    if norm_dt > max_dt:
+                        raise HTTPException(status_code=400, detail="Cannot schedule more than 365 days ahead")
                     target_time = norm_dt.strftime("%Y-%m-%d %H:%M:%S")
                 else:
                     target_time = _next_free_slot(db, uid, dest_type, destination_id)

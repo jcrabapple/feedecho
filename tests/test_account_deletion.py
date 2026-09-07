@@ -51,6 +51,10 @@ def _seed(uid):
     """Insert one of each owned table so the test proves a full sweep."""
     with database.get_db() as db:
         db.execute(
+            "INSERT INTO folders (user_id, name, position) VALUES (?, 'Test Folder', 1)",
+            (uid,),
+        )
+        db.execute(
             "INSERT INTO feeds (name, url, user_id) VALUES ('F', 'https://e.com/r', ?)",
             (uid,),
         )
@@ -112,7 +116,7 @@ def _seed(uid):
 def _user_scoped_counts(uid):
     with database.get_db() as db:
         out = {}
-        for table in ("feeds", "echoes", "accounts", "email_accounts", "settings"):
+        for table in ("feeds", "folders", "echoes", "accounts", "email_accounts", "settings"):
             out[table] = db.execute(
                 f"SELECT COUNT(*) AS c FROM {table} WHERE user_id = ?", (uid,)
             ).fetchone()["c"]

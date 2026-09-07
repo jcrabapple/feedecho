@@ -2209,7 +2209,7 @@ async def reader_page(
             (uid,),
         ).fetchall()
 
-        where = ["f.user_id = ?", "f.read_enabled = 1"]
+        where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL"]
         params: list = [uid]
         if feed_id is not None:
             where.append("i.feed_id = ?")
@@ -2588,6 +2588,7 @@ def _hard_delete_user(db, uid: int) -> None:
     for table in (
         "echoes",
         "feeds",
+        "folders",
         "accounts",
         "email_accounts",
         "bluesky_accounts",
@@ -3768,7 +3769,7 @@ def export_opml(request: Request):
 
 
 @app.post("/api/feeds/opml")
-async def import_opml(
+def import_opml(
     request: Request,
     opml: str = Form(""),
     file: UploadFile = File(None),
@@ -3777,7 +3778,7 @@ async def import_opml(
     uid = current_user_id(request)
     content_str = ""
     if file is not None and file.filename:
-        raw_bytes = await file.read(2_000_001)
+        raw_bytes = file.file.read(2_000_001)
         if len(raw_bytes) > 2_000_000:
             raise HTTPException(status_code=400, detail="OPML file exceeds 2 MB limit")
         try:
@@ -3817,11 +3818,17 @@ async def import_opml(
         imported = duplicate = invalid = capped = 0
         total_outlines = 0
 
+        def _local_tag(elem):
+            tag = elem.tag
+            return tag.split("}", 1)[1] if "}" in tag else tag
+
         def walk(node, current_folder_id: int | None, depth: int):
             nonlocal imported, duplicate, invalid, capped, total_outlines
             if depth > 10:
                 return
-            for child in node.findall("outline"):
+            for child in node:
+                if _local_tag(child).lower() != "outline":
+                    continue
                 total_outlines += 1
                 if total_outlines > 1000:
                     break
@@ -3875,7 +3882,11 @@ async def import_opml(
                             folder_id_to_pass = new_fid
                     walk(child, folder_id_to_pass, depth + 1)
 
-        body_elem = root.find("body")
+        body_elem = None
+        for child in root:
+            if _local_tag(child).lower() == "body":
+                body_elem = child
+                break
         walk(body_elem if body_elem is not None else root, None, 1)
 
     return RedirectResponse(
@@ -3892,7 +3903,7 @@ async def edit_feed(
     url: str = Form(...),
     poll_interval: int = Form(15),
     mute_keywords: str = Form(""),
-    folder_id: str = Form(""),
+    folder_id: str | None = Form(None),
 ):
     """Update a feed's name, URL, poll interval, mute keywords, or folder (issues #3, #11).
 
@@ -3909,7 +3920,7 @@ async def edit_feed(
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     mute_keywords = (mute_keywords or "").strip()
-    target_folder_id = _filter_int(folder_id)
+    target_folder_id = _filter_int(folder_id) if folder_id is not None else None
     with get_db() as db:
         if target_folder_id is not None:
             fol = db.execute(
@@ -3925,11 +3936,15 @@ async def edit_feed(
                 poll_interval, _user_plan(db, uid)
             )
         feed = db.execute(
-            "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            "SELECT url, folder_id FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
             (feed_id, uid),
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
+
+        # If folder_id was omitted entirely from the form, preserve existing folder
+        final_folder_id = target_folder_id if folder_id is not None else feed["folder_id"]
+
         if feed["url"] != url:
             db.execute(
                 """
@@ -3938,13 +3953,13 @@ async def edit_feed(
                        folder_id = ?, last_item_id = NULL
                  WHERE id = ? AND deleted_at IS NULL AND user_id = ?
                 """,
-                (name, url, poll_interval, mute_keywords, target_folder_id, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
             )
         else:
             db.execute(
                 "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?, folder_id = ? "
                 "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (name, url, poll_interval, mute_keywords, target_folder_id, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
             )
     return RedirectResponse(url="/feeds", status_code=303)
 
@@ -4176,7 +4191,7 @@ def reader_mark_all_read(
                 (feed_id,),
             ).fetchall()
             db.execute(
-                "UPDATE feed_items SET is_read = 1 WHERE feed_id = ?",
+                "UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND feed_id = ?",
                 (feed_id,),
             )
         elif folder_id is not None:
@@ -4192,7 +4207,7 @@ def reader_mark_all_read(
                 (uid, folder_id),
             ).fetchall()
             db.execute(
-                "UPDATE feed_items SET is_read = 1 WHERE feed_id IN"
+                "UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND feed_id IN"
                 " (SELECT id FROM feeds WHERE user_id = ? AND folder_id = ? AND deleted_at IS NULL)",
                 (uid, folder_id),
             )
@@ -4203,7 +4218,7 @@ def reader_mark_all_read(
                 (uid,),
             ).fetchall()
             db.execute(
-                "UPDATE feed_items SET is_read = 1 WHERE feed_id IN"
+                "UPDATE feed_items SET is_read = 1 WHERE is_read = 0 AND feed_id IN"
                 " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
                 (uid,),
             )

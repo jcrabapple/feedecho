@@ -989,7 +989,7 @@ def init_db_postgres() -> None:
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
-        _add_column_if_missing(db, "feeds", "folder_id", "INTEGER")
+        _add_column_if_missing(db, "feeds", "folder_id", "BIGINT")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS feed_items (

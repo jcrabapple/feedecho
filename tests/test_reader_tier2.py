@@ -114,6 +114,32 @@ class TestOpml:
         assert "exceeds 2 MB limit" in r.json()["detail"]
 
 
+def test_import_opml_with_xml_namespace(env):
+    opml = (
+        '<opml xmlns="http://opml.org/spec2" version="2.0">'
+        '  <body>'
+        '    <outline text="Namespaced Folder">'
+        '      <outline text="NS Feed" xmlUrl="https://example.com/nsfeed.xml"/>'
+        '    </outline>'
+        '  </body>'
+        '</opml>'
+    )
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/feeds/opml",
+            files={"file": ("ns.opml", opml.encode("utf-8"), "text/x-opml")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "imported=1" in r.headers["location"]
+    with database.get_db() as db:
+        fol = db.execute("SELECT id FROM folders WHERE name = 'Namespaced Folder'").fetchone()
+        assert fol is not None
+        f = db.execute("SELECT folder_id FROM feeds WHERE url = 'https://example.com/nsfeed.xml'").fetchone()
+        assert f is not None
+        assert f["folder_id"] == fol["id"]
+
+
 class TestMuteKeywords:
     def test_muted_items_hidden(self, env):
         with database.get_db() as db:

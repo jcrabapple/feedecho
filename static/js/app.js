@@ -193,6 +193,18 @@ function editFeed(feedId) {
     const url = row.dataset.url;
     const pollInterval = row.dataset.pollInterval || '15';
     const muteKeywords = row.dataset.muteKeywords || '';
+    const currentFolderId = row.dataset.folderId || '';
+
+    // Collect folder options from the page's feed-folder select if present
+    let folderOptions = '<option value="">(No folder)</option>';
+    const pageFolderSelect = document.getElementById('feed-folder');
+    if (pageFolderSelect) {
+        Array.from(pageFolderSelect.options).forEach((opt) => {
+            if (!opt.value) return;
+            const sel = opt.value === currentFolderId ? ' selected' : '';
+            folderOptions += `<option value="${escapeHTML(opt.value)}"${sel}>${escapeHTML(opt.text)}</option>`;
+        });
+    }
 
     row.innerHTML = `<td colspan="6">
         <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form" aria-label="Edit feed">
@@ -205,6 +217,11 @@ function editFeed(feedId) {
                 </label>
                 <label>Poll interval (min)
                     <input type="number" name="poll_interval" min="1" max="1440" value="${escapeHTML(pollInterval)}">
+                </label>
+                <label>Folder
+                    <select name="folder_id">
+                        ${folderOptions}
+                    </select>
                 </label>
                 <label>Mute keywords (comma-separated)
                     <input type="text" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
@@ -806,7 +823,10 @@ async function readerMarkAllRead(btn) {
     btn.disabled = true;
     const params = new URLSearchParams(window.location.search);
     const feedId = params.get('feed');
-    const body = feedId ? new URLSearchParams({ feed_id: feedId }) : new URLSearchParams();
+    const folderId = params.get('folder');
+    const body = new URLSearchParams();
+    if (feedId) body.set('feed_id', feedId);
+    else if (folderId) body.set('folder_id', folderId);
     try {
         const resp = await fetch('/api/reader/mark-all-read', { method: 'POST', body });
         const data = await resp.json();
@@ -817,6 +837,49 @@ async function readerMarkAllRead(btn) {
         reloadPreservingScroll();
     } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
     finally { btn.disabled = false; }
+}
+
+async function readerMarkFolderRead(folderId, btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const body = new URLSearchParams({ folder_id: folderId });
+    try {
+        const resp = await fetch('/api/reader/mark-all-read', { method: 'POST', body });
+        const data = await resp.json();
+        if (!resp.ok) { showStatus(btn, data.detail || 'Failed', 'error'); return; }
+        if (data.count > 0 && Array.isArray(data.ids) && data.ids.length) {
+            sessionStorage.setItem('feedecho-reader-undo', JSON.stringify({ ids: data.ids, at: Date.now() }));
+        }
+        reloadPreservingScroll();
+    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
+    finally { btn.disabled = false; }
+}
+
+function readerToggleFolderCollapse(folderId) {
+    const group = document.querySelector(`.reader-folder-group[data-folder-id="${folderId}"]`);
+    if (!group) return;
+    const isCollapsed = group.classList.toggle('is-collapsed');
+    const toggleBtn = group.querySelector('.reader-folder-toggle');
+    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', !isCollapsed);
+    try {
+        const key = 'feedecho-folder-collapsed-' + folderId;
+        if (isCollapsed) localStorage.setItem(key, '1');
+        else localStorage.removeItem(key);
+    } catch (e) {}
+}
+
+function readerApplyFolderCollapses() {
+    document.querySelectorAll('.reader-folder-group').forEach((group) => {
+        const folderId = group.dataset.folderId;
+        if (!folderId) return;
+        try {
+            if (localStorage.getItem('feedecho-folder-collapsed-' + folderId) === '1') {
+                group.classList.add('is-collapsed');
+                const toggleBtn = group.querySelector('.reader-folder-toggle');
+                if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
+            }
+        } catch (e) {}
+    });
 }
 
 function readerOpenShout(itemId) {
@@ -1201,6 +1264,7 @@ async function readerLoadMore(btn) {
     if (!document.querySelector('.reader')) return;
     readerApplyDensity();
     readerApplyAutoRead();
+    readerApplyFolderCollapses();
     readerStartPolling();
     const raw = sessionStorage.getItem('feedecho-reader-undo');
     if (raw) {

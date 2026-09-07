@@ -12,21 +12,69 @@
     <h2>Feeds</h2>
     <p class="reader-feeds-hint">Only feeds with reading enabled appear here. <a href="/feeds">Enable reading</a> on the Feeds page.</p>
     {% if feeds %}
-    <ul class="reader-feed-list">
-      {% for f in feeds %}
-      <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}" data-feed-id="{{ f.id }}">
-        <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}{% if fulltext %}&fulltext=1{% endif %}">
-          <span class="reader-feed-avatar" aria-hidden="true">{{ f.name[:1] | upper }}</span>
-          <span class="reader-feed-name">{{ f.name }}</span>
-          <span class="reader-feed-meta">
-            {% if f.last_error %}<span class="reader-feed-error" title="Last fetch failed: {{ f.last_error }}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>{% endif %}
-            {% if f.echo_count %}<span class="reader-feed-echo" title="{{ f.echo_count }} active echo{{ 's' if f.echo_count != 1 else '' }}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>{% endif %}
-            {% if f.unread %}<span class="reader-feed-unread">{{ f.unread }}</span>{% endif %}
-          </span>
-        </a>
-      </li>
+    <div class="reader-feed-groups">
+      {% for fol in folders %}
+        {% set fol_feeds = [] %}
+        {% for f in feeds %}{% if f.folder_id == fol.id %}{% set _ = fol_feeds.append(f) %}{% endif %}{% endfor %}
+        {% if fol_feeds %}
+        {% set fol_unread = fol_feeds | sum(attribute='unread') %}
+        <div class="reader-folder-group" data-folder-id="{{ fol.id }}">
+          <div class="reader-folder-header">
+            <button type="button" class="reader-folder-toggle" onclick="readerToggleFolderCollapse({{ fol.id }})" aria-expanded="true">
+              <span class="reader-folder-arrow" aria-hidden="true">▾</span>
+              <span class="reader-folder-name">{{ fol.name }}</span>
+            </button>
+            <div class="reader-folder-meta">
+              {% if fol_unread %}<span class="reader-feed-unread">{{ fol_unread }}</span>{% endif %}
+              <button type="button" class="reader-folder-mark-read" onclick="readerMarkFolderRead({{ fol.id }}, this)" title="Mark folder read" aria-label="Mark folder read">✓</button>
+            </div>
+          </div>
+          <ul class="reader-feed-list" id="reader-folder-feeds-{{ fol.id }}">
+            {% for f in fol_feeds %}
+            <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}" data-feed-id="{{ f.id }}">
+              <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}{% if fulltext %}&fulltext=1{% endif %}">
+                <span class="reader-feed-avatar" aria-hidden="true">{{ f.name[:1] | upper }}</span>
+                <span class="reader-feed-name">{{ f.name }}</span>
+                <span class="reader-feed-meta">
+                  {% if f.last_error %}<span class="reader-feed-error" title="Last fetch failed: {{ f.last_error }}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>{% endif %}
+                  {% if f.echo_count %}<span class="reader-feed-echo" title="{{ f.echo_count }} active echo{{ 's' if f.echo_count != 1 else '' }}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>{% endif %}
+                  {% if f.unread %}<span class="reader-feed-unread">{{ f.unread }}</span>{% endif %}
+                </span>
+              </a>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
       {% endfor %}
-    </ul>
+
+      {% set uncat_feeds = [] %}
+      {% for f in feeds %}{% if not f.folder_id %}{% set _ = uncat_feeds.append(f) %}{% endif %}{% endfor %}
+      {% if uncat_feeds %}
+      <div class="reader-folder-group" data-folder-id="uncategorized">
+        {% if folders %}
+        <div class="reader-folder-header">
+          <span class="reader-folder-name" style="padding-left: 0.5rem; font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Uncategorized</span>
+        </div>
+        {% endif %}
+        <ul class="reader-feed-list">
+          {% for f in uncat_feeds %}
+          <li class="reader-feed {% if current_feed == f.id | string %}active{% endif %}" data-feed-id="{{ f.id }}">
+            <a class="reader-feed-link" href="/reader?feed={{ f.id }}&view={{ view }}{% if fulltext %}&fulltext=1{% endif %}">
+              <span class="reader-feed-avatar" aria-hidden="true">{{ f.name[:1] | upper }}</span>
+              <span class="reader-feed-name">{{ f.name }}</span>
+              <span class="reader-feed-meta">
+                {% if f.last_error %}<span class="reader-feed-error" title="Last fetch failed: {{ f.last_error }}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>{% endif %}
+                {% if f.echo_count %}<span class="reader-feed-echo" title="{{ f.echo_count }} active echo{{ 's' if f.echo_count != 1 else '' }}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>{% endif %}
+                {% if f.unread %}<span class="reader-feed-unread">{{ f.unread }}</span>{% endif %}
+              </span>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </div>
     {% else %}
     <p class="empty-state">No feeds have reading enabled. <a href="/feeds">Turn on reading</a> for a feed to see it here.</p>
     {% endif %}
@@ -94,6 +142,7 @@
     <tr><td><code>is:starred</code></td><td>Only starred items</td></tr>
     <tr><td><code>is:unread</code> / <code>is:read</code></td><td>By read state</td></tr>
     <tr><td><code>feed:name</code></td><td>Match a feed name</td></tr>
+    <tr><td><code>folder:name</code></td><td>Match a folder name</td></tr>
     <tr><td><code>in:title</code> / <code>in:body</code></td><td>Scope the text search</td></tr>
   </table>
   <p><button class="btn-sm" type="button" onclick="document.getElementById('reader-shortcuts').close()">Close</button></p>

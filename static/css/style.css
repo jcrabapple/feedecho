@@ -1608,6 +1608,18 @@ details.account-section > summary:focus-visible {
 .reader-load-more { min-width: 140px; justify-content: center; font-weight: 600; }
 .reader-load-more.is-loading { opacity: 0.6; pointer-events: none; }
 
+/* Reader folders */
+.reader-folder-group { margin-bottom: 0.75rem; }
+.reader-folder-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.2rem; border-bottom: 1px solid var(--border); }
+.reader-folder-toggle { display: inline-flex; align-items: center; gap: 0.35rem; background: none; border: none; color: var(--text); font-weight: 700; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; padding: 0; }
+.reader-folder-toggle:hover { color: var(--primary); }
+.reader-folder-arrow { font-size: 0.75rem; transition: transform 0.15s ease; display: inline-block; }
+.reader-folder-meta { display: inline-flex; align-items: center; gap: 0.35rem; }
+.reader-folder-mark-read { background: none; border: 1px solid transparent; color: var(--text-muted); cursor: pointer; border-radius: 4px; padding: 0.1rem 0.3rem; font-size: 0.8rem; line-height: 1; }
+.reader-folder-mark-read:hover { color: var(--primary); border-color: var(--primary); background: var(--primary-wash); }
+.reader-folder-group.is-collapsed .reader-feed-list { display: none; }
+.reader-folder-group.is-collapsed .reader-folder-arrow { transform: rotate(-90deg); }
+
 /* ── A2: prefers-contrast: more ──────────────────────────────────────────────
    Increases border and text contrast when the user's OS is in high-contrast
    mode. Primarily sharpens the subtle border-on-surface aesthetic and bumps

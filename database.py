@@ -326,6 +326,20 @@ def init_db_sqlite() -> None:
                 )
 
         db.execute("""
+            CREATE TABLE IF NOT EXISTS folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_user_name
+            ON folders(user_id, LOWER(name))
+        """)
+
+        db.execute("""
             CREATE TABLE IF NOT EXISTS feeds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -342,6 +356,7 @@ def init_db_sqlite() -> None:
                 last_error TEXT,
                 deleted_at TIMESTAMP,
                 user_id INTEGER NOT NULL DEFAULT 1,
+                folder_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -351,6 +366,7 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
+        _add_column_if_missing(db, "feeds", "folder_id", "INTEGER")
         # Soft-delete marker: feeds are never hard-deleted by the app so that
         # echo configuration and posted-item history survive as an audit trail.
         _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
@@ -934,6 +950,20 @@ def init_db_postgres() -> None:
         """)
 
         db.execute("""
+            CREATE TABLE IF NOT EXISTS folders (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_user_name
+            ON folders(user_id, LOWER(name))
+        """)
+
+        db.execute("""
             CREATE TABLE IF NOT EXISTS feeds (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -950,6 +980,7 @@ def init_db_postgres() -> None:
                 last_error TEXT,
                 deleted_at TIMESTAMP,
                 user_id BIGINT NOT NULL DEFAULT 1,
+                folder_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -958,6 +989,7 @@ def init_db_postgres() -> None:
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
+        _add_column_if_missing(db, "feeds", "folder_id", "INTEGER")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS feed_items (

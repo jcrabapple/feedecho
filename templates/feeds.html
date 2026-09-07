@@ -10,20 +10,63 @@
     <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required>
     <label for="feed-poll-interval">Poll interval (minutes)</label>
     <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
+    <label for="feed-folder">Folder</label>
+    <select name="folder_id" id="feed-folder">
+        <option value="">(No folder)</option>
+        {% for folder in folders %}
+        <option value="{{ folder.id }}">{{ folder.name }}</option>
+        {% endfor %}
+    </select>
     <button type="submit">Add Feed</button>
 </form>
+
+<details class="account-section">
+    <summary>Folders</summary>
+    <div style="padding: 0.5rem 0;">
+        <form method="post" action="/api/folders" class="inline-form" style="margin-bottom: 1rem;">
+            <label for="new-folder-name">New folder</label>
+            <input type="text" name="name" id="new-folder-name" placeholder="Folder name" maxlength="60" required>
+            <button type="submit" class="btn-sm">Create Folder</button>
+        </form>
+        {% if folders %}
+        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem;">
+            {% for folder in folders %}
+            <li style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.4rem 0.6rem; background: var(--surface-light); border-radius: 6px;">
+                <span style="font-weight: 600;">📁 {{ folder.name }}</span>
+                <span style="display: inline-flex; gap: 0.4rem;">
+                    <form method="post" action="/api/folders/{{ folder.id }}/rename" class="inline" onsubmit="var n = prompt('Rename folder:', '{{ folder.name | e }}'); if (!n) return false; this.name.value = n;">
+                        <input type="hidden" name="name" value="">
+                        <button type="submit" class="btn-sm">Rename</button>
+                    </form>
+                    <form method="post" action="/api/folders/{{ folder.id }}/delete" class="inline" onsubmit="return confirm('Delete folder \'{{ folder.name | e }}\'? Feeds inside will become uncategorized.');">
+                        <button type="submit" class="btn-sm btn-danger">Delete</button>
+                    </form>
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</details>
 
 <details class="account-section">
     <summary>Import / export subscriptions (OPML)</summary>
     <div class="opml-actions">
         <a class="btn-sm" href="/api/feeds/opml">Export OPML</a>
-        <form method="post" action="/api/feeds/opml" class="opml-import-form">
-            <label for="opml">Import OPML (paste XML)</label>
-            <textarea name="opml" id="opml" rows="6" placeholder="Paste an OPML document to bulk-add subscriptions…"></textarea>
+        <form method="post" action="/api/feeds/opml" enctype="multipart/form-data" class="opml-import-form">
+            <label for="opml-file">Upload OPML file</label>
+            <input type="file" name="file" id="opml-file" accept=".opml,.xml,text/xml,text/x-opml">
+            <label for="opml">Or paste OPML XML</label>
+            <textarea name="opml" id="opml" rows="4" placeholder="Paste an OPML document to bulk-add subscriptions…"></textarea>
             <button type="submit" class="btn-sm">Import</button>
         </form>
-        {% if request.query_params.get('imported') %}
-        <p class="hint">Imported {{ request.query_params.get('imported') }} feed(s).</p>
+        {% if request.query_params.get('imported') is not none %}
+        <p class="hint">
+            Import summary: {{ request.query_params.get('imported', 0) }} imported,
+            {{ request.query_params.get('duplicate', 0) }} duplicate,
+            {{ request.query_params.get('invalid', 0) }} invalid,
+            {{ request.query_params.get('capped', 0) }} skipped by plan cap.
+        </p>
         {% endif %}
     </div>
 </details>
@@ -47,6 +90,7 @@
             data-name="{{ feed.name | e }}"
             data-url="{{ feed.url | e }}"
             data-poll-interval="{{ feed.poll_interval }}"
+            data-folder-id="{{ feed.folder_id or '' }}"
             data-mute-keywords="{{ (feed.mute_keywords or '') | e }}">
             <td data-label="Name">
                 {{ feed.name }}

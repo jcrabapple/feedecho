@@ -193,6 +193,7 @@ _instance_id = secrets.token_urlsafe(16)
 # released in a finally block. The TTL is the crash-safety net.
 FLUSH_DIGEST_LEASE_SECONDS = 15 * 60
 FLUSH_DRIP_LEASE_SECONDS = 5 * 60
+FLUSH_QUEUE_LEASE_SECONDS = 5 * 60
 
 
 def _acquire_job_lease(job_name: str, ttl_seconds: int) -> bool:
@@ -2229,6 +2230,150 @@ def _discard_drip_backlog(echo_id: int, reason: str) -> None:
     logger.info("Echo %s: %s", echo_id, reason)
 
 
+def flush_queue() -> None:
+    """Dispatch due items from the user-scheduled curation queue.
+
+    Runs every 5 minutes wrapped in a database job lease. Claims due posts
+    atomically, materializes a one-shot echo, dispatches with the stored content
+    verbatim via process_echo, and updates status, posted_item_id, and error.
+    """
+    if not _acquire_job_lease("flush_queue", FLUSH_QUEUE_LEASE_SECONDS):
+        return
+    try:
+        _flush_queue()
+    finally:
+        _release_job_lease("flush_queue")
+
+
+def _flush_queue() -> None:
+    now_ts = _now()
+    # Re-claim rows stuck in 'sending' past a 15-minute TTL (crash recovery)
+    ttl_expired = (datetime.now(timezone.utc) - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as db:
+        db.execute(
+            """
+            UPDATE queued_posts
+               SET status = 'queued', claim_token = NULL, claimed_at = NULL
+             WHERE status = 'sending' AND claimed_at <= ?
+            """,
+            (ttl_expired,),
+        )
+        due = db.execute(
+            """
+            SELECT id FROM queued_posts
+             WHERE status = 'queued' AND scheduled_at <= ?
+             ORDER BY scheduled_at ASC
+            """,
+            (now_ts,),
+        ).fetchall()
+
+    for r in due:
+        qp_id = r["id"]
+        claim_token = secrets.token_urlsafe(16)
+        claim_time = _now()
+        with get_db() as db:
+            claimed = db.execute(
+                """
+                UPDATE queued_posts
+                   SET status = 'sending', claim_token = ?, claimed_at = ?
+                 WHERE id = ? AND status = 'queued' AND scheduled_at <= ?
+                """,
+                (claim_token, claim_time, qp_id, now_ts),
+            )
+            # In sqlite rowcount indicates updated rows; in PG rowcount also indicates it
+            if claimed.rowcount != 1:
+                continue
+            row = db.execute(
+                """
+                SELECT q.*, f.name AS feed_name
+                  FROM queued_posts q
+                  LEFT JOIN feeds f ON q.feed_id = f.id
+                 WHERE q.id = ?
+                """,
+                (qp_id,),
+            ).fetchone()
+
+        if not row:
+            continue
+
+        # Materialize one-shot echo
+        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with get_db() as db:
+            echo_id = db.execute(
+                """
+                INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                   visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+                VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
+                """,
+                (
+                    row["feed_id"],
+                    row["destination_type"],
+                    row["destination_id"],
+                    row["visibility"] or "public",
+                    row["attach_image"],
+                    now_utc,
+                    row["user_id"],
+                ),
+            ).fetchone()["id"]
+            echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+
+        item = {
+            "id": row["item_id"],
+            "title": "",
+            "link": "",
+            "summary": "",
+            "content": "",
+            "content_text": "",
+            "content_link": "",
+            "author": "",
+            "date": "",
+            "image_url": "",
+            "image_alt": row["image_alt"] or "",
+        }
+
+        # If feed_item_id is still present, load any existing images/metadata
+        if row["feed_item_id"]:
+            with get_db() as db:
+                fi = db.execute(
+                    "SELECT * FROM feed_items WHERE id = ?", (row["feed_item_id"],)
+                ).fetchone()
+                if fi:
+                    item.update({
+                        "title": fi["title"] or "",
+                        "link": fi["link"] or "",
+                        "summary": fi["summary"] or "",
+                        "content": fi["content"] or "",
+                        "image_url": fi["image_url"] or "",
+                    })
+
+        ok = process_echo(
+            echo,
+            item,
+            feed_name=row["feed_name"] or "",
+            override_content=row["content"],
+        )
+
+        with get_db() as db:
+            pi = db.execute(
+                "SELECT id, status, post_url, error_message FROM posted_items"
+                " WHERE echo_id = ? AND item_id = ?",
+                (echo_id, row["item_id"]),
+            ).fetchone()
+
+            final_status = "sent" if (pi and pi["status"] == "success") else "failed"
+            err_msg = pi["error_message"] if pi else "Unknown dispatch error"
+            pi_id = pi["id"] if pi else None
+            db.execute(
+                """
+                UPDATE queued_posts
+                   SET status = ?, posted_item_id = ?, error_message = ?,
+                       attempt_count = attempt_count + 1
+                 WHERE id = ? AND claim_token = ?
+                """,
+                (final_status, pi_id, err_msg if final_status == "failed" else None, qp_id, claim_token),
+            )
+
+
 def flush_drips() -> None:
     """Release queued drip items whose rate window has room.
 
@@ -2671,6 +2816,17 @@ def start_scheduler() -> None:
     )
     # Run a drip flush shortly after startup
     scheduler.add_job(flush_drips, "date", id="startup_drip_flush", replace_existing=True)
+
+    # Queue flush job — dispatches human-scheduled curation queue posts
+    scheduler.add_job(
+        flush_queue,
+        trigger=IntervalTrigger(minutes=5),
+        id="flush_queue",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(flush_queue, "date", id="startup_queue_flush", replace_existing=True)
 
 
 def stop_scheduler() -> None:

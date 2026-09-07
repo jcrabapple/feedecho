@@ -122,6 +122,16 @@ def check_destination_allowance(current_count: int, plan: str) -> None:
         )
 
 
+def check_queue_allowance(current_count: int, plan: str) -> None:
+    """Raise PlanError when adding one more queued post would exceed the plan."""
+    cap = limit_for(plan, "queue_depth")
+    if cap and current_count >= cap:
+        raise PlanError(
+            f"Your plan allows {cap} queued post{'s' if cap != 1 else ''}. "
+            "Wait for posts to dispatch or upgrade your plan."
+        )
+
+
 def clamp_poll_interval(minutes: int, plan: str) -> int:
     """Clamp a requested poll interval down to the plan's floor.
 

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}FeedEcho — Curation Queue{% endblock %}
+{% block content %}
+<h1>Curation Queue</h1>
+
+{% if posts %}
+<div class="data-table-wrapper">
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Scheduled For</th>
+            <th>Destination</th>
+            <th>Feed</th>
+            <th>Content</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for post in posts %}
+        <tr id="queue-row-{{ post.id }}">
+            <td data-label="Scheduled For">
+                <small>
+                    {% if post.scheduled_at %}
+                    <time class="local-time" datetime="{{ post.scheduled_at | iso_utc }}">{{ post.scheduled_at | utc_text }} UTC</time>
+                    {% else %}—{% endif %}
+                </small>
+            </td>
+            <td data-label="Destination"><strong>{{ post.destination_label }}</strong></td>
+            <td data-label="Feed"><small>{{ post.feed_name }}</small></td>
+            <td data-label="Content" style="max-width: 320px; overflow-wrap: anywhere;">
+                <p style="margin: 0; white-space: pre-wrap; font-size: 0.9rem;">{{ post.content }}</p>
+            </td>
+            <td data-label="Status">
+                <span class="badge {% if post.status == 'queued' %}badge-info{% elif post.status == 'sending' %}badge-warning{% else %}badge-muted{% endif %}">{{ post.status }}</span>
+            </td>
+            <td data-label="Actions" class="action-cell">
+                <button class="btn-sm" type="button" onclick="withBusy(this, () => queuePostNow({{ post.id }}, this))">Post now</button>
+                <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
+                    <input type="hidden" name="direction" value="up">
+                    <button class="btn-sm" type="submit" title="Move earlier">↑</button>
+                </form>
+                <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
+                    <input type="hidden" name="direction" value="down">
+                    <button class="btn-sm" type="submit" title="Move later">↓</button>
+                </form>
+                <form method="post" action="/api/queue/{{ post.id }}/cancel" class="inline" onsubmit="return confirm('Cancel this queued post?');">
+                    <button class="btn-sm btn-danger" type="submit">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty-state">No posts scheduled in the queue. Open <a href="/reader">Reader</a> to compose and queue posts.</p>
+{% endif %}
+{% endblock %}

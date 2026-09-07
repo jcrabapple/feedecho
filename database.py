@@ -760,6 +760,49 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "posted_items", "next_retry_at", "TIMESTAMP")
 
         db.execute("""
+            CREATE TABLE IF NOT EXISTS queued_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                feed_item_id INTEGER,
+                item_id TEXT NOT NULL,
+                feed_id INTEGER NOT NULL,
+                destination_type TEXT NOT NULL,
+                destination_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                visibility TEXT DEFAULT 'public',
+                attach_image INTEGER NOT NULL DEFAULT 0,
+                image_alt TEXT,
+                scheduled_at TIMESTAMP NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                claim_token TEXT,
+                claimed_at TIMESTAMP,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                posted_item_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queued_posts_due
+            ON queued_posts(status, scheduled_at)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queued_posts_user
+            ON queued_posts(user_id, scheduled_at)
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS queue_settings (
+                user_id INTEGER NOT NULL,
+                destination_key TEXT NOT NULL,
+                queue_interval_minutes INTEGER NOT NULL DEFAULT 240,
+                queue_active_hours TEXT DEFAULT '09:00-21:00',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, destination_key)
+            )
+        """)
+
+        db.execute("""
             CREATE TABLE IF NOT EXISTS oauth_apps (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 instance TEXT NOT NULL UNIQUE,
@@ -1199,6 +1242,49 @@ def init_db_postgres() -> None:
                 next_retry_at TIMESTAMP,
                 posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS queued_posts (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL DEFAULT 1,
+                feed_item_id BIGINT,
+                item_id TEXT NOT NULL,
+                feed_id BIGINT NOT NULL,
+                destination_type TEXT NOT NULL,
+                destination_id BIGINT NOT NULL,
+                content TEXT NOT NULL,
+                visibility TEXT DEFAULT 'public',
+                attach_image INTEGER NOT NULL DEFAULT 0,
+                image_alt TEXT,
+                scheduled_at TIMESTAMP NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                claim_token TEXT,
+                claimed_at TIMESTAMP,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                posted_item_id BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queued_posts_due
+            ON queued_posts(status, scheduled_at)
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queued_posts_user
+            ON queued_posts(user_id, scheduled_at)
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS queue_settings (
+                user_id BIGINT NOT NULL,
+                destination_key TEXT NOT NULL,
+                queue_interval_minutes INTEGER NOT NULL DEFAULT 240,
+                queue_active_hours TEXT DEFAULT '09:00-21:00',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, destination_key)
             )
         """)
 

@@ -1009,9 +1009,9 @@ function readerInsertCommentary() {
     readerUpdateComposeCounters();
 }
 
-async function readerSubmitCompose(form) {
-    const btn = document.getElementById('compose-submit-btn');
-    if (btn.disabled) return false;
+async function readerSubmitCompose(form, isEnqueue = false) {
+    const btn = isEnqueue ? document.getElementById('compose-queue-btn') : document.getElementById('compose-submit-btn');
+    if (!btn || btn.disabled) return false;
 
     const checkedBoxes = Array.from(document.querySelectorAll('#compose-destinations input[type="checkbox"]:checked'));
     if (!checkedBoxes.length) {
@@ -1044,6 +1044,7 @@ async function readerSubmitCompose(form) {
         content: content,
         attach_image: attachImage,
         image_alt: imageAlt,
+        enqueue: isEnqueue ? '1' : '0',
     });
 
     btn.disabled = true;
@@ -1055,7 +1056,13 @@ async function readerSubmitCompose(form) {
         const resp = await fetch(`/api/reader/${itemId}/compose`, { method: 'POST', body });
         const data = await resp.json();
         if (!resp.ok) {
-            showStatus(btn, 'Compose failed: ' + (data.detail || resp.statusText), 'error');
+            showStatus(btn, (isEnqueue ? 'Queue failed: ' : 'Compose failed: ') + (data.detail || resp.statusText), 'error');
+            return false;
+        }
+
+        if (data.queued) {
+            document.getElementById('reader-compose')?.close();
+            readerToast('Added to queue (' + data.results.length + ' post' + (data.results.length === 1 ? '' : 's') + ')');
             return false;
         }
 
@@ -1087,6 +1094,26 @@ async function readerSubmitCompose(form) {
         btn.disabled = false;
     }
     return false;
+}
+
+async function queuePostNow(postId, btn) {
+    try {
+        const resp = await fetch(`/api/queue/${postId}/post-now`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showStatus(btn, data.detail || 'Dispatch failed', 'error');
+            return;
+        }
+        if (data.success) {
+            const row = document.getElementById(`queue-row-${postId}`);
+            if (row) row.remove();
+            readerToast('Post dispatched successfully' + (data.post_url ? ' — view in History' : ''));
+        } else {
+            showStatus(btn, 'Post failed', 'error');
+        }
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    }
 }
 
 // Live character / grapheme counter updates

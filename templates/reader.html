@@ -200,7 +200,7 @@
 
     <div class="compose-actions">
       <button type="button" class="btn-sm" onclick="document.getElementById('reader-compose').close()">Cancel</button>
-      <button type="button" class="btn-sm" id="compose-queue-btn" disabled title="Queue coming in Phase 3">Add to queue</button>
+      <button type="button" class="btn-sm" id="compose-queue-btn" onclick="readerSubmitCompose(document.getElementById('reader-compose-form'), true)">Add to queue</button>
       <button type="submit" class="btn-sm btn-primary" id="compose-submit-btn">Post now</button>
     </div>
     <div id="compose-results" class="compose-results" style="display: none;"></div>

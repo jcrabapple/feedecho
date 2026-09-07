@@ -17,6 +17,7 @@ import logging
 import threading
 import time
 import uuid
+import secrets
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -1847,6 +1848,256 @@ async def feeds_page(request: Request):
     return render("feeds.html", request, feeds=feeds, folders=folders, feed_echoes=feed_echoes)
 
 
+@app.get("/queue", response_class=HTMLResponse)
+async def queue_page(request: Request):
+    """Curation desk queue: human-scheduled posts waiting for release (Phase 3)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        rows = db.execute(
+            """
+            SELECT q.*, f.name AS feed_name
+              FROM queued_posts q
+              LEFT JOIN feeds f ON q.feed_id = f.id
+             WHERE q.user_id = ? AND q.status IN ('queued', 'sending')
+             ORDER BY q.scheduled_at ASC
+            """,
+            (uid,),
+        ).fetchall()
+
+        # Destination labels map
+        dests = _shout_destinations(uid)
+        dest_labels = {d["value"]: d["label"] for d in dests}
+
+        # Formatted list
+        posts = []
+        for r in rows:
+            posts.append({
+                "id": r["id"],
+                "feed_name": r["feed_name"] or "Unknown feed",
+                "destination_label": dest_labels.get(f"{r['destination_type']}:{r['destination_id']}", f"{r['destination_type']}:{r['destination_id']}"),
+                "destination_type": r["destination_type"],
+                "destination_id": r["destination_id"],
+                "content": r["content"],
+                "scheduled_at": r["scheduled_at"],
+                "status": r["status"],
+                "attempt_count": r["attempt_count"],
+            })
+
+    return render("queue.html", request, posts=posts)
+
+
+@app.post("/api/queue/{post_id}/post-now")
+def queue_post_now(request: Request, post_id: int):
+    uid = current_user_id(request)
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    claim_token = secrets.token_urlsafe(16)
+    with get_db() as db:
+        _require_reader(db, uid)
+        # Atomically transition from queued to sending to prevent races with flush_queue
+        claimed = db.execute(
+            """
+            UPDATE queued_posts
+               SET status = 'sending', claim_token = ?, claimed_at = ?
+             WHERE id = ? AND user_id = ? AND status = 'queued'
+            """,
+            (claim_token, now_utc, post_id, uid),
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Post is already sending or has been processed")
+
+        row = db.execute(
+            """
+            SELECT q.*, f.name AS feed_name
+              FROM queued_posts q
+              LEFT JOIN feeds f ON q.feed_id = f.id
+             WHERE q.id = ? AND q.user_id = ?
+            """,
+            (post_id, uid),
+        ).fetchone()
+
+        # Materialize one-shot echo
+        echo_id = db.execute(
+            """
+            INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                               visibility, attach_image, enabled, one_shot, deleted_at, user_id)
+            VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
+            """,
+            (
+                row["feed_id"],
+                row["destination_type"],
+                row["destination_id"],
+                row["visibility"] or "public",
+                row["attach_image"],
+                now_utc,
+                uid,
+            ),
+        ).fetchone()["id"]
+        echo = db.execute("SELECT * FROM echoes WHERE id = ?", (echo_id,)).fetchone()
+
+    item = {
+        "id": row["item_id"],
+        "title": "",
+        "link": "",
+        "summary": "",
+        "content": "",
+        "content_text": "",
+        "content_link": "",
+        "author": "",
+        "date": "",
+        "image_url": "",
+        "image_alt": row["image_alt"] or "",
+    }
+    if row["feed_item_id"]:
+        with get_db() as db:
+            fi = db.execute("SELECT * FROM feed_items WHERE id = ?", (row["feed_item_id"],)).fetchone()
+            if fi:
+                item.update({
+                    "title": fi["title"] or "",
+                    "link": fi["link"] or "",
+                    "summary": fi["summary"] or "",
+                    "content": fi["content"] or "",
+                    "image_url": fi["image_url"] or "",
+                })
+
+    try:
+        ok = process_echo(
+            echo,
+            item,
+            feed_name=row["feed_name"] or "",
+            override_content=row["content"],
+        )
+    except Exception as exc:
+        with get_db() as db:
+            db.execute(
+                """
+                UPDATE queued_posts
+                   SET status = 'failed', error_message = ?, attempt_count = attempt_count + 1
+                 WHERE id = ? AND claim_token = ?
+                """,
+                (f"Dispatch exception: {exc}", post_id, claim_token),
+            )
+        return {"success": False, "status": "failed", "error": str(exc)}
+
+    with get_db() as db:
+        pi = db.execute(
+            "SELECT id, status, post_url, error_message FROM posted_items WHERE echo_id = ? AND item_id = ?",
+            (echo_id, row["item_id"]),
+        ).fetchone()
+        final_status = "sent" if (pi and pi["status"] == "success") else "failed"
+        err_msg = pi["error_message"] if pi else "Unknown dispatch error"
+        pi_id = pi["id"] if pi else None
+        db.execute(
+            """
+            UPDATE queued_posts
+               SET status = ?, posted_item_id = ?, error_message = ?,
+                   attempt_count = attempt_count + 1
+             WHERE id = ? AND claim_token = ?
+            """,
+            (final_status, pi_id, err_msg if final_status == "failed" else None, post_id, claim_token),
+        )
+
+    is_success = (final_status == "sent")
+    return {"success": is_success, "status": final_status, "post_url": pi["post_url"] if pi else None}
+
+
+@app.post("/api/queue/{post_id}/cancel")
+def queue_cancel(request: Request, post_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT id, status FROM queued_posts WHERE id = ? AND user_id = ?",
+            (post_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Queued post not found")
+        if row["status"] != "queued":
+            raise HTTPException(status_code=400, detail="Cannot cancel post that is already sending or completed")
+        db.execute(
+            "UPDATE queued_posts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'queued'",
+            (post_id, uid),
+        )
+    return RedirectResponse(url="/queue", status_code=303)
+
+
+@app.post("/api/queue/{post_id}/edit")
+def queue_edit(
+    request: Request,
+    post_id: int,
+    content: str = Form(...),
+    scheduled_at: str = Form(...),
+):
+    uid = current_user_id(request)
+    content = content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content cannot be empty")
+    scheduled_at = scheduled_at.strip()
+    norm_dt = as_utc_naive(scheduled_at)
+    if not norm_dt:
+        raise HTTPException(status_code=400, detail="Invalid scheduled_at datetime")
+    normalized_scheduled_at = norm_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT id, status FROM queued_posts WHERE id = ? AND user_id = ?",
+            (post_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Queued post not found")
+        if row["status"] != "queued":
+            raise HTTPException(status_code=400, detail="Cannot edit post that is already sending or completed")
+        db.execute(
+            "UPDATE queued_posts SET content = ?, scheduled_at = ? WHERE id = ? AND user_id = ? AND status = 'queued'",
+            (content, normalized_scheduled_at, post_id, uid),
+        )
+    return RedirectResponse(url="/queue", status_code=303)
+
+
+@app.post("/api/queue/{post_id}/reorder")
+def queue_reorder(request: Request, post_id: int, direction: str = Form(...)):
+    """Move a queued item up or down by swapping scheduled_at with adjacent item."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        _require_reader(db, uid)
+        cur = db.execute(
+            "SELECT * FROM queued_posts WHERE id = ? AND user_id = ? AND status = 'queued'",
+            (post_id, uid),
+        ).fetchone()
+        if not cur:
+            raise HTTPException(status_code=404, detail="Queued post not found")
+
+        cur_dest = f"{cur['destination_type']}:{cur['destination_id']}"
+        if direction == "up":
+            adj = db.execute(
+                """
+                SELECT * FROM queued_posts
+                 WHERE user_id = ? AND destination_type = ? AND destination_id = ?
+                   AND status = 'queued' AND scheduled_at < ?
+                 ORDER BY scheduled_at DESC LIMIT 1
+                """,
+                (uid, cur["destination_type"], cur["destination_id"], cur["scheduled_at"]),
+            ).fetchone()
+        else:
+            adj = db.execute(
+                """
+                SELECT * FROM queued_posts
+                 WHERE user_id = ? AND destination_type = ? AND destination_id = ?
+                   AND status = 'queued' AND scheduled_at > ?
+                 ORDER BY scheduled_at ASC LIMIT 1
+                """,
+                (uid, cur["destination_type"], cur["destination_id"], cur["scheduled_at"]),
+            ).fetchone()
+
+        if adj:
+            t1, t2 = cur["scheduled_at"], adj["scheduled_at"]
+            db.execute("UPDATE queued_posts SET scheduled_at = ? WHERE id = ?", (t2, cur["id"]))
+            db.execute("UPDATE queued_posts SET scheduled_at = ? WHERE id = ?", (t1, adj["id"]))
+
+    return RedirectResponse(url="/queue", status_code=303)
+
+
 @app.get("/accounts", response_class=HTMLResponse)
 async def accounts_page(request: Request):
     uid = current_user_id(request)
@@ -2600,6 +2851,8 @@ def _hard_delete_user(db, uid: int) -> None:
         "echoes",
         "feeds",
         "folders",
+        "queued_posts",
+        "queue_settings",
         "accounts",
         "email_accounts",
         "bluesky_accounts",
@@ -3683,7 +3936,67 @@ def reorder_folders(request: Request, ids: str = Form(...)):
     return {"success": True}
 
 
-# ── API: Feeds ──────────────────────────────────────────────────────────────
+# ── Queue Slots Helper ──────────────────────────────────────────────────────
+
+def _next_free_slot(db, uid: int, dest_type: str, dest_id: int) -> str:
+    """Compute the next free scheduled_at timestamp for (uid, destination).
+
+    max(now, last scheduled_at) + interval_minutes.
+    Snaps into queue_active_hours ("HH:MM-HH:MM") in UTC.
+    """
+    dest_key = f"{dest_type}:{dest_id}"
+    setting = db.execute(
+        "SELECT queue_interval_minutes, queue_active_hours FROM queue_settings WHERE user_id = ? AND destination_key = ?",
+        (uid, dest_key),
+    ).fetchone()
+
+    interval = setting["queue_interval_minutes"] if setting else 240
+    active_hours = setting["queue_active_hours"] if setting else "09:00-21:00"
+
+    last_row = db.execute(
+        """
+        SELECT scheduled_at FROM queued_posts
+         WHERE user_id = ? AND destination_type = ? AND destination_id = ?
+           AND status IN ('queued', 'sending')
+         ORDER BY scheduled_at DESC LIMIT 1
+        """,
+        (uid, dest_type, dest_id),
+    ).fetchone()
+
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+    if last_row and last_row["scheduled_at"]:
+        last_dt = as_utc_naive(last_row["scheduled_at"])
+        base_dt = max(now_dt, last_dt) if last_dt else now_dt
+    else:
+        base_dt = now_dt
+
+    candidate = base_dt + timedelta(minutes=interval)
+
+    # Snap to active hours if configured
+    if active_hours and "-" in active_hours:
+        try:
+            start_str, end_str = active_hours.split("-", 1)
+            sh, sm = [int(p) for p in start_str.split(":", 1)]
+            eh, em = [int(p) for p in end_str.split(":", 1)]
+            start_mins = sh * 60 + sm
+            end_mins = eh * 60 + em
+            cand_mins = candidate.hour * 60 + candidate.minute
+
+            if start_mins <= end_mins:
+                # Same day window, e.g. 09:00 - 21:00
+                if cand_mins < start_mins:
+                    candidate = candidate.replace(hour=sh, minute=sm)
+                elif cand_mins > end_mins:
+                    # Move to next day start
+                    candidate = (candidate + timedelta(days=1)).replace(hour=sh, minute=sm)
+            else:
+                # Overnight window, e.g. 22:00 - 06:00
+                if end_mins < cand_mins < start_mins:
+                    candidate = candidate.replace(hour=sh, minute=sm)
+        except Exception:
+            pass
+
+    return candidate.strftime("%Y-%m-%d %H:%M:%S")
 
 @app.post("/api/feeds")
 async def add_feed(
@@ -4391,8 +4704,10 @@ def reader_compose(
     visibility: str = Form("public"),
     attach_image: str = Form("0"),
     image_alt: str | None = Form(None),
+    enqueue: str = Form("0"),
+    scheduled_at: str | None = Form(None),
 ):
-    """Post an edited body or template to 1..5 destinations (Phase 2)."""
+    """Post an edited body or template to 1..5 destinations (Phase 2), or add to queue (Phase 3)."""
     uid = current_user_id(request)
     dest_keys = [d.strip() for d in destinations.split(",") if d.strip()]
     if not (1 <= len(dest_keys) <= 5):
@@ -4411,6 +4726,7 @@ def reader_compose(
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     is_attach_image = 1 if attach_image in ("1", "true", "on") else 0
+    is_enqueue = enqueue in ("1", "true", "on")
 
     with get_db() as db:
         _require_reader(db, uid)
@@ -4440,9 +4756,19 @@ def reader_compose(
                 raise HTTPException(status_code=404, detail=f"Destination not found: {dk}")
             validated_dests.append((dest_type, destination_id, dk))
 
-    # Determine image_alt override: if caller passed image_alt explicitly, use it
-    # (even if empty, to allow clearing feed alt text or letting AI alt text run);
-    # otherwise fall back to row["image_alt"].
+        if is_enqueue and settings.MULTI:
+            plan = _user_plan(db, uid)
+            current_q_count = db.execute(
+                "SELECT COUNT(*) AS c FROM queued_posts WHERE user_id = ? AND status IN ('queued', 'sending')",
+                (uid,),
+            ).fetchone()["c"]
+            needed = current_q_count + len(validated_dests) - 1
+            try:
+                plans.check_queue_allowance(needed, plan)
+            except PlanError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
+    # Determine image_alt override
     if image_alt is not None:
         chosen_alt = image_alt.strip()
     else:
@@ -4462,9 +4788,59 @@ def reader_compose(
         "image_alt": chosen_alt,
     }
 
-    results = []
-    override_val = content if has_content else None
+    # Final materialized content string
+    if has_content and content is not None:
+        final_content = content
+    else:
+        final_content = render_template(template, item, feed_name=row["feed_name"] or "")
 
+    results = []
+
+    if is_enqueue:
+        # Enqueue for scheduled dispatch
+        for dest_type, destination_id, dk in validated_dests:
+            with get_db() as db:
+                if scheduled_at and scheduled_at.strip():
+                    target_time = scheduled_at.strip()
+                else:
+                    target_time = _next_free_slot(db, uid, dest_type, destination_id)
+
+                qp_id = db.execute(
+                    """
+                    INSERT INTO queued_posts (
+                        user_id, feed_item_id, item_id, feed_id, destination_type, destination_id,
+                        content, visibility, attach_image, image_alt, scheduled_at, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued') RETURNING id
+                    """,
+                    (
+                        uid,
+                        row["id"],
+                        row["item_id"],
+                        row["feed_id"],
+                        dest_type,
+                        destination_id,
+                        final_content,
+                        visibility,
+                        is_attach_image,
+                        chosen_alt,
+                        target_time,
+                    ),
+                ).fetchone()["id"]
+
+            results.append({
+                "destination": dk,
+                "success": True,
+                "status": "queued",
+                "queue_id": qp_id,
+                "scheduled_at": target_time,
+            })
+        return {
+            "success": True,
+            "queued": True,
+            "results": results,
+        }
+
+    # Immediate dispatch (Post now)
     for dest_type, destination_id, dk in validated_dests:
         with get_db() as db:
             echo_id = db.execute(
@@ -4479,7 +4855,7 @@ def reader_compose(
             echo,
             item,
             feed_name=row["feed_name"] or "",
-            override_content=override_val,
+            override_content=final_content,
         )
 
         with get_db() as db:

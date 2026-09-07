@@ -161,6 +161,7 @@ DEFAULT_PLAN_LIMITS = {
         "max_destinations": 5,
         "max_posts_per_hour": 60,
         "reader": 1,
+        "queue_depth": 10,
     },
     "beta": {
         "max_feeds": 25,
@@ -168,6 +169,7 @@ DEFAULT_PLAN_LIMITS = {
         "max_destinations": 15,
         "max_posts_per_hour": 240,
         "reader": 1,
+        "queue_depth": 100,
     },
     "paid": {
         "max_feeds": 50,
@@ -175,6 +177,7 @@ DEFAULT_PLAN_LIMITS = {
         "max_destinations": 50,
         "max_posts_per_hour": 500,
         "reader": 1,
+        "queue_depth": 500,
     },
 }
 

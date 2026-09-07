@@ -42,6 +42,7 @@
             <a href="/" {% if request.url.path == '/' %}aria-current="page" class="active"{% endif %}>Dashboard</a>
             <a href="/feeds" {% if request.url.path == '/feeds' %}aria-current="page" class="active"{% endif %}>Feeds</a>
             <a href="/reader" {% if request.url.path == '/reader' %}aria-current="page" class="active"{% endif %}>Reader</a>
+            <a href="/queue" {% if request.url.path == '/queue' %}aria-current="page" class="active"{% endif %}>Queue</a>
             <a href="/accounts" {% if request.url.path == '/accounts' %}aria-current="page" class="active"{% endif %}>Accounts</a>
             <a href="/echoes" {% if request.url.path == '/echoes' %}aria-current="page" class="active"{% endif %}>Echoes</a>
             <a href="/history" {% if request.url.path == '/history' %}aria-current="page" class="active"{% endif %}>History</a>
@@ -112,6 +113,6 @@
         {% endif %}
     </footer>
     {% endif %}
-    <script src="/static/js/app.js?v=46"></script>
+    <script src="/static/js/app.js?v=47"></script>
 </body>
 </html>

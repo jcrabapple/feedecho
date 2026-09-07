@@ -335,3 +335,63 @@ class TestReaderTier2Pg:
         assert len(sent) == 1
         assert sent[0] == "PG Compose Content {{ no_expand }}"
 
+    def test_queue_flow_against_pg(self, pg_env, monkeypatch):
+        import auth as auth_mod
+        import security
+        import scheduler
+        from fastapi.testclient import TestClient
+        from app import app
+        from datetime import datetime, timedelta, timezone
+
+        monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
+        auth_mod._login_attempts.clear()
+        auth_mod._register_attempts.clear()
+        database.init_db()
+
+        with database.get_db() as db:
+            db.execute("INSERT INTO users (id, email, password_hash, plan) VALUES (301, 'q_pg@example.com', '', 'paid')")
+            db.execute("INSERT INTO accounts (id, name, username, instance, access_token, user_id) VALUES (30, 'PG Mastodon Q', 'pgmq', 'https://m.org', 'tok', 301)")
+            db.execute("INSERT INTO feeds (id, name, url, read_enabled, user_id) VALUES (30, 'PG Feed Q', 'https://f.org/q', 1, 301)")
+            db.execute("INSERT INTO feed_items (id, feed_id, item_id, title, link, published_at, is_read) VALUES (30, 30, 'q-item-1', 'Queue PG Article', 'https://f.org/1', '2026-01-01 10:00:00', 0)")
+
+        client = TestClient(app)
+        client.cookies.set("feedecho_session", security.sign_session(301, "q_pg@example.com"))
+
+        # 1. Enqueue from compose
+        r_enq = client.post(
+            "/api/reader/30/compose",
+            data={
+                "destinations": "mastodon:30",
+                "content": "PG Queued Post",
+                "enqueue": "1",
+            },
+        )
+        assert r_enq.status_code == 200
+        data = r_enq.json()
+        assert data["success"] is True
+        assert data["queued"] is True
+        qp_id = data["results"][0]["queue_id"]
+
+        # 2. View /queue page against PG
+        r_qp = client.get("/queue")
+        assert r_qp.status_code == 200
+        assert "PG Queued Post" in r_qp.text
+
+        # 3. Simulate due time in the past & flush_queue
+        past_time = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+        with database.get_db() as db:
+            db.execute("UPDATE queued_posts SET scheduled_at = ? WHERE id = ?", (past_time, qp_id))
+
+        dispatched = []
+        monkeypatch.setattr(scheduler, "post_status", lambda instance, access_token, content, **kw: dispatched.append(content) or {"id": "pg-q-1"})
+
+        scheduler.flush_queue()
+        assert len(dispatched) == 1
+        assert dispatched[0] == "PG Queued Post"
+
+        with database.get_db() as db:
+            row = db.execute("SELECT status, posted_item_id FROM queued_posts WHERE id = ?", (qp_id,)).fetchone()
+            assert row["status"] == "sent"
+            assert row["posted_item_id"] is not None
+

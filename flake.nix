@@ -17,7 +17,7 @@
         in
         python.pkgs.buildPythonApplication {
           pname = "feedecho";
-          version = "1.47.10";
+          version = "1.48.0";
           src = ./.;
           format = "pyproject";
 

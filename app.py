@@ -2661,6 +2661,13 @@ async def reader_page(
             if cached and cached[0] == max_item_id and (now_time - cached[1]) < 60:
                 saved_search_counts = cached[2]
             else:
+                # Pre-load mute keywords once for all saved-search count queries
+                mutes = db.execute(
+                    "SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND read_enabled = 1"
+                    " AND mute_keywords IS NOT NULL AND mute_keywords != ''",
+                    (uid,),
+                ).fetchall()
+
                 for s in saved_searches:
                     s_filters, s_terms = _parse_reader_query(s["query"])
                     s_where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL", "i.is_read = 0"]
@@ -2697,6 +2704,17 @@ async def reader_page(
                                 " OR LOWER(i.summary) LIKE ? ESCAPE '!')"
                             )
                             s_params.extend([s_like, s_like, s_like])
+
+                    # Apply feed mute keywords so saved-search counts match reader visibility
+                    for mf in mutes:
+                        for kw in [k.strip() for k in (mf["mute_keywords"] or "").split(",") if k.strip()]:
+                            like = f"%{_escape_like(kw.lower())}%"
+                            s_where.append(
+                                "NOT (i.feed_id = ? AND (LOWER(COALESCE(i.title, '')) LIKE ? ESCAPE '!'"
+                                " OR LOWER(COALESCE(i.content, '')) LIKE ? ESCAPE '!'"
+                                " OR LOWER(COALESCE(i.summary, '')) LIKE ? ESCAPE '!'))"
+                            )
+                            s_params.extend([mf["id"], like, like, like])
 
                     cnt_row = db.execute(
                         f"""
@@ -2994,6 +3012,8 @@ def _hard_delete_user(db, uid: int) -> None:
     db.execute("DELETE FROM oauth_states WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM email_tokens WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM users WHERE id = ?", (uid,))
+    # Clean up the in-process saved-search count cache for this deleted user
+    _saved_search_counts_cache.pop(uid, None)
 
 
 @app.post("/settings/delete-account")
@@ -3965,6 +3985,8 @@ def create_saved_search(
         raise HTTPException(status_code=400, detail="Name must be between 1 and 60 characters")
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
+    if len(query) > 500:
+        raise HTTPException(status_code=400, detail="Query is too long (max 500 characters)")
 
     with get_db() as db:
         _require_reader(db, uid)
@@ -4715,6 +4737,7 @@ def reader_toggle_read(request: Request, item_id: int):
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Item not found")
         row = db.execute("SELECT is_read FROM feed_items WHERE id = ?", (item_id,)).fetchone()
+    _saved_search_counts_cache.pop(uid, None)
     return {"success": True, "is_read": bool(row["is_read"])}
 
 
@@ -4786,6 +4809,7 @@ def reader_mark_all_read(
                 " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
                 (uid,),
             )
+    _saved_search_counts_cache.pop(uid, None)
     ids = [r["id"] for r in rows]
     return {"success": True, "count": len(ids), "ids": ids}
 
@@ -4813,6 +4837,7 @@ def reader_mark_unread(request: Request, ids: str = Form("")):
             " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (*id_list, uid),
         )
+    _saved_search_counts_cache.pop(uid, None)
     return {"success": True, "count": result.rowcount}
 
 
@@ -4840,6 +4865,7 @@ def reader_mark_read(request: Request, ids: str = Form("")):
             " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (*id_list, uid),
         )
+    _saved_search_counts_cache.pop(uid, None)
     return {"success": True, "count": result.rowcount}
 
 

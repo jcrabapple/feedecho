@@ -115,7 +115,7 @@
         {% if fulltext %}<input type="hidden" name="fulltext" value="1">{% endif %}
         <button type="submit" class="btn-sm">Search</button>
         {% if q %}
-        <button type="button" class="btn-sm reader-save-search-btn" onclick="readerOpenSaveSearch('{{ q | e }}')">Save</button>
+        <button type="button" class="btn-sm reader-save-search-btn" data-search-query="{{ q | e }}" onclick="readerOpenSaveSearch(this.dataset.searchQuery)">Save</button>
         <a class="reader-search-clear" href="/reader{% if current_feed or fulltext %}?{% endif %}{% if current_feed %}feed={{ current_feed }}{% endif %}{% if current_feed and fulltext %}&{% endif %}{% if fulltext %}fulltext=1{% endif %}">Clear</a>
         {% endif %}
       </form>
@@ -136,7 +136,7 @@
     </ul>
     {% if next_cursor %}
     <div class="reader-load-more-wrap">
-      <a class="action-btn reader-load-more" href="/reader?view={{ view }}{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if q %}&q={{ q }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}&after={{ next_cursor }}" onclick="readerLoadMore(this); return false" data-next-cursor="{{ next_cursor }}">Load more</a>
+      <a class="action-btn reader-load-more" href="/reader?view={{ view }}{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if current_saved_search %}&saved={{ current_saved_search }}{% endif %}{% if q %}&q={{ q }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}&after={{ next_cursor }}" onclick="readerLoadMore(this); return false" data-next-cursor="{{ next_cursor }}">Load more</a>
     </div>
     {% endif %}
     {% else %}

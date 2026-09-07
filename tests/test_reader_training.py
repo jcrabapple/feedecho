@@ -186,12 +186,22 @@ def test_reader_unmute(p4_env):
         f1 = db.execute("SELECT mute_keywords FROM feeds WHERE id = 1").fetchone()
     assert "deal" in f1["mute_keywords"]
 
-    # Now unmute
+    # Now unmute with feed_ids
     r_unmute = p4_env.post("/api/reader/unmute", data={"phrase": "deal", "feed_ids": "1"})
     assert r_unmute.status_code == 200
     with database.get_db() as db:
         f1_after = db.execute("SELECT mute_keywords FROM feeds WHERE id = 1").fetchone()
     assert "deal" not in f1_after["mute_keywords"]
+
+
+def test_reader_mute_comma_rejected(p4_env):
+    """Commas in phrase are rejected to prevent CSV corruption."""
+    resp = p4_env.post(
+        "/api/reader/2/mute",
+        data={"phrase": "deal, discount", "scope": "feed"},
+    )
+    assert resp.status_code == 400
+    assert "commas" in resp.json()["detail"]
 
 
 def test_reader_mute_authz_isolation(p4_env):

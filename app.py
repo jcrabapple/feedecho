@@ -2551,11 +2551,9 @@ async def reader_page(
                 )
                 params.extend([mf["id"], like, like, like])
 
-        delivery_params = [uid] + list(params) + [READER_PAGE_SIZE + 1]
         raw_items = db.execute(
             f"""
             SELECT i.*, f.name AS feed_name,
-                   d.n_sent, d.n_filtered, d.n_failed, d.n_queued, d.filter_reason,
                    (SELECT COUNT(*) FROM posted_items p
                      JOIN echoes e ON p.echo_id = e.id
                     WHERE e.one_shot = 1 AND e.feed_id = i.feed_id
@@ -2563,26 +2561,61 @@ async def reader_page(
               FROM feed_items i
               JOIN feeds f ON i.feed_id = f.id
               LEFT JOIN folders fo ON fo.id = f.folder_id
-              LEFT JOIN (
-                  SELECT p.item_id, e.feed_id,
-                         SUM(CASE WHEN p.status = 'success'  THEN 1 ELSE 0 END) AS n_sent,
-                         SUM(CASE WHEN p.status = 'filtered' THEN 1 ELSE 0 END) AS n_filtered,
-                         SUM(CASE WHEN p.status IN ('failed','gave_up') THEN 1 ELSE 0 END) AS n_failed,
-                         SUM(CASE WHEN p.status = 'queued'   THEN 1 ELSE 0 END) AS n_queued,
-                         MAX(CASE WHEN p.status = 'filtered' THEN p.error_message ELSE NULL END) AS filter_reason
-                    FROM posted_items p JOIN echoes e ON e.id = p.echo_id
-                   WHERE e.user_id = ?
-                   GROUP BY p.item_id, e.feed_id
-              ) d ON d.item_id = i.item_id AND d.feed_id = i.feed_id
              WHERE {" AND ".join(where)}
              ORDER BY (i.published_at IS NULL), i.published_at DESC, i.id DESC
              LIMIT ?
             """,
-            tuple(delivery_params),
+            tuple(params) + (READER_PAGE_SIZE + 1,),
         ).fetchall()
 
         has_more = len(raw_items) > READER_PAGE_SIZE
-        items = raw_items[:READER_PAGE_SIZE]
+        raw_page_items = raw_items[:READER_PAGE_SIZE]
+
+        # Delivery badges: compute aggregate status specifically for the items on this page
+        # (avoid scanning entire user posted_items history on every reader page load).
+        if raw_page_items:
+            pairs = [(it["item_id"], it["feed_id"]) for it in raw_page_items]
+            pair_clauses = " OR ".join("(p.item_id = ? AND e.feed_id = ?)" for _ in pairs)
+            pair_params = [uid]
+            for it_id, f_id in pairs:
+                pair_params.extend([it_id, f_id])
+
+            delivery_rows = db.execute(
+                f"""
+                SELECT p.item_id, e.feed_id,
+                       SUM(CASE WHEN p.status = 'success'  THEN 1 ELSE 0 END) AS n_sent,
+                       SUM(CASE WHEN p.status = 'filtered' THEN 1 ELSE 0 END) AS n_filtered,
+                       SUM(CASE WHEN p.status IN ('failed','gave_up') THEN 1 ELSE 0 END) AS n_failed,
+                       SUM(CASE WHEN p.status = 'queued'   THEN 1 ELSE 0 END) AS n_queued,
+                       MAX(CASE WHEN p.status = 'filtered' THEN p.error_message ELSE NULL END) AS filter_reason
+                  FROM posted_items p
+                  JOIN echoes e ON e.id = p.echo_id
+                 WHERE e.user_id = ? AND e.one_shot = 0 AND ({pair_clauses})
+                 GROUP BY p.item_id, e.feed_id
+                """,
+                tuple(pair_params),
+            ).fetchall()
+
+            delivery_map = {(r["item_id"], r["feed_id"]): r for r in delivery_rows}
+            items = []
+            for it in raw_page_items:
+                d = dict(it)
+                deliv = delivery_map.get((it["item_id"], it["feed_id"]))
+                if deliv:
+                    d["n_sent"] = deliv["n_sent"]
+                    d["n_filtered"] = deliv["n_filtered"]
+                    d["n_failed"] = deliv["n_failed"]
+                    d["n_queued"] = deliv["n_queued"]
+                    d["filter_reason"] = deliv["filter_reason"]
+                else:
+                    d["n_sent"] = 0
+                    d["n_filtered"] = 0
+                    d["n_failed"] = 0
+                    d["n_queued"] = 0
+                    d["filter_reason"] = None
+                items.append(d)
+        else:
+            items = []
         next_cursor = ""
         if has_more and items:
             last_item = items[-1]
@@ -4645,6 +4678,8 @@ def reader_mute(
     phrase = phrase.strip()
     if not phrase or len(phrase) > 60:
         raise HTTPException(status_code=400, detail="Phrase must be between 1 and 60 characters")
+    if "," in phrase:
+        raise HTTPException(status_code=400, detail="Phrase cannot contain commas")
     if scope not in ("feed", "all"):
         raise HTTPException(status_code=400, detail="Invalid scope (must be 'feed' or 'all')")
 
@@ -4671,7 +4706,6 @@ def reader_mute(
             ).fetchall()
 
         affected_feed_ids = []
-        last_kw_list = []
         for tf in target_feeds:
             existing = [k.strip() for k in (tf["mute_keywords"] or "").split(",") if k.strip()]
             if not any(k.casefold() == phrase.casefold() for k in existing):
@@ -4681,15 +4715,13 @@ def reader_mute(
                     "UPDATE feeds SET mute_keywords = ? WHERE id = ? AND user_id = ?",
                     (new_kw_str, tf["id"], uid),
                 )
-            affected_feed_ids.append(tf["id"])
-            last_kw_list = existing
+                affected_feed_ids.append(tf["id"])
 
     return {
         "success": True,
         "phrase": phrase,
         "scope": scope,
         "affected_feed_ids": affected_feed_ids,
-        "keywords": last_kw_list,
     }
 
 
@@ -4697,7 +4729,7 @@ def reader_mute(
 def reader_unmute(
     request: Request,
     phrase: str = Form(...),
-    feed_ids: str = Form(""),
+    feed_ids: str = Form(...),
 ):
     """Remove a previously muted phrase from specified feeds (undo support)."""
     uid = current_user_id(request)
@@ -4711,30 +4743,30 @@ def reader_unmute(
         if fid is not None:
             fids.append(fid)
 
+    if not fids:
+        return {"success": True, "phrase": phrase, "count": 0}
+
     with get_db() as db:
         _require_reader(db, uid)
-        if fids:
-            placeholders = ", ".join("?" for _ in fids)
-            target_feeds = db.execute(
-                f"SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND id IN ({placeholders}) AND deleted_at IS NULL",
-                (uid, *fids),
-            ).fetchall()
-        else:
-            target_feeds = db.execute(
-                "SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
-                (uid,),
-            ).fetchall()
+        placeholders = ", ".join("?" for _ in fids)
+        target_feeds = db.execute(
+            f"SELECT id, mute_keywords FROM feeds WHERE user_id = ? AND id IN ({placeholders}) AND deleted_at IS NULL",
+            (uid, *fids),
+        ).fetchall()
 
+        count = 0
         for tf in target_feeds:
             existing = [k.strip() for k in (tf["mute_keywords"] or "").split(",") if k.strip()]
             filtered = [k for k in existing if k.casefold() != phrase.casefold()]
-            new_kw_str = ", ".join(filtered)
-            db.execute(
-                "UPDATE feeds SET mute_keywords = ? WHERE id = ? AND user_id = ?",
-                (new_kw_str, tf["id"], uid),
-            )
+            if len(filtered) != len(existing):
+                new_kw_str = ", ".join(filtered)
+                db.execute(
+                    "UPDATE feeds SET mute_keywords = ? WHERE id = ? AND user_id = ?",
+                    (new_kw_str, tf["id"], uid),
+                )
+                count += 1
 
-    return {"success": True, "phrase": phrase}
+    return {"success": True, "phrase": phrase, "count": count}
 
 
 @app.get("/api/reader/new-count")

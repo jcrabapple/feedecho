@@ -42,7 +42,7 @@
           </button>
         </span>
         <span class="action-group action-group--echo">
-          <button class="action-btn reader-mute-btn" type="button" onclick="readerOpenMute({{ item.id }}, '{{ (item.title or '') | e }}')">Mute…</button>
+          <button class="action-btn reader-mute-btn" type="button" data-item-id="{{ item.id }}" data-item-title="{{ (item.title or '') | e }}" onclick="readerOpenMute({{ item.id }}, this.dataset.itemTitle)">Mute…</button>
           <a class="action-btn" href="/echoes?feed={{ item.feed_id }}&from_=reader">Echo</a>
           {% if shout_destinations %}
           <button class="action-btn reader-compose-open" type="button" data-item-id="{{ item.id }}" onclick="readerOpenCompose({{ item.id }})">Compose</button>

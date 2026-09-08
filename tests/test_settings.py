@@ -81,6 +81,14 @@ class TestEnvPassthrough:
         s = _reload_settings()
         assert s.MAX_BACKDATED_ENTRY_DAYS == 7
 
+    def test_fallback_proxy_settings(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("FEEDECHO_FALLBACK_PROXY_URL", "https://proxy.example.com")
+        monkeypatch.setenv("FEEDECHO_FALLBACK_PROXY_SECRET", "sekret")
+        s = _reload_settings()
+        assert s.FALLBACK_PROXY_URL == "https://proxy.example.com"
+        assert s.FALLBACK_PROXY_SECRET == "sekret"
+
 
 class TestValidateConfig:
     def _set_multi(self, monkeypatch, **kwargs):

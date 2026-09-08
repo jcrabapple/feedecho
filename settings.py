@@ -220,6 +220,13 @@ PLAN_LIMITS = _load_plan_limits()
 # until the operator moves the user to 'beta'/'paid' or extends trial_ends_at.
 TRIAL_GRACE_NOTE = env("TRIAL_GRACE_NOTE", "")
 
+# ── Outbound Fallback Proxy ─────────────────────────────────────────────────
+#
+# Optional fallback proxy for outbound feed/image fetches that hit edge WAF
+# blocks (e.g. CloudFront/Cloudflare HTTP 403/429 blocking datacenter IPs).
+FALLBACK_PROXY_URL = env("FALLBACK_PROXY_URL", "").strip()
+FALLBACK_PROXY_SECRET = env("FALLBACK_PROXY_SECRET", "").strip()
+
 # ── Invite codes (hosted beta gate) ─────────────────────────────────────────
 #
 # When True, /register requires a valid unused invite code. Default is False

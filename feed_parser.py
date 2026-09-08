@@ -15,7 +15,8 @@ import threading
 import httpx
 import feedparser
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
+import settings
 
 
 USER_AGENT = "feedecho/1.0 (+https://github.com/yourusername/feedecho)"
@@ -442,13 +443,19 @@ def fetch_feed(url: str) -> dict:
     validate_outbound_url(url)
 
     headers = {"User-Agent": USER_AGENT}
-    client, backend = ssrf_client([url])
     try:
-        content, content_type = _fetch_with_redirect_validation(
-            client, url, headers, MAX_FEED_SIZE, backend=backend
-        )
-    finally:
-        client.close()
+        client, backend = ssrf_client([url])
+        try:
+            content, content_type = _fetch_with_redirect_validation(
+                client, url, headers, MAX_FEED_SIZE, backend=backend
+            )
+        finally:
+            client.close()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (403, 429) and settings.FALLBACK_PROXY_URL:
+            content, content_type = _fetch_via_fallback_proxy(url, headers, MAX_FEED_SIZE)
+        else:
+            raise
 
     # JSON Feed. The path (not the full URL) decides: query strings like
     # /feed.json?token=... are common on private feeds, and such URLs often
@@ -516,6 +523,38 @@ def _fetch_with_redirect_validation(
             return b"".join(chunks), response.headers.get("content-type", "")
 
     raise ValueError(f"Too many redirects (max {MAX_REDIRECTS})")
+
+
+def _fetch_via_fallback_proxy(
+    url: str,
+    headers: dict,
+    max_bytes: int = MAX_FEED_SIZE,
+    timeout: float = 30,
+) -> tuple[bytes, str]:
+    """Fetch an outbound URL through the configured fallback proxy worker.
+
+    Triggered when a direct fetch receives HTTP 403 or 429 (e.g. edge WAF blocks
+    targeting datacenter IP subnets). The proxy URL is contacted via ssrf_client
+    (so its own host IP is validated/pinned).
+    """
+    proxy_base = settings.FALLBACK_PROXY_URL
+    if not proxy_base:
+        raise ValueError("Fallback proxy URL is not configured")
+
+    proxy_url = f"{proxy_base.rstrip('/')}/?{urlencode({'url': url})}"
+    validate_outbound_url(proxy_url)
+
+    req_headers = dict(headers)
+    if settings.FALLBACK_PROXY_SECRET:
+        req_headers["X-FeedEcho-Proxy-Secret"] = settings.FALLBACK_PROXY_SECRET
+
+    client, backend = ssrf_client([proxy_url], timeout=timeout)
+    try:
+        return _fetch_with_redirect_validation(
+            client, proxy_url, req_headers, max_bytes=max_bytes, backend=backend
+        )
+    finally:
+        client.close()
 
 
 def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
@@ -1149,13 +1188,19 @@ def fetch_image(url: str) -> tuple[bytes, str] | None:
 
     headers = {"User-Agent": USER_AGENT}
     try:
-        client, backend = ssrf_client([url])
         try:
-            content, raw_type = _fetch_with_redirect_validation(
-                client, url, headers, MAX_IMAGE_SIZE, backend=backend
-            )
-        finally:
-            client.close()
+            client, backend = ssrf_client([url])
+            try:
+                content, raw_type = _fetch_with_redirect_validation(
+                    client, url, headers, MAX_IMAGE_SIZE, backend=backend
+                )
+            finally:
+                client.close()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (403, 429) and settings.FALLBACK_PROXY_URL:
+                content, raw_type = _fetch_via_fallback_proxy(url, headers, MAX_IMAGE_SIZE)
+            else:
+                raise
         content_type = raw_type.split(";")[0].strip()
 
         if content_type not in ALLOWED_IMAGE_TYPES:

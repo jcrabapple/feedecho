@@ -1382,10 +1382,9 @@ def _admin_uid_or_none(request: Request) -> int | None:
 
 
 def _require_admin(request: Request) -> int:
-    """The admin's user id or HTTP 403. For POST/API admin routes.
-
-    Replaces 10 of the 11 guard copies (audit finding 3.4); the GET
-    /admin page keeps its own HTML-rendered guard.
+    """The admin's user id or HTTP 403, rendered by the 403 exception
+    handler (HTML for browsers, JSON for API clients). Replaces all 11
+    guard copies (audit finding 3.4), including GET /admin.
     """
     uid = _admin_uid_or_none(request)
     if uid is None:
@@ -1394,7 +1393,7 @@ def _require_admin(request: Request) -> int:
 
 
 def _get_user_or_404(db, user_id: int, columns: str = "id"):
-    """One users row or HTTP 404. Replaces the 7-copy lookup (3.5)."""
+    """One users row or HTTP 404. Replaces the 6 lookup copies (3.5)."""
     row = db.execute(f"SELECT {columns} FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1402,7 +1401,11 @@ def _get_user_or_404(db, user_id: int, columns: str = "id"):
 
 
 def _error(request: Request, status: int, message: str):
-    """render(error.html, ...) with the repeated status/code kwargs (3.6)."""
+    """render(error.html, ...) with the repeated status/code kwargs (3.6).
+
+    Not yet wired into the ~30 remaining render("error.html") call sites —
+    kept for the follow-up pass that migrates them.
+    """
     return render("error.html", request, status_code=status, code=status, message=message)
 
 

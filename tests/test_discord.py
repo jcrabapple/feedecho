@@ -87,7 +87,7 @@ def _resp(payload, status_code=200, headers=None):
     r.headers = headers or {}
     return r
 
-# ── Client: normalize_webhook_url ───────────────────────────────────────────
+# ── Client: normalize_discord_webhook_url ────────────────────────────────────
 
 class TestNormalizeWebhookURL:
     def test_valid_url_passes_through(self):

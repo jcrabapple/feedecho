@@ -109,6 +109,19 @@ class TestAdminEmailSettings:
         assert resp.status_code == 403
         assert email_sender.get_system_smtp_settings() is None
 
+    def test_non_admin_json_accept_gets_json_403(self, multi_env):
+        # The 403 exception handler's JSON branch: API clients get a
+        # JSON body, browsers get the rendered error.html page.
+        with _client(USER_ID, "user@example.com") as c:
+            resp = c.post(
+                "/admin/email",
+                data={"smtp_host": "h"},
+                headers={"Accept": "application/json"},
+            )
+        assert resp.status_code == 403
+        assert resp.headers["content-type"].startswith("application/json")
+        assert resp.json()["detail"] == "Admin access required"
+
     def test_single_mode_404(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "MULTI", False)
         monkeypatch.setattr(settings, "AUTH_TOKEN", None)

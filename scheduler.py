@@ -1169,12 +1169,16 @@ def _send_mastodon(
                     raw_urls = []
             if isinstance(raw_urls, list):
                 for img in raw_urls[:4]:
-                    if isinstance(img, dict) and img.get("url"):
-                        image_entries.append({"url": img["url"], "alt": (img.get("alt") or "").strip()})
-                    elif isinstance(img, str) and img:
-                        image_entries.append({"url": img, "alt": ""})
+                    if isinstance(img, dict) and isinstance(img.get("url"), str) and img["url"].strip():
+                        image_entries.append({"url": img["url"].strip(), "alt": (img.get("alt") or "").strip()})
+                    elif isinstance(img, str) and img.strip():
+                        image_entries.append({"url": img.strip(), "alt": ""})
         if not image_entries and item.get("image_url"):
             image_entries.append({"url": item.get("image_url"), "alt": (item.get("image_alt") or "").strip()})
+        # A caller-supplied image_alt (reader compose / queue override) wins
+        # over the feed alt for the primary slot — the user wrote it.
+        if image_entries and item.get("image_alt") and not image_entries[0]["alt"]:
+            image_entries[0]["alt"] = item["image_alt"].strip()
 
         for entry in image_entries:
             image_result = fetch_image(entry["url"])
@@ -2426,7 +2430,6 @@ def _flush_queue() -> None:
             "date": "",
             "image_url": "",
             "image_alt": row["image_alt"] or "",
-            "image_urls": [],
         }
 
         # If feed_item_id is still present, load any existing images/metadata
@@ -2442,7 +2445,6 @@ def _flush_queue() -> None:
                         "summary": fi["summary"] or "",
                         "content": fi["content"] or "",
                         "image_url": fi["image_url"] or "",
-                        "image_urls": fi["image_urls"] or [],
                     })
 
         try:

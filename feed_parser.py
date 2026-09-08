@@ -857,36 +857,55 @@ def _extract_first_link(html_str: str, base_url: str = "") -> str:
 def _extract_rss_images(entry: dict) -> list[dict]:
     """Extract up to 4 image {url, alt} pairs from an RSS/Atom entry.
 
-    Priority order per slot: media_content, media_thumbnail, image
-    enclosures, then <img> tags in content/summary HTML. Mirrors
-    _extract_rss_image's sources, but collects ALL images instead of just
-    the first. Capped at 4 (Mastodon's default image limit).
+    Priority order per slot: media_content, media_thumbnail (fallback only
+    when media_content has no valid images), image enclosures, then <img>
+    tags in content/summary HTML. Capped at 4 (Mastodon's default image
+    limit).
     """
     images: list[dict] = []
 
     def _add(url: str, alt: str = "") -> None:
-        if len(images) >= 4 or not url:
+        if not isinstance(url, str) or not url.strip():
+            return
+        url = url.strip()
+        if url.startswith("data:"):
+            return
+        if len(images) >= 4:
             return
         if any(img["url"] == url for img in images):
             return
         images.append({"url": url, "alt": (alt or "").strip()})
 
-    # Media RSS media_content / media_thumbnail (may carry media:text captions)
-    for key in ("media_content", "media_thumbnail"):
-        media_list = entry.get(key, [])
-        if not isinstance(media_list, list):
+    def _is_image_media(media: dict) -> bool:
+        """True when a media_content/media_thumbnail entry is an image."""
+        medium = str(media.get("medium", "")).lower()
+        if medium in ("video", "audio"):
+            return False
+        m_type = str(media.get("type", "")).lower()
+        if m_type and not m_type.startswith("image/"):
+            return False
+        return True
+
+    # Media RSS media_content (may carry media:text captions)
+    for media in entry.get("media_content") or []:
+        if not isinstance(media, dict) or not _is_image_media(media):
             continue
-        for media in media_list:
+        alt = ""
+        text = media.get("media_text", "")
+        if isinstance(text, list) and text:
+            alt = text[0].get("text", "") if isinstance(text[0], dict) else ""
+        elif isinstance(text, str):
+            alt = text
+        _add(media.get("url", ""), alt)
+
+    # media_thumbnail is the thumbnail of media_content: only consult it
+    # when media_content produced nothing, so a post never ships both the
+    # full image and its thumbnail.
+    if not images:
+        for media in entry.get("media_thumbnail") or []:
             if not isinstance(media, dict):
                 continue
-            url = media.get("url", "")
-            alt = ""
-            text = media.get("media_text", "")
-            if isinstance(text, list) and text:
-                alt = text[0].get("text", "") if isinstance(text[0], dict) else ""
-            elif isinstance(text, str):
-                alt = text
-            _add(url, alt)
+            _add(media.get("url", ""))
 
     # RSS enclosures with image MIME types
     for enc in entry.get("enclosures", []):
@@ -905,7 +924,7 @@ def _extract_rss_images(entry: dict) -> list[dict]:
             if not src:
                 continue
             alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
-            _add(src.group(1), alt.group(1) if alt else "")
+            _add(html.unescape(src.group(1)), html.unescape(alt.group(1)) if alt else "")
 
     return images
 
@@ -1033,21 +1052,24 @@ def _extract_json_feed_image(entry: dict) -> str:
 def _extract_json_feed_images(entry: dict) -> list[dict]:
     """Extract up to 4 image {url, alt} pairs from a JSON Feed entry.
 
-    Sources: attachments with image MIME types, the image/banner_image
-    fields, then <img> tags in content_html. Capped at 4.
+    JSON Feed 1.1 priority: the item's `image` field is primary,
+    `attachments` are supplementary, `banner_image` is a site-level header
+    (fallback only when the item has no image of its own). <img> tags in
+    content_html come last. Capped at 4.
     """
     images: list[dict] = []
 
     def _add(url: str, alt: str = "") -> None:
-        if len(images) >= 4 or not url:
+        if not isinstance(url, str) or not url.strip():
+            return
+        url = url.strip()
+        if url.startswith("data:"):
+            return
+        if len(images) >= 4:
             return
         if any(img["url"] == url for img in images):
             return
         images.append({"url": url, "alt": (alt or "").strip()})
-
-    for att in entry.get("attachments") or []:
-        if isinstance(att, dict) and str(att.get("mime_type", "")).startswith("image/"):
-            _add(att.get("url", ""), att.get("title", ""))
 
     image = entry.get("image")
     if isinstance(image, dict) and image.get("url"):
@@ -1055,11 +1077,18 @@ def _extract_json_feed_images(entry: dict) -> list[dict]:
     elif isinstance(image, str):
         _add(image)
 
-    banner = entry.get("banner_image")
-    if isinstance(banner, dict) and banner.get("url"):
-        _add(banner["url"], banner.get("caption", ""))
-    elif isinstance(banner, str):
-        _add(banner)
+    for att in entry.get("attachments") or []:
+        if isinstance(att, dict) and str(att.get("mime_type", "")).startswith("image/"):
+            _add(att.get("url", ""), att.get("title", ""))
+
+    # banner_image is the site header, not the article image: only use it
+    # when the item itself had no image at all.
+    if not images:
+        banner = entry.get("banner_image")
+        if isinstance(banner, dict) and banner.get("url"):
+            _add(banner["url"], banner.get("caption", ""))
+        elif isinstance(banner, str):
+            _add(banner)
 
     content_html = entry.get("content_html", "")
     if content_html:
@@ -1068,7 +1097,7 @@ def _extract_json_feed_images(entry: dict) -> list[dict]:
             if not src:
                 continue
             alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
-            _add(src.group(1), alt.group(1) if alt else "")
+            _add(html.unescape(src.group(1)), html.unescape(alt.group(1)) if alt else "")
 
     return images
 

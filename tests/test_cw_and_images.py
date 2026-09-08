@@ -359,6 +359,42 @@ class TestImageAttachment:
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-1"]
 
+    def test_caller_image_alt_overrides_feed_alt_on_primary_slot(self, db_tmp, monkeypatch):
+        """item['image_alt'] (user-edited) wins over feed alt for the first image."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+        descriptions = []
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-bytes", "image/jpeg")
+        )
+        def fake_upload(**kw):
+            descriptions.append(kw.get("description"))
+            return {"id": f"media-{len(descriptions)}"}
+        monkeypatch.setattr(scheduler, "upload_media", fake_upload)
+        monkeypatch.setattr(scheduler.alt_text, "is_enabled", lambda user_id: True)
+        monkeypatch.setattr(
+            scheduler.alt_text, "generate_alt_text",
+            lambda *a, **kw: "AI-GENERATED",
+        )
+
+        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        item = _item(
+            image_alt="USER EDITED ALT",
+            image_urls=[
+                {"url": "https://example.com/1.jpg", "alt": ""},
+                {"url": "https://example.com/2.jpg", "alt": ""},
+            ],
+        )
+        scheduler.process_echo(echo, item)
+
+        # Primary slot uses the user's alt; secondary slot falls back to AI.
+        assert descriptions[0] == "USER EDITED ALT"
+        assert descriptions[1] == "AI-GENERATED"
+
     def test_image_fetch_failure_posts_text_only(self, db_tmp, monkeypatch):
         """If fetch_image returns None (network/SSRF/size), post text-only."""
         import scheduler
@@ -499,6 +535,77 @@ class TestImageExtraction:
         assert images[0]["url"] == "https://example.com/dup.jpg"
         # media_content slot wins (its alt is empty); content img is deduped away
         assert images[0]["alt"] == ""
+
+    def test_extract_rss_images_thumbnail_is_fallback_only(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "media_content": [{"url": "https://example.com/full.jpg"}],
+            "media_thumbnail": [{"url": "https://example.com/thumb.jpg"}],
+        }
+        images = _extract_rss_images(entry)
+        # Full image wins; its thumbnail must NOT occupy a second slot
+        assert [img["url"] for img in images] == ["https://example.com/full.jpg"]
+
+    def test_extract_rss_images_skips_video_media_content(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "media_content": [
+                {"url": "https://example.com/clip.mp4", "medium": "video", "type": "video/mp4"},
+                {"url": "https://example.com/photo.jpg", "medium": "image", "type": "image/jpeg"},
+            ],
+        }
+        images = _extract_rss_images(entry)
+        assert [img["url"] for img in images] == ["https://example.com/photo.jpg"]
+
+    def test_extract_rss_images_skips_data_uris(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "content": [{"value": (
+                '<img src="data:image/svg+xml;base64,AAAA">'
+                '<img src="https://example.com/real.jpg">'
+            )}]
+        }
+        images = _extract_rss_images(entry)
+        assert [img["url"] for img in images] == ["https://example.com/real.jpg"]
+
+    def test_extract_rss_images_unescapes_entities(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "content": [{"value": (
+                '<img src="https://example.com/i.jpg?w=800&amp;q=80" alt="a &amp; b">'
+            )}]
+        }
+        images = _extract_rss_images(entry)
+        assert images[0]["url"] == "https://example.com/i.jpg?w=800&q=80"
+        assert images[0]["alt"] == "a & b"
+
+    def test_extract_json_feed_images_priority(self):
+        from feed_parser import _extract_json_feed_images
+
+        entry = {
+            "image": {"url": "https://example.com/primary.jpg", "caption": "primary"},
+            "attachments": [
+                {"url": "https://example.com/supp.jpg", "mime_type": "image/jpeg"},
+            ],
+            "banner_image": {"url": "https://example.com/banner.jpg"},
+        }
+        images = _extract_json_feed_images(entry)
+        # image first, then attachments; banner must NOT post alongside them
+        assert [img["url"] for img in images] == [
+            "https://example.com/primary.jpg",
+            "https://example.com/supp.jpg",
+        ]
+
+    def test_extract_json_feed_images_banner_only_when_no_image(self):
+        from feed_parser import _extract_json_feed_images
+
+        entry = {"banner_image": {"url": "https://example.com/banner.jpg"}}
+        images = _extract_json_feed_images(entry)
+        assert [img["url"] for img in images] == ["https://example.com/banner.jpg"]
 
     def test_rss_media_content(self):
         from feed_parser import _extract_rss_image

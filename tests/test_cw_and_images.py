@@ -20,10 +20,11 @@ class TestMissingAccount:
     def test_missing_account_fails_permanently(self, db_tmp, monkeypatch, setup_echo):
         """A deleted Mastodon account is unrecoverable: finalize 'gave_up'.
 
-        Every other destination passes permanent=True on its missing-account
-        path; the Mastodon dispatcher drifted and left it off, so a removed
-        account burned through the transient retry pipeline first. This
-        mirrors test_bluesky.py's test_missing_account_fails_permanently.
+        Most destinations passed permanent=True on their missing-account
+        path; the Mastodon and email dispatchers both drifted and left it
+        off, so a removed account burned through the transient retry
+        pipeline first. This mirrors test_bluesky.py's
+        test_missing_account_fails_permanently.
         """
         import database
         import scheduler

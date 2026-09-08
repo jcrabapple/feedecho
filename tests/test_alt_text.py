@@ -163,6 +163,42 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
+    def test_permanent_client_error_does_not_retry(self, db_tmp, monkeypatch, setup_echo):
+        """A 401 (bad API key) fails identically on every retry - don't burn
+        the retry budget or sleep on it. Error-handling audit finding 4.3."""
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        class FakeResponse:
+            status_code = 401
+
+        call_count = 0
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                nonlocal call_count
+                call_count += 1
+                raise alt_text.httpx.HTTPStatusError(
+                    "401 Unauthorized", request=None, response=FakeResponse()
+                )
+
+        sleep_calls = []
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
+        monkeypatch.setattr(alt_text.time, "sleep", lambda s: sleep_calls.append(s))
+        result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
+        assert result == ""
+        assert call_count == 1  # no retry attempted
+        assert sleep_calls == []  # no backoff delay incurred
+
     def test_returns_empty_on_network_error(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text

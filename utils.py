@@ -128,3 +128,12 @@ def parse_retry_after(response) -> float | None:
     except ValueError:
         pass
     return None
+
+
+def rows_to_dict(rows) -> dict:
+    """Collapse a list of settings rows to {key: value} (audit finding 2.4).
+
+    Replaces the inline dict comprehension in email_sender.get_smtp_settings,
+    email_sender.get_system_smtp_settings, and alt_text._get_settings.
+    """
+    return {row["key"]: row["value"] for row in rows}

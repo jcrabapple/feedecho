@@ -24,6 +24,7 @@ import settings as app_settings
 from database import get_db
 from feed_parser import SSRFError, pinned_request, unpinned_client, validate_outbound_url
 from security import decrypt_secret
+from utils import rows_to_dict
 
 logger = logging.getLogger("feedecho.alt_text")
 
@@ -61,7 +62,7 @@ def _get_settings(user_id: int = 1) -> dict[str, str]:
                  AND user_id = ?""",
             (user_id,),
         ).fetchall()
-    return {row["key"]: row["value"] for row in rows}
+    return rows_to_dict(rows)
 
 
 def is_enabled(user_id: int = 1) -> bool:

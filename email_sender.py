@@ -16,6 +16,7 @@ import settings
 from database import get_db
 from feed_parser import SSRFError, validate_outbound_url
 from security import decrypt_secret
+from utils import rows_to_dict
 
 
 def get_smtp_settings(user_id: int = 1) -> dict | None:
@@ -29,7 +30,7 @@ def get_smtp_settings(user_id: int = 1) -> dict | None:
     if not rows:
         return None
 
-    settings = {row["key"]: row["value"] for row in rows}
+    settings = rows_to_dict(rows)
     return _normalize(settings)
 
 
@@ -47,7 +48,7 @@ def get_system_smtp_settings() -> dict | None:
     if not rows:
         return None
 
-    settings = {row["key"]: row["value"] for row in rows}
+    settings = rows_to_dict(rows)
     return _normalize(settings)
 
 

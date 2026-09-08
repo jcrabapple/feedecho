@@ -96,6 +96,28 @@ def posting_paused(plan: str, trial_ends_at) -> bool:
     return trial_state(plan, trial_ends_at) == "expired"
 
 
+def _check_allowance(
+    current_count: int,
+    plan: str,
+    key: str,
+    singular: str,
+    plural: str,
+    tail: str,
+    *,
+    additional: int = 1,
+) -> None:
+    """Raise PlanError when current_count + additional would exceed the cap.
+
+    Shared shape for the four single-item checks and the import-export batch
+    check (audit finding 2.3). Plurals are passed explicitly because they
+    are not derivable ("feed" -> "feeds" but "saved search" -> "saved searches").
+    """
+    cap = limit_for(plan, key)
+    if cap and current_count + additional > cap:
+        noun = plural if cap != 1 else singular
+        raise PlanError(f"Your plan allows {cap} {noun}. {tail}")
+
+
 def check_feed_allowance(current_count: int, plan: str) -> None:
     """Raise PlanError when adding one more feed would exceed the plan.
 
@@ -104,42 +126,35 @@ def check_feed_allowance(current_count: int, plan: str) -> None:
     one. Accepted for beta — the overshoot is bounded by concurrent clicks on
     the same account, and a strict lock would serialize every signup.
     """
-    cap = limit_for(plan, "max_feeds")
-    if cap and current_count >= cap:
-        raise PlanError(
-            f"Your plan allows {cap} feed{'s' if cap != 1 else ''}. "
-            "Upgrade or remove a feed to add another."
-        )
+    _check_allowance(
+        current_count, plan, "max_feeds", "feed", "feeds",
+        "Upgrade or remove a feed to add another.",
+    )
 
 
 def check_destination_allowance(current_count: int, plan: str) -> None:
     """Raise PlanError when connecting one more account would exceed the plan."""
-    cap = limit_for(plan, "max_destinations")
-    if cap and current_count >= cap:
-        raise PlanError(
-            f"Your plan allows {cap} connected account{'s' if cap != 1 else ''}. "
-            "Upgrade or disconnect one to add another."
-        )
+    _check_allowance(
+        current_count, plan, "max_destinations",
+        "connected account", "connected accounts",
+        "Upgrade or disconnect one to add another.",
+    )
 
 
 def check_queue_allowance(current_count: int, plan: str) -> None:
     """Raise PlanError when adding one more queued post would exceed the plan."""
-    cap = limit_for(plan, "queue_depth")
-    if cap and current_count >= cap:
-        raise PlanError(
-            f"Your plan allows {cap} queued post{'s' if cap != 1 else ''}. "
-            "Wait for posts to dispatch or upgrade your plan."
-        )
+    _check_allowance(
+        current_count, plan, "queue_depth", "queued post", "queued posts",
+        "Wait for posts to dispatch or upgrade your plan.",
+    )
 
 
 def check_saved_search_allowance(current_count: int, plan: str) -> None:
     """Raise PlanError when creating one more saved search would exceed the plan."""
-    cap = limit_for(plan, "saved_searches")
-    if cap and current_count >= cap:
-        raise PlanError(
-            f"Your plan allows {cap} saved search{'es' if cap != 1 else ''}. "
-            "Delete an existing saved search or upgrade your plan."
-        )
+    _check_allowance(
+        current_count, plan, "saved_searches", "saved search", "saved searches",
+        "Delete an existing saved search or upgrade your plan.",
+    )
 
 
 def clamp_poll_interval(minutes: int, plan: str) -> int:

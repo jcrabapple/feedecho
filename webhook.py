@@ -46,7 +46,14 @@ import httpx
 
 import settings
 from feed_parser import SSRFError, ssrf_client, unpinned_client, validate_outbound_url
-from utils import DEFAULT_REQUEST_TIMEOUT, parse_retry_after
+from utils import (
+    DEFAULT_REQUEST_TIMEOUT,
+    DestinationAuthError,
+    DestinationError,
+    DestinationNotFoundError,
+    DestinationRateLimitError,
+    parse_retry_after,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +67,11 @@ MAX_HEADER_COUNT = 20
 MAX_HEADERS_TEXT = 4000
 
 
-class WebhookError(Exception):
+class WebhookError(DestinationError):
     """Base error for webhook delivery."""
 
 
-class WebhookRateLimitError(WebhookError):
+class WebhookRateLimitError(WebhookError, DestinationRateLimitError):
     """429 rate limit. Transient; carries the server's suggested wait."""
 
     def __init__(self, retry_after: float | None = None):
@@ -75,11 +82,11 @@ class WebhookRateLimitError(WebhookError):
         super().__init__(msg)
 
 
-class WebhookAuthError(WebhookError):
+class WebhookAuthError(WebhookError, DestinationAuthError):
     """401/403 — the endpoint rejected our credentials."""
 
 
-class WebhookNotFoundError(WebhookError):
+class WebhookNotFoundError(WebhookError, DestinationNotFoundError):
     """404/410 — the endpoint no longer exists."""
 
 

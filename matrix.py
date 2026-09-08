@@ -43,6 +43,8 @@ import httpx
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
 from utils import (
     DEFAULT_REQUEST_TIMEOUT,
+    DestinationAuthError,
+    DestinationError,
     json_error_detail,
     truncate_chars,
 )
@@ -71,16 +73,21 @@ _ROOM_ALIAS_RE = re.compile(r"^#[^\s:]+:[^\s:/]+(:\d+)?$")
 _URL_RE = re.compile(r"https?://[^\s<>\"]+")
 
 
-class MatrixError(Exception):
+class MatrixError(DestinationError):
     """Base error for Matrix API interactions."""
 
 
-class MatrixAuthError(MatrixError):
+class MatrixAuthError(MatrixError, DestinationAuthError):
     """Access token rejected, expired, or revoked (M_UNKNOWN_TOKEN)."""
 
 
-class MatrixPermissionError(MatrixError):
-    """Token is valid but cannot post here (not joined, no power level)."""
+class MatrixPermissionError(MatrixError, DestinationAuthError):
+    """Token is valid but cannot post here (not joined, no power level).
+
+    Shares DestinationAuthError with MatrixAuthError: both are permanent,
+    not-worth-retrying failures until the user acts on the Matrix side —
+    scheduler.py already treats them identically (permanent=True).
+    """
 
 
 def _error_detail(response) -> str:

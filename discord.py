@@ -40,6 +40,10 @@ import httpx
 from feed_parser import SSRFError, pinned_request
 from utils import (
     DEFAULT_REQUEST_TIMEOUT,
+    DestinationAuthError,
+    DestinationError,
+    DestinationNotFoundError,
+    DestinationRateLimitError,
     json_error_detail,
     parse_retry_after,
     truncate_chars,
@@ -64,11 +68,11 @@ _WEBHOOK_URL_RE = re.compile(
 )
 
 
-class DiscordError(Exception):
+class DiscordError(DestinationError):
     """Base error for Discord webhook API interactions."""
 
 
-class DiscordRateLimitError(DiscordError):
+class DiscordRateLimitError(DiscordError, DestinationRateLimitError):
     """Discord 429 rate limit. Carries Discord's suggested wait in seconds.
 
     Still a transient error (the scheduler's bounded backoff retries it), but
@@ -83,11 +87,11 @@ class DiscordRateLimitError(DiscordError):
         super().__init__(msg)
 
 
-class DiscordAuthError(DiscordError):
+class DiscordAuthError(DiscordError, DestinationAuthError):
     """Webhook URL rejected (invalid token)."""
 
 
-class DiscordNotFoundError(DiscordError):
+class DiscordNotFoundError(DiscordError, DestinationNotFoundError):
     """Webhook no longer exists (deleted from the server)."""
 
 

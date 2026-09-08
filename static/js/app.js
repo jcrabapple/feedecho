@@ -39,79 +39,10 @@ async function withBusy(btn, fn) {
     }
 }
 
-async function testAccount(accountId, btn) {
+async function testDestinationAccount(kind, accountId, btn) {
+    const path = kind === 'mastodon' ? 'accounts' : `${kind}-accounts`;
     try {
-        const resp = await fetch(`/api/accounts/${accountId}/test`, { method: 'POST' });
-        const data = await resp.json();
-        if (!resp.ok) {
-            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
-            return;
-        }
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
-async function testBlueskyAccount(accountId, btn) {
-    try {
-        const resp = await fetch(`/api/bluesky-accounts/${accountId}/test`, { method: 'POST' });
-        const data = await resp.json();
-        if (!resp.ok) {
-            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
-            return;
-        }
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
-async function testMicroblogAccount(accountId, btn) {
-    try {
-        const resp = await fetch(`/api/microblog-accounts/${accountId}/test`, { method: 'POST' });
-        const data = await resp.json();
-        if (!resp.ok) {
-            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
-            return;
-        }
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
-async function testMatrixAccount(accountId, btn) {
-    try {
-        const resp = await fetch(`/api/matrix-accounts/${accountId}/test`, { method: 'POST' });
-        const data = await resp.json();
-        if (!resp.ok) {
-            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
-            return;
-        }
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
-async function testDiscordAccount(accountId, btn) {
-    try {
-        const resp = await fetch(`/api/discord-accounts/${accountId}/test`, { method: 'POST' });
-        const data = await resp.json();
-        if (!resp.ok) {
-            showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');
-            return;
-        }
-        showStatus(btn, data.message || (data.success ? 'OK' : 'Failed'), data.success ? 'success' : 'error');
-    } catch (e) {
-        showStatus(btn, 'Request failed: ' + e.message, 'error');
-    }
-}
-
-async function testWebhookAccount(accountId, btn) {
-    try {
-        const resp = await fetch(`/api/webhook-accounts/${accountId}/test`, { method: 'POST' });
+        const resp = await fetch(`/api/${path}/${accountId}/test`, { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) {
             showStatus(btn, 'Test failed: ' + (data.detail || resp.statusText), 'error');

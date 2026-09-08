@@ -114,7 +114,7 @@
                 <td data-label="Instance">{{ account.instance }}</td>
                 <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                 <td data-label="Actions" class="action-cell">
-                    <button class="btn-sm" onclick="withBusy(this, (btn) => testAccount({{ account.id }}, btn))">Test</button>
+                    <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('mastodon', {{ account.id }}, btn))">Test</button>
                     <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
                         <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                     </form>
@@ -217,7 +217,7 @@
                     <td data-label="Name">{{ account.name }}</td>
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
-                        <button class="btn-sm" onclick="withBusy(this, (btn) => testBlueskyAccount({{ account.id }}, btn))">Test</button>
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('bluesky', {{ account.id }}, btn))">Test</button>
                         <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -266,7 +266,7 @@
                     <td data-label="URL"><code>{{ account.uid }}</code></td>
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
-                        <button class="btn-sm" onclick="withBusy(this, (btn) => testMicroblogAccount({{ account.id }}, btn))">Test</button>
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('microblog', {{ account.id }}, btn))">Test</button>
                         <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this blog? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -323,7 +323,7 @@
                     <td data-label="Homeserver">{{ account.homeserver }}</td>
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
-                        <button class="btn-sm" onclick="withBusy(this, (btn) => testMatrixAccount({{ account.id }}, btn))">Test</button>
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('matrix', {{ account.id }}, btn))">Test</button>
                         <form method="post" action="/api/matrix-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this room? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -374,7 +374,7 @@
                     <td data-label="Channel ID">{% if account.channel_id %}<code>{{ account.channel_id }}</code>{% else %}—{% endif %}</td>
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
-                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDiscordAccount({{ account.id }}, btn))">Test</button>
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('discord', {{ account.id }}, btn))">Test</button>
                         <form method="post" action="/api/discord-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -429,7 +429,7 @@
                     <td data-label="Headers">{% if account.header_names %}<small>{{ account.header_names }}</small>{% else %}—{% endif %}</td>
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
-                        <button class="btn-sm" onclick="withBusy(this, (btn) => testWebhookAccount({{ account.id }}, btn))">Test</button>
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('webhook', {{ account.id }}, btn))">Test</button>
                         <form method="post" action="/api/webhook-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>

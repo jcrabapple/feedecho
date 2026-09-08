@@ -136,7 +136,7 @@ class TestInlineStatus:
         )
 
     def test_async_actions_render_inline_status(self):
-        for fn in ("testAccount", "testFeed", "fetchNow", "retryPost", "giveUpPost",
+        for fn in ("testDestinationAccount", "testFeed", "fetchNow", "retryPost", "giveUpPost",
                    "toggleEcho", "pauseFeed"):
             m = re.search(rf"async function {fn}\(.*?\n}}", APP_JS, re.S)
             assert m, f"{fn} not found"
@@ -159,7 +159,7 @@ class TestBusyState:
     def test_all_firing_sites_wrap_their_buttons(self):
         """Every template onclick that fires an async action goes through withBusy."""
         wrappers = {
-            "accounts.html": ["testAccount", "testBlueskyAccount", "testMicroblogAccount"],
+            "accounts.html": ["testDestinationAccount"],
             "feeds.html": ["testFeed", "fetchNow", "pauseFeed"],
             "history.html": ["retryPost", "giveUpPost"],
             "echoes.html": ["disableEcho", "enableEcho"],

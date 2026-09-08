@@ -19,7 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
-from utils import json_error_detail
+from utils import DestinationAuthError, DestinationError, json_error_detail
 
 PUBLIC_API = "https://public.api.bsky.app"
 PLC_DIRECTORY = "https://plc.directory"
@@ -36,11 +36,11 @@ BLUESKY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 DEFAULT_SESSION_TTL_SECONDS = 2 * 60 * 60
 
 
-class BlueskyError(Exception):
+class BlueskyError(DestinationError):
     """Base error for Bluesky API interactions."""
 
 
-class BlueskyAuthError(BlueskyError):
+class BlueskyAuthError(BlueskyError, DestinationAuthError):
     """Credentials rejected, session expired, or app password revoked."""
 
 

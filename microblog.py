@@ -20,7 +20,7 @@ import logging
 import httpx
 
 from feed_parser import SSRFError, pinned_request
-from utils import DEFAULT_REQUEST_TIMEOUT, json_error_detail
+from utils import DEFAULT_REQUEST_TIMEOUT, DestinationAuthError, DestinationError, json_error_detail
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,11 @@ REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
 TOKEN_DISPLAY_MAX = 8
 
 
-class MicroblogError(Exception):
+class MicroblogError(DestinationError):
     """Base error for Micro.blog API interactions."""
 
 
-class MicroblogAuthError(MicroblogError):
+class MicroblogAuthError(MicroblogError, DestinationAuthError):
     """Token rejected, expired, or revoked."""
 
 

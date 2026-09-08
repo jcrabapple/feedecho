@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import TypedDict
 
 # Default HTTP request timeout (seconds) shared by the destination
 # modules. Replaces the four independent REQUEST_TIMEOUT = 30 constants.
@@ -137,3 +138,64 @@ def rows_to_dict(rows) -> dict:
     email_sender.get_system_smtp_settings, and alt_text._get_settings.
     """
     return {row["key"]: row["value"] for row in rows}
+
+
+# Shared exception ancestors for the five destination adapters (bluesky,
+# discord, matrix, microblog, webhook — mastodon has no custom exceptions
+# today). Each module's own <Platform>Error keeps subclassing Exception
+# via this shared base instead, and its Auth/NotFound/RateLimit subclasses
+# additionally inherit the matching Destination*Error below via multiple
+# inheritance — every existing `except BlueskyAuthError` (etc.) call site
+# is unaffected, since the module-specific class still exists with the
+# same name and MRO position. This only adds a shared ancestor so code
+# that wants to (e.g. a future generic exception ladder in scheduler.py)
+# can catch "any destination's auth failure" without importing all five
+# modules' independent hierarchies. Design-patterns audit finding 2.3.
+class DestinationError(Exception):
+    """Base for every destination-adapter failure."""
+
+
+class DestinationAuthError(DestinationError):
+    """Rejected credentials or insufficient permission — permanent, not worth retrying."""
+
+
+class DestinationNotFoundError(DestinationError):
+    """The target (channel/room/blog/webhook/instance) no longer exists."""
+
+
+class DestinationRateLimitError(DestinationError):
+    """Caller should back off. Subclasses set retry_after (seconds) themselves."""
+
+    retry_after: float | None = None
+
+
+class FeedItem(TypedDict, total=False):
+    """The template-facing shape of one feed item, as consumed by
+    render_template() and every _send_X destination function in
+    scheduler.py.
+
+    Documentation, not an enforced contract: total=False because a
+    backdated/drip-redelivered item reconstructed from the feed_items
+    table may carry a subset of these keys, and because feed_parser.py's
+    parse_rss_feed/parse_json_feed (the source of a freshly-fetched item)
+    is the only place all of them are populated at once. Design-patterns
+    audit finding 4.3 — added at the scheduler.py dispatch boundary as a
+    zero-runtime-cost type hint; no call site's actual dict construction
+    changes.
+    """
+
+    id: str
+    title: str
+    link: str
+    summary: str
+    content: str
+    content_text: str
+    content_link: str
+    author: str
+    date: str
+    tags: list[str]
+    image_url: str
+    image_alt: str
+    image_urls: list[dict]
+    enclosure_url: str
+    raw: dict

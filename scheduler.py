@@ -6,6 +6,7 @@ import json
 import logging
 import secrets
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -84,6 +85,7 @@ from notify import (
 )
 from template_engine import render_template
 import alt_text
+from utils import FeedItem
 from utils import utc_now_str as _now
 
 logger = logging.getLogger("feedecho.scheduler")
@@ -585,7 +587,7 @@ def db_feed_url(feed_id: int) -> str:
     return row["url"]
 
 
-def _claim_post(echo_id: int, item: dict) -> tuple[int, str] | None:
+def _claim_post(echo_id: int, item: FeedItem) -> tuple[int, str] | None:
     """Atomically claim an echo/item row.
 
     Returns ``(posted_item_id, claim_token)`` only for the worker that owns the
@@ -681,7 +683,7 @@ def _post_succeeded(echo_id: int, item_id: str) -> bool:
     return _row_state(echo_id, item_id) in ("success", "filtered", "gave_up", "queued")
 
 
-def _record_filtered(echo_id: int, item: dict, reason: str | None = None) -> None:
+def _record_filtered(echo_id: int, item: FeedItem, reason: str | None = None) -> None:
     """Record an item suppressed by the echo's keyword filter.
 
     Uses status 'filtered' so history shows what was dropped and the claim
@@ -706,7 +708,7 @@ def _record_filtered(echo_id: int, item: dict, reason: str | None = None) -> Non
 
 def process_echo(
     echo,
-    item: dict,
+    item: FeedItem,
     feed_name: str = "",
     override_content: str | None = None,
 ) -> bool:
@@ -815,7 +817,7 @@ def _drip_rate(echo_id: int) -> int:
     return row["n"] if row else 0
 
 
-def _queue_for_drip(echo, item: dict, posted_id: int, claim_token: str) -> bool:
+def _queue_for_drip(echo, item: FeedItem, posted_id: int, claim_token: str) -> bool:
     """Hold an item until the drip window has room.
 
     Marks the posted row 'queued' (terminal for the cursor, same as
@@ -905,7 +907,7 @@ def _reclaim_queued(echo_id: int, item_id: str) -> tuple[int, str] | None:
 
 def _render_and_dispatch(
     echo,
-    item: dict,
+    item: FeedItem,
     feed_name: str,
     posted_id: int,
     claim_token: str,
@@ -949,69 +951,13 @@ def _render_and_dispatch(
         gave_up = _fail_post(posted_id, claim_token, echo_id, "Rendered content was empty")
         return gave_up
 
-    if echo["destination_type"] == "mastodon":
-        return _send_mastodon(echo, item, content, echo["destination_id"], posted_id, claim_token)
+    destination_type = echo["destination_type"]
+    if destination_type == "webhook":
+        return _send_webhook(echo, item, content, feed_name, echo["destination_id"], posted_id, claim_token)
 
-    if echo["destination_type"] == "email":
-        return _send_email_echo(
-            echo,
-            item,
-            content,
-            echo["destination_id"],
-            posted_id,
-            claim_token,
-        )
-
-    if echo["destination_type"] == "bluesky":
-        return _send_bluesky(
-            echo,
-            item,
-            content,
-            echo["destination_id"],
-            posted_id,
-            claim_token,
-        )
-
-    if echo["destination_type"] == "microblog":
-        return _send_microblog(
-            echo,
-            item,
-            content,
-            echo["destination_id"],
-            posted_id,
-            claim_token,
-        )
-
-    if echo["destination_type"] == "matrix":
-        return _send_matrix(
-            echo,
-            item,
-            content,
-            echo["destination_id"],
-            posted_id,
-            claim_token,
-        )
-
-    if echo["destination_type"] == "discord":
-        return _send_discord(
-            echo,
-            item,
-            content,
-            echo["destination_id"],
-            posted_id,
-            claim_token,
-        )
-
-    if echo["destination_type"] == "webhook":
-        return _send_webhook(
-            echo,
-            item,
-            content,
-            feed_name,
-            echo["destination_id"],
-            posted_id,
-            claim_token,
-        )
+    handler = _DESTINATION_HANDLERS.get(destination_type)
+    if handler is not None:
+        return handler(echo, item, content, echo["destination_id"], posted_id, claim_token)
 
     gave_up = _fail_post(
         posted_id,
@@ -1129,7 +1075,7 @@ def _fail_post(
     return final == "gave_up"
 
 
-def _item_image_entries(item: dict, limit: int = 4) -> list[dict]:
+def _item_image_entries(item: FeedItem, limit: int = 4) -> list[dict]:
     """Image URL/alt entries from an item, shared by destination senders.
 
     Returns up to `limit` entries of {"url", "alt"} taken from the item's
@@ -1280,7 +1226,7 @@ def _finalize_success(
 
 def _send_mastodon(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     account_id: int,
     posted_id: int,
@@ -1384,7 +1330,7 @@ def _send_mastodon(
 
 def _send_email_echo(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     email_account_id: int,
     posted_id: int,
@@ -1534,7 +1480,7 @@ def _bsky_session(account) -> dict:
 
 def _send_bluesky(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     account_id: int,
     posted_id: int,
@@ -1716,7 +1662,7 @@ def _send_bluesky(
 
 def _send_microblog(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     account_id: int,
     posted_id: int,
@@ -1819,7 +1765,7 @@ def _send_microblog(
 
 def _send_matrix(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     account_id: int,
     posted_id: int,
@@ -1994,7 +1940,7 @@ def _matrix_image_filename(content_type: str) -> str:
 
 def _send_discord(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     account_id: int,
     posted_id: int,
@@ -2067,7 +2013,7 @@ def _send_discord(
 
 def _send_webhook(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     feed_name: str,
     account_id: int,
@@ -2126,9 +2072,29 @@ def _send_webhook(
     return _finalize_success(posted_id, claim_token, echo["id"], post_url="")
 
 
+# Strategy registry: destination_type -> sender. All seven share the
+# (echo, item, content, account_id, posted_id, claim_token) -> bool shape
+# except _send_webhook, which additionally needs feed_name for its payload
+# template — handled as a special case in _render_and_dispatch rather than
+# forcing an unused parameter onto the other six. Replaces a 7-arm
+# if/elif chain that was hand-copied in at least four other places
+# (add_echo/edit_echo's destination-field resolution, echoes.html's
+# destination-type badge, and the two account-table registries in app.py
+# and import_export.py) — this is the one place a destination TYPE maps to
+# posting BEHAVIOR, as opposed to a table name or form field.
+_DESTINATION_HANDLERS: dict[str, Callable[[dict, FeedItem, str, int, int, str], bool]] = {
+    "mastodon": _send_mastodon,
+    "email": _send_email_echo,
+    "bluesky": _send_bluesky,
+    "microblog": _send_microblog,
+    "matrix": _send_matrix,
+    "discord": _send_discord,
+}
+
+
 def _queue_for_digest(
     echo,
-    item: dict,
+    item: FeedItem,
     content: str,
     posted_id: int,
     claim_token: str,

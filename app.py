@@ -2374,7 +2374,38 @@ async def history_page(request: Request, feed: str = "", account: str = "", item
 # ── Reader keyset pagination & search helpers ──────────────────────────────
 READER_PAGE_SIZE = 50
 _CURSOR_RE = re.compile(r"^[0-9 :.\-]*\|\d+$")
-_saved_search_counts_cache: dict[int, tuple[int, float, dict[int, int]]] = {}
+
+
+class _SavedSearchCountsCache:
+    """Per-user, 60s TTL cache of saved-search unread counts.
+
+    Invalidation is keyed by max_item_id (see .get()) rather than pure
+    time, so a stale entry never outlives the item that would change it by
+    more than the TTL. Every route that mutates saved searches, feeds, or
+    read-state must call .invalidate(uid) — wrapped in a class (instead of
+    the previous bare module-level dict) so every one of those 9 call
+    sites reads as an obvious, greppable method name rather than a
+    dict.pop() that looks like ordinary housekeeping and is easy to miss
+    in a diff. Design-patterns audit finding 2.8.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[int, tuple[int, float, dict[int, int]]] = {}
+
+    def get(self, uid: int, max_item_id: int, now: float, ttl: int = 60) -> dict[int, int] | None:
+        cached = self._store.get(uid)
+        if cached and cached[0] == max_item_id and (now - cached[1]) < ttl:
+            return cached[2]
+        return None
+
+    def set(self, uid: int, max_item_id: int, now: float, counts: dict[int, int]) -> None:
+        self._store[uid] = (max_item_id, now, counts)
+
+    def invalidate(self, uid: int) -> None:
+        self._store.pop(uid, None)
+
+
+_saved_search_counts_cache = _SavedSearchCountsCache()
 
 
 def _reader_keyset(cursor: str | None) -> tuple[str, list]:
@@ -2681,9 +2712,9 @@ async def reader_page(
         saved_search_counts: dict[int, int] = {}
         if saved_searches:
             now_time = time.time()
-            cached = _saved_search_counts_cache.get(uid)
-            if cached and cached[0] == max_item_id and (now_time - cached[1]) < 60:
-                saved_search_counts = cached[2]
+            cached = _saved_search_counts_cache.get(uid, max_item_id, now_time)
+            if cached is not None:
+                saved_search_counts = cached
             else:
                 # Pre-load mute keywords once for all saved-search count queries
                 mutes = db.execute(
@@ -2755,7 +2786,7 @@ async def reader_page(
                         tuple(s_params),
                     ).fetchone()
                     saved_search_counts[s["id"]] = cnt_row["c"] if cnt_row else 0
-                _saved_search_counts_cache[uid] = (max_item_id, now_time, saved_search_counts)
+                _saved_search_counts_cache.set(uid, max_item_id, now_time, saved_search_counts)
 
     # Progressive enhancement: fetch request with X-Requested-With returns the
     # items fragment alone (for infinite scroll / load more).
@@ -3041,7 +3072,7 @@ def _hard_delete_user(db, uid: int) -> None:
     db.execute("DELETE FROM email_tokens WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM users WHERE id = ?", (uid,))
     # Clean up the in-process saved-search count cache for this deleted user
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
 
 
 @app.post("/settings/delete-account")
@@ -4014,7 +4045,7 @@ def create_saved_search(
         ).fetchone()
 
     # Invalidate count cache for this user
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
 
     if request.headers.get("accept", "").startswith("application/json"):
         return {"success": True, "id": row["id"], "name": name, "query": query}
@@ -4049,7 +4080,7 @@ def rename_saved_search(request: Request, search_id: int, name: str = Form(...))
             (name, search_id, uid),
         )
 
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     if request.headers.get("accept", "").startswith("application/json"):
         return {"success": True, "name": name}
     return RedirectResponse(url=f"/reader?saved={search_id}", status_code=303)
@@ -4072,7 +4103,7 @@ def delete_saved_search(request: Request, search_id: int):
             (search_id, uid),
         )
 
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     if request.headers.get("accept", "").startswith("application/json"):
         return {"success": True}
     return RedirectResponse(url="/reader", status_code=303)
@@ -4730,7 +4761,7 @@ def reader_toggle_read(request: Request, item_id: int):
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Item not found")
         row = db.execute("SELECT is_read FROM feed_items WHERE id = ?", (item_id,)).fetchone()
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "is_read": bool(row["is_read"])}
 
 
@@ -4747,7 +4778,7 @@ def reader_toggle_star(request: Request, item_id: int):
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Item not found")
         row = db.execute("SELECT starred FROM feed_items WHERE id = ?", (item_id,)).fetchone()
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "starred": bool(row["starred"])}
 
 
@@ -4803,7 +4834,7 @@ def reader_mark_all_read(
                 " (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
                 (uid,),
             )
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     ids = [r["id"] for r in rows]
     return {"success": True, "count": len(ids), "ids": ids}
 
@@ -4831,7 +4862,7 @@ def reader_mark_unread(request: Request, ids: str = Form("")):
             " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (*id_list, uid),
         )
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "count": result.rowcount}
 
 
@@ -4859,7 +4890,7 @@ def reader_mark_read(request: Request, ids: str = Form("")):
             " AND feed_id IN (SELECT id FROM feeds WHERE user_id = ? AND deleted_at IS NULL)",
             (*id_list, uid),
         )
-    _saved_search_counts_cache.pop(uid, None)
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "count": result.rowcount}
 
 

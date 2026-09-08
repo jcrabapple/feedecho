@@ -3306,17 +3306,7 @@ def test_bluesky_account(request: Request, account_id: int):
 @app.post("/api/bluesky-accounts/{account_id}/delete")
 def delete_bluesky_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    with get_db() as db:
-        dependent = db.execute(
-            """
-            SELECT COUNT(*) as c FROM echoes
-             WHERE destination_type = 'bluesky'
-               AND destination_id = ?
-               AND deleted_at IS NULL
-               AND user_id = ?
-            """,
-            (account_id, uid),
-        ).fetchone()["c"]
+    dependent = _dependent_echo_count(uid, "bluesky", account_id)
     if dependent:
         return _render_accounts_error(
             request,
@@ -3424,17 +3414,7 @@ def test_microblog_account(request: Request, account_id: int):
 @app.post("/api/microblog-accounts/{account_id}/delete")
 def delete_microblog_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    with get_db() as db:
-        dependent = db.execute(
-            """
-            SELECT COUNT(*) as c FROM echoes
-             WHERE destination_type = 'microblog'
-               AND destination_id = ?
-               AND deleted_at IS NULL
-               AND user_id = ?
-            """,
-            (account_id, uid),
-        ).fetchone()["c"]
+    dependent = _dependent_echo_count(uid, "microblog", account_id)
     if dependent:
         return _render_accounts_error(
             request,

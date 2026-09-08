@@ -19,6 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
+from utils import json_error_detail
 
 PUBLIC_API = "https://public.api.bsky.app"
 PLC_DIRECTORY = "https://plc.directory"
@@ -45,15 +46,7 @@ class BlueskyAuthError(BlueskyError):
 
 def _error_detail(response) -> str:
     """Extract the PDS-provided error message from a JSON error body."""
-    try:
-        body = response.json()
-    except ValueError:
-        return ""
-    if isinstance(body, dict):
-        msg = body.get("message") or body.get("error")
-        if isinstance(msg, str) and msg.strip():
-            return msg.strip()[:200]
-    return ""
+    return json_error_detail(response, "message", "error")
 
 
 def _is_token_error(detail: str) -> bool:

@@ -38,10 +38,16 @@ from urllib.parse import urlsplit
 import httpx
 
 from feed_parser import SSRFError, pinned_request
+from utils import (
+    DEFAULT_REQUEST_TIMEOUT,
+    json_error_detail,
+    parse_retry_after,
+    truncate_chars,
+)
 
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
 
 # Discord message `content` limit. Embeds add their own smaller caps
 # (title 256); truncated locally rather than discovering the limit via 400s.
@@ -91,34 +97,12 @@ class DiscordBadRequestError(DiscordError):
 
 def _error_detail(response) -> str:
     """Discord errors are ``{"message": "...", "code": ...}``."""
-    try:
-        body = response.json()
-    except ValueError:
-        return ""
-    if isinstance(body, dict):
-        msg = body.get("message")
-        if isinstance(msg, str) and msg.strip():
-            return msg.strip()[:200]
-    return ""
+    return json_error_detail(response, "message")
 
 
 def _rate_limit_seconds(response) -> float | None:
-    """Discord's suggested wait, from the body's retry_after or the header."""
-    try:
-        body = response.json()
-        if isinstance(body, dict):
-            value = body.get("retry_after")
-            if isinstance(value, (int, float)):
-                return float(value)
-    except ValueError:
-        pass
-    header = response.headers.get("Retry-After") if response.headers else None
-    if header:
-        try:
-            return float(header)
-        except ValueError:
-            return None
-    return None
+    """Discord's suggested wait, from the Retry-After header or the body."""
+    return parse_retry_after(response)
 
 
 def _raise_for_status(response, action: str) -> None:
@@ -229,9 +213,7 @@ def connect(raw_url: str) -> dict:
 
 
 def truncate_content(text: str) -> str:
-    if len(text) <= MAX_CONTENT_CHARS:
-        return text
-    return text[: MAX_CONTENT_CHARS - 1].rstrip() + "…"
+    return truncate_chars(text, MAX_CONTENT_CHARS)
 
 
 def build_embed(title: str, url: str, image_url: str) -> dict | None:

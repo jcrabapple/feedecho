@@ -16,19 +16,12 @@ short-lived in practice; a DB leak is already game over for session secrets.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
-
 import settings
+from utils import utc_now_str as _now_str
 
 
 class InviteError(ValueError):
     """Raised when a supplied invite code cannot be used."""
-
-
-def _now_str() -> str:
-    """Explicit UTC timestamp string. Never CURRENT_TIMESTAMP on PG: it
-    resolves in the session time zone while every reader assumes UTC."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def generate_code() -> str:

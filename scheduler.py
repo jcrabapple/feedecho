@@ -29,6 +29,7 @@ from mastodon import post_status, upload_media
 from bluesky import (
     BLUESKY_IMAGE_TYPES,
     MAX_BLOB_BYTES,
+    MAX_POST_GRAPHEMES,
     BlueskyAuthError,
     BlueskyError,
     build_facets,
@@ -83,13 +84,13 @@ from notify import (
 )
 from template_engine import render_template
 import alt_text
+from utils import utc_now_str as _now
 
 logger = logging.getLogger("feedecho.scheduler")
 
 scheduler: BackgroundScheduler | None = None
 
 MASTODON_MAX_CHARS = 500
-BLUESKY_MAX_GRAPHEMES = 300
 PENDING_RECLAIM_SECONDS = 10 * 60
 FEED_LEASE_SECONDS = 15 * 60
 DRIP_QUEUE_CAP = 30
@@ -118,10 +119,6 @@ def _drip_lock(echo_id: int) -> threading.Lock:
             lock = threading.Lock()
             _drip_locks[echo_id] = lock
         return lock
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _timestamp_after(seconds: int) -> str:
@@ -1445,7 +1442,7 @@ def _send_bluesky(
     # Content preparation is pure string work, but a bug here must not strand
     # the claimed row — finalize it as failed so the bounded retry owns it.
     try:
-        text = truncate_graphemes(content or "", BLUESKY_MAX_GRAPHEMES)
+        text = truncate_graphemes(content or "", MAX_POST_GRAPHEMES)
         facets = build_facets(text)
     except Exception:
         logger.exception("Echo %s: Bluesky content preparation failed", echo["id"])

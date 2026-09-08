@@ -20,11 +20,12 @@ import logging
 import httpx
 
 from feed_parser import SSRFError, pinned_request
+from utils import DEFAULT_REQUEST_TIMEOUT, json_error_detail
 
 logger = logging.getLogger(__name__)
 
 MICROPUB_ENDPOINT = "https://micro.blog/micropub"
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
 TOKEN_DISPLAY_MAX = 8
 
 
@@ -38,15 +39,7 @@ class MicroblogAuthError(MicroblogError):
 
 def _error_detail(response) -> str:
     """Extract a Micropub error message from a JSON error body."""
-    try:
-        body = response.json()
-    except ValueError:
-        return ""
-    if isinstance(body, dict):
-        msg = body.get("error_description") or body.get("error")
-        if isinstance(msg, str) and msg.strip():
-            return msg.strip()[:200]
-    return ""
+    return json_error_detail(response, "error_description", "error")
 
 
 def _bearer(token: str) -> str:

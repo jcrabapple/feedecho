@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from database import get_db
 from email_sender import get_smtp_settings, send_email
+from utils import utc_now_str as _now_str
 
 logger = logging.getLogger("feedecho.notify")
 
@@ -31,10 +32,6 @@ DEFAULT_NOTIFY_THRESHOLD = 3
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _now_str() -> str:
-    return _now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_setting_int(key: str, default: int, user_id: int = 1) -> int:

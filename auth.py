@@ -101,10 +101,6 @@ def is_admin(uid: int) -> bool:
     return bool(row and row["is_admin"])
 
 
-def _now_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def _trial_end() -> str:
     return (datetime.now(timezone.utc) + timedelta(days=_TRIAL_DAYS)).strftime(
         "%Y-%m-%d %H:%M:%S"

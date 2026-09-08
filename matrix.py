@@ -41,6 +41,11 @@ from urllib.parse import quote
 import httpx
 
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
+from utils import (
+    DEFAULT_REQUEST_TIMEOUT,
+    json_error_detail,
+    truncate_chars,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +53,7 @@ CLIENT_API = "/_matrix/client/v3"
 MEDIA_API = "/_matrix/media/v3"
 WELL_KNOWN_PATH = "/.well-known/matrix/client"
 MESSAGE_EVENT_TYPE = "m.room.message"
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
 WELL_KNOWN_TIMEOUT = 10
 
 # Homeservers cap uploads (Synapse's default max_upload_size is 50M, but the
@@ -83,27 +88,11 @@ def _error_detail(response) -> str:
 
     Matrix errors are ``{"errcode": "M_...", "error": "human text"}``.
     """
-    try:
-        body = response.json()
-    except ValueError:
-        return ""
-    if isinstance(body, dict):
-        msg = body.get("error") or body.get("errcode")
-        if isinstance(msg, str) and msg.strip():
-            return msg.strip()[:200]
-    return ""
+    return json_error_detail(response, "error", "errcode")
 
 
 def _errcode(response) -> str:
-    try:
-        body = response.json()
-    except ValueError:
-        return ""
-    if isinstance(body, dict):
-        code = body.get("errcode")
-        if isinstance(code, str):
-            return code
-    return ""
+    return json_error_detail(response, "errcode")
 
 
 def _raise_for_status(response, action: str) -> None:
@@ -221,9 +210,7 @@ def html_body(text: str) -> str:
 
 
 def _truncate_body(text: str) -> str:
-    if len(text) <= MAX_BODY_CHARS:
-        return text
-    return text[: MAX_BODY_CHARS - 1].rstrip() + "…"
+    return truncate_chars(text, MAX_BODY_CHARS)
 
 
 def transaction_id(echo_id: int, item_id: str, suffix: str = "") -> str:

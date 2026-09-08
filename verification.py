@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from database import get_db
 from security import new_token, token_hash
+from utils import utc_now_str as _now_str
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +18,6 @@ TOKEN_TTL_HOURS = 24
 RESEND_LIMIT = 3  # per user, per purpose, per 24h
 
 _TS = "%Y-%m-%d %H:%M:%S"
-
-
-def _now_str() -> str:
-    """Explicit UTC timestamp string. On PG the SQL NOW-ish default resolves
-    in the session time zone while every reader assumes UTC, so this module
-    binds UTC params everywhere instead (same rule as invites._now_str)."""
-    return datetime.now(timezone.utc).strftime(_TS)
 
 
 def issue_token(user_id: int, purpose: str) -> str:

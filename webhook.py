@@ -46,10 +46,11 @@ import httpx
 
 import settings
 from feed_parser import SSRFError, ssrf_client, unpinned_client, validate_outbound_url
+from utils import DEFAULT_REQUEST_TIMEOUT, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
 
 # curl-style "Name: Value" header lines. Names are validated against the HTTP
 # token characters; values are free-form but may not contain control
@@ -224,21 +225,7 @@ def build_payload(item: dict, text: str, feed_name: str = "") -> dict:
 
 
 def _rate_limit_seconds(response) -> float | None:
-    header = response.headers.get("Retry-After") if response.headers else None
-    if header:
-        try:
-            return float(header)
-        except ValueError:
-            return None
-    try:
-        body = response.json()
-        if isinstance(body, dict):
-            value = body.get("retry_after") or body.get("retryAfter")
-            if isinstance(value, (int, float)):
-                return float(value)
-    except ValueError:
-        pass
-    return None
+    return parse_retry_after(response)
 
 
 def _raise_for_status(response) -> None:

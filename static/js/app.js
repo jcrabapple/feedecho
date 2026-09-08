@@ -25,7 +25,7 @@ function showStatus(btn, text, kind) {
 
 // Busy-state wrapper: disables the clicked button and swaps its label for the
 // duration of the async action so double-clicks cannot fire duplicate POSTs.
-// fn receives no arguments; wrap it (e.g. `onclick="withBusy(this, () => testAccount(3))"`).
+// fn receives no arguments; wrap it (e.g. `onclick="withBusy(this, (btn) => testDestinationAccount('mastodon', 3, btn))"`).
 async function withBusy(btn, fn) {
     if (btn.disabled) return;
     const originalText = btn.textContent;

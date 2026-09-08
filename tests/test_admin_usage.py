@@ -24,6 +24,7 @@ import database
 import security
 import settings
 from app import app
+from utils import utc_now_str as _now_str
 
 ADMIN_ID = 9
 A_ID = 5
@@ -64,10 +65,6 @@ def _admin_client(multi_env):
     c = TestClient(app)
     c.cookies.set("feedecho_session", security.sign_session(ADMIN_ID, "admin@example.com"))
     return c
-
-
-def _now_str():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _ago(days=0, hours=0):

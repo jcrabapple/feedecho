@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 # Default HTTP request timeout (seconds) shared by the destination
 # modules. Replaces the four independent REQUEST_TIMEOUT = 30 constants.
@@ -71,8 +72,10 @@ def json_error_detail(response, *keys: str) -> str:
 
     Keys are tried left to right with ``a or b`` fallthrough semantics
     (matching the former destination-module copies): the first truthy
-    string wins, stripped and capped at 200 characters. Returns "" when
-    the body is not JSON, not a dict, or carries none of the keys.
+    VALUE wins, and it must itself be a non-blank string; it is then
+    stripped and capped at 200 characters. A truthy non-string value
+    (dict, list, number) yields "" just like the originals did. Returns
+    "" when the body is not JSON or not a dict.
     """
     try:
         body = response.json()
@@ -89,21 +92,32 @@ def json_error_detail(response, *keys: str) -> str:
 def parse_retry_after(response) -> float | None:
     """Seconds the remote asked the client to wait, or None.
 
-    The Retry-After header wins when present, falling back to
-    retry_after/retryAfter in a JSON body. The former discord.py copy
-    checked the body first, but Discord sends matching values in header
-    and body on 429, so the unified order changes no real response.
+    The Retry-After header wins when present: parsed as plain seconds or
+    as an RFC 7231 HTTP-date (clamped at 0 for past dates). An absent or
+    unparseable header falls back to retry_after/retryAfter in a JSON
+    body. Body values are returned as-is, including 0 (some services
+    answer rate-limit responses with retry_after: 0), matching the former
+    discord.py behavior.
     """
     header = response.headers.get("Retry-After") if response.headers else None
     if header:
         try:
             return float(header)
         except ValueError:
-            return None
+            pass
+        try:
+            retry_dt = parsedate_to_datetime(header)
+        except (TypeError, ValueError):
+            retry_dt = None
+        if retry_dt is not None:
+            wait = (retry_dt - datetime.now(timezone.utc)).total_seconds()
+            return max(wait, 0.0)
     try:
         body = response.json()
         if isinstance(body, dict):
-            value = body.get("retry_after") or body.get("retryAfter")
+            value = body.get("retry_after")
+            if value is None:
+                value = body.get("retryAfter")
             if isinstance(value, (int, float)):
                 return float(value)
     except ValueError:

@@ -4595,6 +4595,8 @@ async def delete_feed(request: Request, feed_id: int):
             """,
             (feed_id, uid),
         )
+    # Soft-deleting a feed changes which items saved-search counts cover
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -4745,6 +4747,8 @@ def toggle_reader_feed(request: Request, feed_id: int):
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Feed not found")
         row = db.execute("SELECT read_enabled FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+    # Toggling ingestion changes which items saved-search counts cover
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "read_enabled": bool(row["read_enabled"])}
 
 
@@ -4964,6 +4968,8 @@ def reader_mute(
                 )
                 affected_feed_ids.append(tf["id"])
 
+    # Saved-search counts apply mute keywords, so a mute changes them
+    _saved_search_counts_cache.invalidate(uid)
     return {
         "success": True,
         "phrase": phrase,
@@ -5013,6 +5019,8 @@ def reader_unmute(
                 )
                 count += 1
 
+    # Saved-search counts apply mute keywords, so an unmute changes them
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "phrase": phrase, "count": count}
 
 

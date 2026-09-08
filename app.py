@@ -73,7 +73,7 @@ from discord import (
     DiscordError,
     DiscordNotFoundError,
     connect as discord_connect,
-    normalize_webhook_url as discord_normalize_webhook_url,
+    normalize_discord_webhook_url as discord_normalize_webhook_url,
     test_connection as test_discord_connection,
 )
 from webhook import (
@@ -1381,6 +1381,41 @@ def _admin_uid_or_none(request: Request) -> int | None:
     return uid if auth.is_admin(uid) else None
 
 
+def _require_admin(request: Request) -> int:
+    """The admin's user id or HTTP 403. For POST/API admin routes.
+
+    Replaces 10 of the 11 guard copies (audit finding 3.4); the GET
+    /admin page keeps its own HTML-rendered guard.
+    """
+    uid = _admin_uid_or_none(request)
+    if uid is None:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return uid
+
+
+def _get_user_or_404(db, user_id: int, columns: str = "id"):
+    """One users row or HTTP 404. Replaces the 7-copy lookup (3.5)."""
+    row = db.execute(f"SELECT {columns} FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return row
+
+
+def _error(request: Request, status: int, message: str):
+    """render(error.html, ...) with the repeated status/code kwargs (3.6)."""
+    return render("error.html", request, status_code=status, code=status, message=message)
+
+
+def _upsert_settings(db, uid: int, values: dict[str, str]) -> None:
+    """Batch upsert into settings, replacing the 3-copy loop (3.7)."""
+    for key, value in values.items():
+        db.execute(
+            "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
+            " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (uid, key, value),
+        )
+
+
 def _admin_usage(db) -> list:
     """Per-tenant usage for the admin page's support view.
 
@@ -1510,10 +1545,7 @@ def _admin_guard_last_admin(db, user_id: int, column: str) -> str | None:
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     with get_db() as db:
         users = db.execute("""
             SELECT id, email, plan, trial_ends_at, email_verified,
@@ -1550,10 +1582,7 @@ _SMTP_FORM_KEYS = (
 
 @app.post("/admin/email")
 async def admin_email_save(request: Request):
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     form = await request.form()
 
     # Validate before storing anything: a bad port or control characters
@@ -1607,10 +1636,7 @@ async def admin_email_save(request: Request):
 
 @app.post("/admin/email/test")
 def admin_email_test(request: Request):
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     with get_db() as db:
         row = db.execute(
             "SELECT email FROM users WHERE id = ?", (uid,)
@@ -1629,20 +1655,12 @@ def admin_email_test(request: Request):
 @app.post("/admin/users/{user_id}/suspend")
 async def admin_suspend(user_id: int, request: Request):
     """Set suspended=1 (atomic target state, idempotent)."""
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     if user_id == uid:
         return render("error.html", request, status_code=400,
                       code=400, message="You cannot suspend your own account")
     with get_db() as db:
-        row = db.execute(
-            "SELECT id FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-        if row is None:
-            return render("error.html", request, status_code=404,
-                          code=404, message="User not found")
+        row = _get_user_or_404(db, user_id)
         guard = _admin_guard_last_admin(db, user_id, "suspended")
         if guard:
             return render("error.html", request, status_code=400,
@@ -1657,17 +1675,9 @@ async def admin_suspend(user_id: int, request: Request):
 
 @app.post("/admin/users/{user_id}/unsuspend")
 async def admin_unsuspend(user_id: int, request: Request):
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     with get_db() as db:
-        row = db.execute(
-            "SELECT id FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-        if row is None:
-            return render("error.html", request, status_code=404,
-                          code=404, message="User not found")
+        row = _get_user_or_404(db, user_id)
         db.execute(
             "UPDATE users SET suspended = 0 WHERE id = ? AND suspended = 1",
             (user_id,),
@@ -1678,17 +1688,9 @@ async def admin_unsuspend(user_id: int, request: Request):
 
 @app.post("/admin/users/{user_id}/promote")
 async def admin_promote(user_id: int, request: Request):
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     with get_db() as db:
-        row = db.execute(
-            "SELECT id FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-        if row is None:
-            return render("error.html", request, status_code=404,
-                          code=404, message="User not found")
+        row = _get_user_or_404(db, user_id)
         db.execute(
             "UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0",
             (user_id,),
@@ -1699,20 +1701,12 @@ async def admin_promote(user_id: int, request: Request):
 
 @app.post("/admin/users/{user_id}/demote")
 async def admin_demote(user_id: int, request: Request):
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     if user_id == uid:
         return render("error.html", request, status_code=400,
                       code=400, message="You cannot demote your own account")
     with get_db() as db:
-        row = db.execute(
-            "SELECT id FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-        if row is None:
-            return render("error.html", request, status_code=404,
-                          code=404, message="User not found")
+        row = _get_user_or_404(db, user_id)
         guard = _admin_guard_last_admin(db, user_id, "is_admin")
         if guard:
             return render("error.html", request, status_code=400,
@@ -1735,20 +1729,14 @@ async def admin_set_plan(user_id: int, request: Request):
     moment the plan flips to trial — that is why extend-trial refuses
     non-trial users and why this route is a deliberate admin action.
     """
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     form = await request.form()
     plan = (form.get("plan") or "").strip()
     if plan not in settings.PLAN_LIMITS:
         return render("error.html", request, status_code=400,
                       code=400, message=f"Unknown plan: {plan!r}")
     with get_db() as db:
-        row = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
-        if row is None:
-            return render("error.html", request, status_code=404,
-                          code=404, message="User not found")
+        row = _get_user_or_404(db, user_id)
         db.execute("UPDATE users SET plan = ? WHERE id = ?", (plan, user_id))
     logger.info("Admin %s set user %s plan to %s", uid, user_id, plan)
     return RedirectResponse(url="/admin", status_code=302)
@@ -1761,10 +1749,7 @@ async def admin_extend_trial(user_id: int, request: Request):
     Sets plan back to 'trial' and trial_ends_at to now + days, so an expired
     trial resumes posting the moment the operator grants more time.
     """
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     form = await request.form()
     try:
         days = int(form.get("days") or 0)
@@ -1774,10 +1759,7 @@ async def admin_extend_trial(user_id: int, request: Request):
         return render("error.html", request, status_code=400,
                       code=400, message="Trial extension must be 1-365 days")
     with get_db() as db:
-        row = db.execute("SELECT id, plan FROM users WHERE id = ?", (user_id,)).fetchone()
-        if row is None:
-            return render("error.html", request, status_code=404,
-                          code=404, message="User not found")
+        row = _get_user_or_404(db, user_id, columns="id, plan")
         if row["plan"] != "trial":
             # Extending a paid/beta user's "trial" would silently downgrade
             # them to trial limits and pause them when it lapses. The plan
@@ -1799,10 +1781,7 @@ async def admin_extend_trial(user_id: int, request: Request):
 @app.post("/admin/invites/generate")
 async def admin_generate_invites(request: Request):
     """Mint 1-50 fresh invite codes."""
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     form = await request.form()
     try:
         count = int(form.get("count") or 1)
@@ -1818,10 +1797,7 @@ async def admin_generate_invites(request: Request):
 @app.post("/admin/invites/revoke")
 async def admin_revoke_invite(request: Request):
     """Revoke an unused invite code (used codes are historical records)."""
-    uid = _admin_uid_or_none(request)
-    if uid is None:
-        return render("error.html", request, status_code=403,
-                      code=403, message="Admin access required")
+    uid = _require_admin(request)
     form = await request.form()
     code = (form.get("code") or "").strip()
     with get_db() as db:
@@ -3869,12 +3845,7 @@ async def save_smtp_settings(
         "smtp_use_tls": smtp_use_tls,
     }
     with get_db() as db:
-        for key, value in values.items():
-            db.execute(
-                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
-                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-                (uid, key, value),
-            )
+        _upsert_settings(db, uid, values)
         # Only update password if it's not the mask placeholder
         if smtp_password and smtp_password != "********":
             db.execute(
@@ -3929,12 +3900,7 @@ async def save_retry_notify_settings(
         "notify_email": notify_email.strip(),
     }
     with get_db() as db:
-        for key, value in values.items():
-            db.execute(
-                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
-                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-                (uid, key, value),
-            )
+        _upsert_settings(db, uid, values)
     return RedirectResponse(url="/settings?status=saved", status_code=303)
 
 
@@ -3953,12 +3919,7 @@ async def save_alt_text_settings(
         "alt_text_ai_model": alt_text_ai_model.strip(),
     }
     with get_db() as db:
-        for key, value in values.items():
-            db.execute(
-                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)"
-                " ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-                (uid, key, value),
-            )
+        _upsert_settings(db, uid, values)
         # Only update API key if it's not the mask placeholder
         if alt_text_ai_api_key and alt_text_ai_api_key != "********":
             db.execute(
@@ -5889,6 +5850,14 @@ async def not_found_handler(request: Request, exc: HTTPException):
     if request.headers.get("accept", "").startswith("application/json"):
         return JSONResponse({"detail": "Not found"}, status_code=404)
     return render("404.html", request, status_code=404)
+
+
+@app.exception_handler(403)
+async def forbidden_handler(request: Request, exc: HTTPException):
+    if request.headers.get("accept", "").startswith("application/json"):
+        return JSONResponse({"detail": "Admin access required"}, status_code=403)
+    return render("error.html", request, status_code=403,
+                  code=403, message="Admin access required")
 
 
 @app.get("/favicon.svg", include_in_schema=False)

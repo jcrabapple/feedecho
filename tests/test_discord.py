@@ -91,34 +91,34 @@ def _resp(payload, status_code=200, headers=None):
 
 class TestNormalizeWebhookURL:
     def test_valid_url_passes_through(self):
-        assert discord.normalize_webhook_url(WEBHOOK_URL) == WEBHOOK_URL
+        assert discord.normalize_discord_webhook_url(WEBHOOK_URL) == WEBHOOK_URL
 
     def test_discordapp_com_canonicalized(self):
         raw = "https://discordapp.com" + WEBHOOK_URL[len("https://discord.com") :]
-        assert discord.normalize_webhook_url(raw) == WEBHOOK_URL
+        assert discord.normalize_discord_webhook_url(raw) == WEBHOOK_URL
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):
-            discord.normalize_webhook_url("")
+            discord.normalize_discord_webhook_url("")
 
     def test_http_rejected(self):
         with pytest.raises(ValueError):
-            discord.normalize_webhook_url(WEBHOOK_URL.replace("https://", "http://"))
+            discord.normalize_discord_webhook_url(WEBHOOK_URL.replace("https://", "http://"))
 
     def test_wrong_host_rejected(self):
         raw = WEBHOOK_URL.replace("discord.com", "discord.com.evil.example")
         with pytest.raises(ValueError):
-            discord.normalize_webhook_url(raw)
+            discord.normalize_discord_webhook_url(raw)
 
     def test_non_webhook_path_rejected(self):
         with pytest.raises(ValueError):
-            discord.normalize_webhook_url(
+            discord.normalize_discord_webhook_url(
                 "https://discord.com/channels/1234567890123456789/1112223334445556667"
             )
 
     def test_garbage_rejected(self):
         with pytest.raises(ValueError):
-            discord.normalize_webhook_url("just some text")
+            discord.normalize_discord_webhook_url("just some text")
 
 # ── Client: inspect_webhook / connect / send ────────────────────────────────
 

@@ -127,16 +127,21 @@ TRUSTED_PROXIES = tuple(
     c.strip() for c in env("TRUSTED_PROXIES", "").split(",") if c.strip()
 )
 
+def _env_int(name: str, default: int) -> int:
+    """env() parsed as int with a warning fallback (audit finding 3.8)."""
+    try:
+        return int(env(name, str(default)))
+    except ValueError:
+        logging.getLogger("feedecho").warning(
+            "FEEDECHO_%s is not a valid integer; using default of %s", name, default
+        )
+        return default
+
+
 # Cap on concurrent scrypt hashes. scrypt releases the GIL, so concurrent
 # login/register/reset attempts stack ~128 MiB each; this bounds peak memory.
 # Default 4 (≈512 MiB). Tune down on small hosts, up on large ones.
-try:
-    SCRYPT_CONCURRENCY = max(1, int(env("SCRYPT_CONCURRENCY", "4")))
-except ValueError:
-    logging.getLogger("feedecho").warning(
-        "FEEDECHO_SCRYPT_CONCURRENCY is not a valid integer; using default of 4"
-    )
-    SCRYPT_CONCURRENCY = 4
+SCRYPT_CONCURRENCY = max(1, _env_int("SCRYPT_CONCURRENCY", 4))
 
 # ── Plan limits (hosted mode) ────────────────────────────────────────────────
 #
@@ -253,34 +258,15 @@ BILLING_ENABLED = env("BILLING_ENABLED", "") == "1"
 # MAX_BACKDATED_ENTRY_DAYS of now are still delivered. Off by default so
 # existing behaviour is unchanged; self-hosters who backdate posts can opt in.
 ALLOW_BACKDATED_ENTRIES = env("ALLOW_BACKDATED_ENTRIES", "") == "1"
-try:
-    MAX_BACKDATED_ENTRY_DAYS = int(env("MAX_BACKDATED_ENTRY_DAYS", "3"))
-except ValueError:
-    logging.getLogger("feedecho").warning(
-        "FEEDECHO_MAX_BACKDATED_ENTRY_DAYS is not a valid integer; using default of 3"
-    )
-    MAX_BACKDATED_ENTRY_DAYS = 3
+MAX_BACKDATED_ENTRY_DAYS = _env_int("MAX_BACKDATED_ENTRY_DAYS", 3)
 
 # ── Reader (RSS reading surface, issue #11) ──────────────────────────────────
 #
 # The reader persists feed items for reading; this caps how many are kept per
 # feed (oldest pruned on insert) so a shared hosted database cannot grow
 # without bound. Single mode uses the same default and may tune it via env.
-try:
-    READER_MAX_ITEMS_PER_FEED = int(env("READER_MAX_ITEMS_PER_FEED", "200"))
-except ValueError:
-    logging.getLogger("feedecho").warning(
-        "FEEDECHO_READER_MAX_ITEMS_PER_FEED is not a valid integer; using default of 200"
-    )
-    READER_MAX_ITEMS_PER_FEED = 200
-
-try:
-    READER_MAX_STARRED_PER_FEED = int(env("READER_MAX_STARRED_PER_FEED", "0"))
-except ValueError:
-    logging.getLogger("feedecho").warning(
-        "FEEDECHO_READER_MAX_STARRED_PER_FEED is not a valid integer; using default of 0"
-    )
-    READER_MAX_STARRED_PER_FEED = 0
+READER_MAX_ITEMS_PER_FEED = _env_int("READER_MAX_ITEMS_PER_FEED", 200)
+READER_MAX_STARRED_PER_FEED = _env_int("READER_MAX_STARRED_PER_FEED", 0)
 
 
 def validate_config() -> None:

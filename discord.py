@@ -8,7 +8,7 @@ full.
 
 Flow at connect time (``connect``):
 
-1. ``normalize_webhook_url`` validates and canonicalizes the pasted URL: https,
+1. ``normalize_discord_webhook_url`` validates and canonicalizes the pasted URL: https,
    a Discord host (``discord.com`` or the legacy ``discordapp.com`` alias), and
    an ``/api/webhooks/<id>/<token>`` path. discordapp.com URLs are rewritten to
    discord.com so the same webhook never becomes two account rows.
@@ -138,7 +138,7 @@ def _raise_for_status(response, action: str) -> None:
     )
 
 
-def normalize_webhook_url(raw: str) -> str:
+def normalize_discord_webhook_url(raw: str) -> str:
     """Validate a pasted webhook URL and return the canonical form.
 
     Accepts only https URLs on discord.com / discordapp.com with the
@@ -172,7 +172,7 @@ def inspect_webhook(webhook_url: str) -> dict:
     so a tampered stored row cannot point this request elsewhere.
     """
     try:
-        webhook_url = normalize_webhook_url(webhook_url)
+        webhook_url = normalize_discord_webhook_url(webhook_url)
     except ValueError as e:
         # Stored rows are normalized at connect; this only triggers for a
         # tampered DB row. Converted so callers get a DiscordError, not a
@@ -207,7 +207,7 @@ def connect(raw_url: str) -> dict:
     malformed URL, DiscordAuthError for a bad token, DiscordNotFoundError for
     a deleted webhook, and DiscordError for network/API failures.
     """
-    webhook_url = normalize_webhook_url(raw_url)
+    webhook_url = normalize_discord_webhook_url(raw_url)
     info = inspect_webhook(webhook_url)
     return {"webhook_url": webhook_url, **info}
 
@@ -248,7 +248,7 @@ def send_webhook(
     connect normalized it, so a tampered stored row cannot redirect the POST.
     """
     try:
-        webhook_url = normalize_webhook_url(webhook_url)
+        webhook_url = normalize_discord_webhook_url(webhook_url)
     except ValueError as e:
         # A tampered DB row; permanent, since retries cannot fix the URL.
         raise DiscordBadRequestError(f"Stored webhook URL is malformed: {e}") from e

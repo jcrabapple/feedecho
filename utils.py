@@ -110,6 +110,11 @@ def parse_retry_after(response) -> float | None:
         except (TypeError, ValueError):
             retry_dt = None
         if retry_dt is not None:
+            # RFC 7231 also permits the asctime() format, which carries no
+            # timezone; treat it as UTC so subtracting the aware now()
+            # below cannot raise TypeError.
+            if retry_dt.tzinfo is None:
+                retry_dt = retry_dt.replace(tzinfo=timezone.utc)
             wait = (retry_dt - datetime.now(timezone.utc)).total_seconds()
             return max(wait, 0.0)
     try:

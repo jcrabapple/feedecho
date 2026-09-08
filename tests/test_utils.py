@@ -110,6 +110,22 @@ def test_parse_retry_after_http_date_header():
     assert wait is not None and 110 <= wait <= 121
 
 
+def test_parse_retry_after_past_http_date_clamped_to_zero():
+    r = FakeResponse(
+        {}, status_code=429, headers={"Retry-After": "Sun, 06 Nov 1994 08:49:37 GMT"}
+    )
+    assert utils.parse_retry_after(r) == 0.0
+
+
+def test_parse_retry_after_naive_asctime_date_treated_as_utc():
+    # RFC 7231 permits the asctime() format, which carries no timezone;
+    # 1994 is in the past, so the clamp yields 0 without a TypeError.
+    r = FakeResponse(
+        {}, status_code=429, headers={"Retry-After": "Sun Nov  6 08:49:37 1994"}
+    )
+    assert utils.parse_retry_after(r) == 0.0
+
+
 def test_parse_retry_after_unparseable_header_falls_through_to_body():
     r = FakeResponse(
         {"retry_after": 7}, status_code=429, headers={"Retry-After": "total-garbage"}

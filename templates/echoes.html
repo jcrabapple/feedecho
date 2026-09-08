@@ -130,7 +130,7 @@
         </label>
         <label>Attach image
             <input type="checkbox" name="attach_image" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's first image. Mastodon, Bluesky, and Matrix upload it as media; micro.blog fetches it by URL; Discord shows it in the post's embed. Webhook deliveries always include image_url in the payload.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's first image. Mastodon, Bluesky, Matrix, and email send it with the post (email embeds images inline in instant mode); micro.blog fetches it by URL; Discord shows it in the post's embed. Webhook deliveries always include image_url in the payload.</span>
         </label>
     </div>
     <div class="form-row" id="microblog-fields"{{ dest_hidden('microblog') }}>

@@ -5,8 +5,10 @@ deployment-wide SMTP config from system_settings for system mail (account
 verification, password reset).
 """
 
+import html
 import smtplib
 import ssl
+from email.mime.image import MIMEImage
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -64,8 +66,41 @@ def _normalize(settings: dict) -> dict | None:
     }
 
 
-def _send_via(cfg: dict, to_email: str, subject: str, body: str) -> None:
-    """Send one email through the given SMTP config. Raises on failure."""
+def _render_html_body(body: str, images: list[dict]) -> str:
+    """HTML alternative with images embedded by Content-ID.
+
+    The template output is plain text, so it is escaped verbatim before
+    entering the HTML part; nothing else is trusted. Content-IDs use the
+    image<index>@feedecho scheme written in _send_via.
+    """
+    parts = [f'<div style="white-space: pre-wrap;">{html.escape(body)}</div>']
+    for i, image in enumerate(images):
+        alt = html.escape((image.get("alt") or "").strip(), quote=True)
+        parts.append(
+            f'<img src="cid:image{i}@feedecho" alt="{alt}"'
+            ' style="max-width: 100%; margin-top: 0.75em;" />'
+        )
+    return "".join(parts)
+
+
+def _mime_image_part(cid: str, image: dict) -> MIMEImage:
+    """One inline image part: base64-encoded, referenced by Content-ID."""
+    content_type = (image.get("content_type") or "image/jpeg").split(";")[0].strip()
+    subtype = content_type.split("/")[-1] if "/" in content_type else "jpeg"
+    part = MIMEImage(image["data"], _subtype=subtype)
+    part.add_header("Content-ID", f"<{cid}>")
+    part.add_header("Content-Disposition", "inline")
+    return part
+
+
+def _send_via(cfg: dict, to_email: str, subject: str, body: str, images: list[dict] | None = None) -> None:
+    """Send one email through the given SMTP config. Raises on failure.
+
+    Without images the message is a plain multipart/alternative carrying the
+    text body. With images it becomes multipart/related: the alternative
+    gains an HTML part whose <img> tags reference inline image parts by
+    Content-ID, so clients render the images without any remote requests.
+    """
     if settings.MULTI:
         # Re-validate the relay at dial time, not just save time. smtplib
         # re-resolves the hostname when it connects, so a save-time check
@@ -81,13 +116,27 @@ def _send_via(cfg: dict, to_email: str, subject: str, body: str) -> None:
     from_email = cfg["from_email"] or cfg["username"]
     from_name = cfg["from_name"]
 
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{from_name} <{from_email}>"
-    msg["To"] = to_email
-    msg["Subject"] = subject
+    images = images or []
+
+    if images:
+        root = MIMEMultipart("related")
+        alternative = MIMEMultipart("alternative")
+        root.attach(alternative)
+    else:
+        root = MIMEMultipart("alternative")
+        alternative = root
+
+    root["From"] = f"{from_name} <{from_email}>"
+    root["To"] = to_email
+    root["Subject"] = subject
 
     # Plain text version (template output is plain text)
-    msg.attach(MIMEText(body, "plain"))
+    alternative.attach(MIMEText(body, "plain"))
+
+    if images:
+        alternative.attach(MIMEText(_render_html_body(body, images), "html"))
+        for i, image in enumerate(images):
+            root.attach(_mime_image_part(f"image{i}@feedecho", image))
 
     context = ssl.create_default_context()
     port = cfg["port"]
@@ -97,7 +146,7 @@ def _send_via(cfg: dict, to_email: str, subject: str, body: str) -> None:
         with smtplib.SMTP_SSL(cfg["host"], port, context=context, timeout=30) as server:
             if cfg["username"]:
                 server.login(cfg["username"], cfg["password"])
-            server.sendmail(from_email, [to_email], msg.as_string())
+            server.sendmail(from_email, [to_email], root.as_string())
     else:
         # STARTTLS (port 587 or others)
         with smtplib.SMTP(cfg["host"], port, timeout=30) as server:
@@ -105,15 +154,21 @@ def _send_via(cfg: dict, to_email: str, subject: str, body: str) -> None:
                 server.starttls(context=context)
             if cfg["username"]:
                 server.login(cfg["username"], cfg["password"])
-            server.sendmail(from_email, [to_email], msg.as_string())
+            server.sendmail(from_email, [to_email], root.as_string())
 
 
-def send_email(to_email: str, subject: str, body: str, user_id: int = 1) -> dict:
-    """Send a per-user email via the tenant's SMTP. Raises on failure."""
+def send_email(
+    to_email: str, subject: str, body: str, user_id: int = 1, images: list[dict] | None = None
+) -> dict:
+    """Send a per-user email via the tenant's SMTP. Raises on failure.
+
+    images is an optional list of {"data": bytes, "content_type": str,
+    "alt": str} dicts embedded inline in the message.
+    """
     settings = get_smtp_settings(user_id=user_id)
     if not settings:
         raise ValueError("SMTP not configured. Set SMTP settings first.")
-    _send_via(settings, to_email, subject, body)
+    _send_via(settings, to_email, subject, body, images=images)
     return {"success": True}
 
 

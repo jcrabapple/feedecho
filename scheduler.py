@@ -106,6 +106,15 @@ DIGEST_MAX_CHARS = 10000
 # Room reserved for the held-items notice appended when overflow occurs.
 DIGEST_NOTICE_RESERVE = 80
 
+# Email image embedding caps. Instant-mode email echoes with attach_image
+# embed up to EMAIL_MAX_IMAGES images inline (mirrors Mastodon's default
+# media limit); EMAIL_MAX_IMAGE_BYTES bounds the total raw bytes so the
+# MIME message stays well under common relay size limits after base64
+# (roughly 1.37x) inflation. Images beyond the budget are skipped, not
+# silently dropped from the log.
+EMAIL_MAX_IMAGES = 4
+EMAIL_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
 # Per-echo locks serializing drip rate checks across the feed-check and
 # flush threads, so concurrent workers cannot exceed the hourly cap.
 _drip_locks: dict[int, threading.Lock] = {}
@@ -1120,6 +1129,39 @@ def _fail_post(
     return final == "gave_up"
 
 
+def _item_image_entries(item: dict, limit: int = 4) -> list[dict]:
+    """Image URL/alt entries from an item, shared by destination senders.
+
+    Returns up to `limit` entries of {"url", "alt"} taken from the item's
+    image_urls list, falling back to the single image_url for legacy rows.
+    A caller-supplied image_alt (reader compose / queue override) wins over
+    the feed alt for the primary slot — the user wrote it.
+    """
+    image_entries: list[dict] = []
+    raw_urls = item.get("image_urls")
+    if raw_urls:
+        if isinstance(raw_urls, str):
+            try:
+                raw_urls = json.loads(raw_urls)
+            except ValueError:
+                raw_urls = []
+        if isinstance(raw_urls, list):
+            for img in raw_urls[:limit]:
+                if isinstance(img, dict) and isinstance(img.get("url"), str) and img["url"].strip():
+                    image_entries.append(
+                        {"url": img["url"].strip(), "alt": (img.get("alt") or "").strip()}
+                    )
+                elif isinstance(img, str) and img.strip():
+                    image_entries.append({"url": img.strip(), "alt": ""})
+    if not image_entries and item.get("image_url"):
+        image_entries.append(
+            {"url": item.get("image_url"), "alt": (item.get("image_alt") or "").strip()}
+        )
+    if image_entries and item.get("image_alt") and not image_entries[0]["alt"]:
+        image_entries[0]["alt"] = item["image_alt"].strip()
+    return image_entries
+
+
 def _send_mastodon(
     echo,
     item: dict,
@@ -1156,26 +1198,7 @@ def _send_mastodon(
         attach_image = False
 
     if attach_image:
-        image_entries: list[dict] = []
-        raw_urls = item.get("image_urls")
-        if raw_urls:
-            if isinstance(raw_urls, str):
-                try:
-                    raw_urls = json.loads(raw_urls)
-                except ValueError:
-                    raw_urls = []
-            if isinstance(raw_urls, list):
-                for img in raw_urls[:4]:
-                    if isinstance(img, dict) and isinstance(img.get("url"), str) and img["url"].strip():
-                        image_entries.append({"url": img["url"].strip(), "alt": (img.get("alt") or "").strip()})
-                    elif isinstance(img, str) and img.strip():
-                        image_entries.append({"url": img.strip(), "alt": ""})
-        if not image_entries and item.get("image_url"):
-            image_entries.append({"url": item.get("image_url"), "alt": (item.get("image_alt") or "").strip()})
-        # A caller-supplied image_alt (reader compose / queue override) wins
-        # over the feed alt for the primary slot — the user wrote it.
-        if image_entries and item.get("image_alt") and not image_entries[0]["alt"]:
-            image_entries[0]["alt"] = item["image_alt"].strip()
+        image_entries = _item_image_entries(item)
 
         for entry in image_entries:
             image_result = fetch_image(entry["url"])
@@ -1322,6 +1345,38 @@ def _send_email_echo(
         )
         return False
 
+    # Image embedding: mirroring the Mastodon path, attach_image fetches the
+    # item's images (SSRF-validated, fallback-proxy aware) and embeds them
+    # inline in the message. A failed fetch skips that image — the email
+    # still goes out with the rendered text.
+    images: list[dict] = []
+    try:
+        attach_image = bool(echo["attach_image"])
+    except (KeyError, IndexError):
+        attach_image = False
+    if attach_image:
+        total_bytes = 0
+        for entry in _item_image_entries(item, limit=EMAIL_MAX_IMAGES):
+            image_result = fetch_image(entry["url"])
+            if not image_result:
+                logger.info(
+                    "Echo %s: image fetch failed for %s, skipping that image",
+                    echo["id"], entry["url"],
+                )
+                continue
+            img_bytes, img_type = image_result
+            if total_bytes + len(img_bytes) > EMAIL_MAX_IMAGE_BYTES:
+                logger.info(
+                    "Echo %s: email image budget (%d bytes) reached, "
+                    "skipping remaining images",
+                    echo["id"], EMAIL_MAX_IMAGE_BYTES,
+                )
+                break
+            total_bytes += len(img_bytes)
+            images.append(
+                {"data": img_bytes, "content_type": img_type, "alt": entry["alt"]}
+            )
+
     try:
         send_email(
             to_email=account["email"],
@@ -1331,6 +1386,7 @@ def _send_email_echo(
             ),
             body=content,
             user_id=echo["user_id"],
+            images=images,
         )
     except Exception:
         logger.exception("Echo %s: email delivery failed", echo["id"])

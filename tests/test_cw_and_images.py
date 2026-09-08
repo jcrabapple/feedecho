@@ -225,6 +225,140 @@ class TestImageAttachment:
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-123"]
 
+    def test_attach_up_to_four_images_from_image_urls(self, db_tmp, monkeypatch):
+        """When item carries image_urls, upload and attach up to 4 images."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+        uploaded_urls = []
+        def fake_fetch(url):
+            return (b"fake-bytes", "image/jpeg")
+        def fake_upload(**kw):
+            uploaded_urls.append(kw.get("image_bytes"))
+            return {"id": f"media-{len(uploaded_urls)}"}
+        monkeypatch.setattr(scheduler, "fetch_image", fake_fetch)
+        monkeypatch.setattr(scheduler, "upload_media", fake_upload)
+
+        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": "one"},
+            {"url": "https://example.com/2.jpg", "alt": "two"},
+            {"url": "https://example.com/3.jpg", "alt": ""},
+            {"url": "https://example.com/4.jpg", "alt": "four"},
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(sent) == 1
+        assert sent[0]["media_ids"] == ["media-1", "media-2", "media-3", "media-4"]
+
+    def test_caps_at_four_images(self, db_tmp, monkeypatch):
+        """More than 4 image_urls are truncated to 4."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+        counter = [0]
+        def fake_fetch(url):
+            return (b"fake-bytes", "image/jpeg")
+        def fake_upload(**kw):
+            counter[0] += 1
+            return {"id": f"media-{counter[0]}"}
+        monkeypatch.setattr(scheduler, "fetch_image", fake_fetch)
+        monkeypatch.setattr(scheduler, "upload_media", fake_upload)
+
+        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": f"https://example.com/{i}.jpg", "alt": ""} for i in range(6)
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(sent) == 1
+        assert len(sent[0]["media_ids"]) == 4
+        assert counter[0] == 4
+
+    def test_image_urls_json_string_supported(self, db_tmp, monkeypatch):
+        """image_urls may arrive as a JSON string (from the feed_items column)."""
+        import json as _json
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+        counter = [0]
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-bytes", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler, "upload_media", lambda **kw: counter.__setitem__(0, counter[0] + 1) or {"id": f"media-{counter[0]}"}
+        )
+
+        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=_json.dumps([
+            {"url": "https://example.com/a.jpg", "alt": "a"},
+            {"url": "https://example.com/b.jpg", "alt": "b"},
+        ]))
+        scheduler.process_echo(echo, item)
+
+        assert len(sent) == 1
+        assert sent[0]["media_ids"] == ["media-1", "media-2"]
+
+    def test_falls_back_to_single_image_url(self, db_tmp, monkeypatch):
+        """Legacy rows without image_urls still attach the single image_url."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-bytes", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler, "upload_media", lambda **kw: {"id": "media-legacy"}
+        )
+
+        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_url="https://example.com/single.jpg", image_alt="legacy alt")
+        scheduler.process_echo(echo, item)
+
+        assert len(sent) == 1
+        assert sent[0]["media_ids"] == ["media-legacy"]
+
+    def test_skips_failed_fetch_and_continues(self, db_tmp, monkeypatch):
+        """A failing image fetch skips that image but attaches the rest."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+        def flaky_fetch(url):
+            if "broken" in url:
+                return None
+            return (b"fake-bytes", "image/jpeg")
+        counter = [0]
+        def fake_upload(**kw):
+            counter[0] += 1
+            return {"id": f"media-{counter[0]}"}
+        monkeypatch.setattr(scheduler, "fetch_image", flaky_fetch)
+        monkeypatch.setattr(scheduler, "upload_media", fake_upload)
+
+        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/broken.jpg", "alt": ""},
+            {"url": "https://example.com/good.jpg", "alt": ""},
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(sent) == 1
+        assert sent[0]["media_ids"] == ["media-1"]
+
     def test_image_fetch_failure_posts_text_only(self, db_tmp, monkeypatch):
         """If fetch_image returns None (network/SSRF/size), post text-only."""
         import scheduler
@@ -298,6 +432,74 @@ class TestImageAttachment:
 
 
 class TestImageExtraction:
+    def test_extract_rss_images_multiple_img_tags(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "content": [{"value": (
+                '<img src="https://example.com/1.jpg" alt="first">'
+                '<img src="https://example.com/2.jpg" alt="second">'
+                '<img src="https://example.com/3.jpg">'
+            )}]
+        }
+        images = _extract_rss_images(entry)
+        assert [img["url"] for img in images] == [
+            "https://example.com/1.jpg",
+            "https://example.com/2.jpg",
+            "https://example.com/3.jpg",
+        ]
+        assert images[0]["alt"] == "first"
+        assert images[1]["alt"] == "second"
+        assert images[2]["alt"] == ""
+
+    def test_extract_rss_images_media_and_enclosures(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "media_content": [
+                {"url": "https://example.com/m1.jpg", "media_text": [{"text": "one"}]},
+                {"url": "https://example.com/m2.jpg"},
+            ],
+            "enclosures": [
+                {"type": "image/png", "href": "https://example.com/enc.png", "alt": "enclosure alt"},
+                {"type": "audio/mpeg", "href": "https://example.com/pod.mp3"},
+            ],
+        }
+        images = _extract_rss_images(entry)
+        assert [img["url"] for img in images] == [
+            "https://example.com/m1.jpg",
+            "https://example.com/m2.jpg",
+            "https://example.com/enc.png",
+        ]
+        assert images[0]["alt"] == "one"
+        assert images[2]["alt"] == "enclosure alt"
+
+    def test_extract_rss_images_caps_at_four(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "content": [{"value": "".join(
+                f'<img src="https://example.com/{i}.jpg">' for i in range(7)
+            )}]
+        }
+        images = _extract_rss_images(entry)
+        assert len(images) == 4
+        assert images[0]["url"] == "https://example.com/0.jpg"
+        assert images[3]["url"] == "https://example.com/3.jpg"
+
+    def test_extract_rss_images_dedupes_urls(self):
+        from feed_parser import _extract_rss_images
+
+        entry = {
+            "media_content": [{"url": "https://example.com/dup.jpg"}],
+            "content": [{"value": '<img src="https://example.com/dup.jpg" alt="in content">'}],
+        }
+        images = _extract_rss_images(entry)
+        assert len(images) == 1
+        assert images[0]["url"] == "https://example.com/dup.jpg"
+        # media_content slot wins (its alt is empty); content img is deduped away
+        assert images[0]["alt"] == ""
+
     def test_rss_media_content(self):
         from feed_parser import _extract_rss_image
 

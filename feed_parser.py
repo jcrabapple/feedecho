@@ -544,6 +544,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "tags": [tag.get("term", "") for tag in entry.get("tags", []) if tag.get("term")],
             "image_url": _extract_rss_image(entry),
             "image_alt": _extract_rss_image_alt(entry),
+            "image_urls": _extract_rss_images(entry),
             "enclosure_url": _extract_audio_enclosure(entry),
             "raw": {k: v for k, v in entry.items()},
         }
@@ -583,6 +584,7 @@ def parse_json_feed(data: dict) -> dict:
             "tags": entry.get("tags", []),
             "image_url": _extract_json_feed_image(entry),
             "image_alt": _extract_json_feed_image_alt(entry),
+            "image_urls": _extract_json_feed_images(entry),
             "enclosure_url": _extract_json_feed_audio(entry),
             "raw": entry,
         }
@@ -852,6 +854,62 @@ def _extract_first_link(html_str: str, base_url: str = "") -> str:
     return href
 
 
+def _extract_rss_images(entry: dict) -> list[dict]:
+    """Extract up to 4 image {url, alt} pairs from an RSS/Atom entry.
+
+    Priority order per slot: media_content, media_thumbnail, image
+    enclosures, then <img> tags in content/summary HTML. Mirrors
+    _extract_rss_image's sources, but collects ALL images instead of just
+    the first. Capped at 4 (Mastodon's default image limit).
+    """
+    images: list[dict] = []
+
+    def _add(url: str, alt: str = "") -> None:
+        if len(images) >= 4 or not url:
+            return
+        if any(img["url"] == url for img in images):
+            return
+        images.append({"url": url, "alt": (alt or "").strip()})
+
+    # Media RSS media_content / media_thumbnail (may carry media:text captions)
+    for key in ("media_content", "media_thumbnail"):
+        media_list = entry.get(key, [])
+        if not isinstance(media_list, list):
+            continue
+        for media in media_list:
+            if not isinstance(media, dict):
+                continue
+            url = media.get("url", "")
+            alt = ""
+            text = media.get("media_text", "")
+            if isinstance(text, list) and text:
+                alt = text[0].get("text", "") if isinstance(text[0], dict) else ""
+            elif isinstance(text, str):
+                alt = text
+            _add(url, alt)
+
+    # RSS enclosures with image MIME types
+    for enc in entry.get("enclosures", []):
+        if isinstance(enc, dict) and enc.get("type", "").startswith("image/"):
+            _add(enc.get("href", ""), enc.get("alt", ""))
+
+    # Every <img> in content/summary HTML (src + alt from the same tag)
+    html_content = ""
+    if entry.get("content"):
+        html_content = entry.get("content", [{}])[0].get("value", "")
+    if not html_content:
+        html_content = entry.get("summary", "")
+    if html_content:
+        for tag in re.findall(r"<img\b[^>]*>", html_content, re.IGNORECASE):
+            src = re.search(r'\bsrc=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            if not src:
+                continue
+            alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
+            _add(src.group(1), alt.group(1) if alt else "")
+
+    return images
+
+
 def _extract_rss_image(entry: dict) -> str:
     """Extract first image URL from an RSS/Atom entry.
 
@@ -970,6 +1028,49 @@ def _extract_json_feed_image(entry: dict) -> str:
             return match.group(1)
 
     return ""
+
+
+def _extract_json_feed_images(entry: dict) -> list[dict]:
+    """Extract up to 4 image {url, alt} pairs from a JSON Feed entry.
+
+    Sources: attachments with image MIME types, the image/banner_image
+    fields, then <img> tags in content_html. Capped at 4.
+    """
+    images: list[dict] = []
+
+    def _add(url: str, alt: str = "") -> None:
+        if len(images) >= 4 or not url:
+            return
+        if any(img["url"] == url for img in images):
+            return
+        images.append({"url": url, "alt": (alt or "").strip()})
+
+    for att in entry.get("attachments") or []:
+        if isinstance(att, dict) and str(att.get("mime_type", "")).startswith("image/"):
+            _add(att.get("url", ""), att.get("title", ""))
+
+    image = entry.get("image")
+    if isinstance(image, dict) and image.get("url"):
+        _add(image["url"], image.get("caption", ""))
+    elif isinstance(image, str):
+        _add(image)
+
+    banner = entry.get("banner_image")
+    if isinstance(banner, dict) and banner.get("url"):
+        _add(banner["url"], banner.get("caption", ""))
+    elif isinstance(banner, str):
+        _add(banner)
+
+    content_html = entry.get("content_html", "")
+    if content_html:
+        for tag in re.findall(r"<img\b[^>]*>", content_html, re.IGNORECASE):
+            src = re.search(r'\bsrc=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            if not src:
+                continue
+            alt = re.search(r'\balt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
+            _add(src.group(1), alt.group(1) if alt else "")
+
+    return images
 
 
 def _extract_json_feed_image_alt(entry: dict) -> str:

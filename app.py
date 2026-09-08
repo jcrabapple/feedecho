@@ -1955,6 +1955,7 @@ def queue_post_now(request: Request, post_id: int):
         "date": "",
         "image_url": "",
         "image_alt": row["image_alt"] or "",
+        "image_urls": [],
     }
     if row["feed_item_id"]:
         with get_db() as db:
@@ -1966,6 +1967,7 @@ def queue_post_now(request: Request, post_id: int):
                     "summary": fi["summary"] or "",
                     "content": fi["content"] or "",
                     "image_url": fi["image_url"] or "",
+                    "image_urls": fi["image_urls"] or [],
                 })
 
     try:

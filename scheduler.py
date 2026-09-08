@@ -307,6 +307,7 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
             item.get("author") or "",
             item.get("image_url") or "",
             item.get("image_alt") or "",
+            json.dumps(item.get("image_urls") or [], ensure_ascii=False),
             item.get("enclosure_url") or "",
             published_at,
         ))
@@ -321,9 +322,9 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                 INSERT INTO feed_items (
                     feed_id, item_id, title, link, summary, content,
                     content_text, content_link, author,
-                    image_url, image_alt, enclosure_url, published_at
+                    image_url, image_alt, image_urls, enclosure_url, published_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(feed_id, item_id) DO UPDATE SET
                     title = excluded.title,
                     link = excluded.link,
@@ -334,6 +335,7 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                     author = excluded.author,
                     image_url = excluded.image_url,
                     image_alt = excluded.image_alt,
+                    image_urls = excluded.image_urls,
                     enclosure_url = excluded.enclosure_url,
                     published_at = excluded.published_at
                 """,
@@ -1147,7 +1149,9 @@ def _send_mastodon(
         cw_text = ""
     sensitive = bool(cw_text)
 
-    # Image attachment: if enabled, extract and upload the item's first image
+    # Image attachment: if enabled, upload up to 4 images (Mastodon's default
+    # limit) from the item's image_urls list, falling back to the single
+    # image_url for legacy rows.
     media_ids: list[str] = []
     try:
         attach_image = bool(echo["attach_image"])
@@ -1155,62 +1159,87 @@ def _send_mastodon(
         attach_image = False
 
     if attach_image:
-        image_url = item.get("image_url", "")
-        if image_url:
-            image_result = fetch_image(image_url)
-            if image_result:
-                img_bytes, img_type = image_result
-                # Feed-provided alt text wins (the author wrote it); AI
-                # generation is the fallback when the feed has none.
-                description = (item.get("image_alt") or "").strip()
-                if description:
-                    logger.info(
-                        "Echo %s: using feed-provided alt text for item %s (%d chars)",
-                        echo["id"], item["id"], len(description),
-                    )
-                elif alt_text.is_enabled(user_id=echo["user_id"]):
-                    try:
-                        description = alt_text.generate_alt_text(
-                            img_bytes, img_type, user_id=echo["user_id"]
-                        )
-                        if description:
-                            logger.info(
-                                "Echo %s: generated alt text for item %s (%d chars)",
-                                echo["id"], item["id"], len(description),
-                            )
-                    except Exception:
-                        logger.warning(
-                            "Echo %s: alt text generation failed for item %s",
-                            echo["id"], item["id"],
-                            exc_info=True,
-                        )
-                uploaded = upload_media(
-                    instance=account["instance"],
-                    access_token=decrypt_secret(account["access_token"]),
-                    image_bytes=img_bytes,
-                    content_type=img_type,
-                    description=description,
-                )
-                if uploaded and uploaded.get("id"):
-                    media_ids.append(str(uploaded["id"]))
-                    logger.info(
-                        "Echo %s: uploaded image %s for item %s",
-                        echo["id"],
-                        uploaded["id"],
-                        item["id"],
-                    )
-                else:
-                    logger.warning(
-                        "Echo %s: image upload failed for item %s, posting text-only",
-                        echo["id"],
-                        item["id"],
-                    )
-            else:
+        image_entries: list[dict] = []
+        raw_urls = item.get("image_urls")
+        if raw_urls:
+            if isinstance(raw_urls, str):
+                try:
+                    raw_urls = json.loads(raw_urls)
+                except ValueError:
+                    raw_urls = []
+            if isinstance(raw_urls, list):
+                for img in raw_urls[:4]:
+                    if isinstance(img, dict) and isinstance(img.get("url"), str) and img["url"].strip():
+                        image_entries.append({"url": img["url"].strip(), "alt": (img.get("alt") or "").strip()})
+                    elif isinstance(img, str) and img.strip():
+                        image_entries.append({"url": img.strip(), "alt": ""})
+        if not image_entries and item.get("image_url"):
+            image_entries.append({"url": item.get("image_url"), "alt": (item.get("image_alt") or "").strip()})
+        # A caller-supplied image_alt (reader compose / queue override) wins
+        # over the feed alt for the primary slot — the user wrote it.
+        if image_entries and item.get("image_alt") and not image_entries[0]["alt"]:
+            image_entries[0]["alt"] = item["image_alt"].strip()
+
+        for entry in image_entries:
+            image_result = fetch_image(entry["url"])
+            if not image_result:
                 logger.info(
-                    "Echo %s: image fetch failed or invalid for item %s, posting text-only",
+                    "Echo %s: image fetch failed for %s, skipping that image",
+                    echo["id"], entry["url"],
+                )
+                continue
+            img_bytes, img_type = image_result
+            # Feed-provided alt text wins (the author wrote it); AI
+            # generation is the fallback when the feed has none.
+            description = entry["alt"]
+            if description:
+                logger.info(
+                    "Echo %s: using feed-provided alt text for item %s (%d chars)",
+                    echo["id"], item["id"], len(description),
+                )
+            elif alt_text.is_enabled(user_id=echo["user_id"]):
+                try:
+                    description = alt_text.generate_alt_text(
+                        img_bytes, img_type, user_id=echo["user_id"]
+                    )
+                    if description:
+                        logger.info(
+                            "Echo %s: generated alt text for item %s (%d chars)",
+                            echo["id"], item["id"], len(description),
+                        )
+                except Exception:
+                    logger.warning(
+                        "Echo %s: alt text generation failed for item %s",
+                        echo["id"], item["id"],
+                        exc_info=True,
+                    )
+            uploaded = upload_media(
+                instance=account["instance"],
+                access_token=decrypt_secret(account["access_token"]),
+                image_bytes=img_bytes,
+                content_type=img_type,
+                description=description,
+            )
+            if uploaded and uploaded.get("id"):
+                media_ids.append(str(uploaded["id"]))
+                logger.info(
+                    "Echo %s: uploaded image %s for item %s",
+                    echo["id"],
+                    uploaded["id"],
+                    item["id"],
+                )
+            else:
+                logger.warning(
+                    "Echo %s: image upload failed for item %s, continuing without that image",
                     echo["id"],
                     item["id"],
                 )
+        if not media_ids and image_entries:
+            logger.warning(
+                "Echo %s: no images uploaded for item %s, posting text-only",
+                echo["id"],
+                item["id"],
+            )
 
     # Re-validate claim ownership immediately before the post: the image
     # fetch, media upload and alt-text generation above are slow network I/O,

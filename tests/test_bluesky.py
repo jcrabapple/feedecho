@@ -5,32 +5,6 @@ import tempfile
 
 import pytest
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -41,7 +15,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 def _setup_bluesky_echo(db_tmp, echo_overrides=None):
     """Create a Bluesky account, feed, and echo. Returns the echo row."""
@@ -90,9 +63,7 @@ def _setup_bluesky_echo(db_tmp, echo_overrides=None):
         )
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 # ── Handle normalization ─────────────────────────────────────────────────────
-
 
 class TestNormalizeHandle:
     def test_lowercases_and_strips_at(self):
@@ -138,9 +109,7 @@ class TestNormalizeHandle:
         with pytest.raises(ValueError):
             normalize_handle("a" * 60 + "." + "b" * 250)
 
-
 # ── Grapheme-aware truncation ────────────────────────────────────────────────
-
 
 class TestTruncateGraphemes:
     def test_short_text_unchanged(self):
@@ -209,9 +178,7 @@ class TestTruncateGraphemes:
         # Cutting before the ZWJ cluster drops it whole, never splits it.
         assert truncate_graphemes(text, 3) == "ab…"
 
-
 # ── Facets ───────────────────────────────────────────────────────────────────
-
 
 class TestBuildFacets:
     def test_no_urls_returns_empty(self):
@@ -274,9 +241,7 @@ class TestBuildFacets:
         facets = build_facets(clipped)
         assert facets == []
 
-
 # ── Session expiry ───────────────────────────────────────────────────────────
-
 
 class TestSessionExpiry:
     def test_decodes_jwt_exp(self):
@@ -306,9 +271,7 @@ class TestSessionExpiry:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         assert timedelta(hours=1, minutes=50) < (parsed - now) < timedelta(hours=2)
 
-
 # ── Scheduler dispatch ───────────────────────────────────────────────────────
-
 
 def _stub_session(monkeypatch):
     """Stub Bluesky session functions so no network I/O happens in tests."""
@@ -337,7 +300,6 @@ def _stub_session(monkeypatch):
             "refresh_jwt": "refreshed-rj",
         },
     )
-
 
 class TestSendBluesky:
     def test_happy_path_posts_and_records_success(self, db_tmp, monkeypatch):
@@ -587,9 +549,7 @@ class TestSendBluesky:
         assert ok is True
         assert sent[0]["embed"] is None
 
-
 # ── Session caching ──────────────────────────────────────────────────────────
-
 
 def _insert_bsky_account(db, **overrides):
     """Insert a Bluesky account row and return it."""
@@ -622,7 +582,6 @@ def _insert_bsky_account(db, **overrides):
     return db.execute(
         "SELECT * FROM bluesky_accounts WHERE handle = ?", (values["handle"],)
     ).fetchone()
-
 
 class TestBskySession:
     def test_reuses_cached_valid_session(self, db_tmp, monkeypatch):
@@ -736,9 +695,7 @@ class TestBskySession:
 
         assert session["access_jwt"] == "login-aj"
 
-
 # ── API error classification ─────────────────────────────────────────────────
-
 
 class _FakeResponse:
     def __init__(self, status_code, body=None):
@@ -747,7 +704,6 @@ class _FakeResponse:
 
     def json(self):
         return self._body
-
 
 class _FakeClient:
     def __init__(self, response, **kw):
@@ -764,7 +720,6 @@ class _FakeClient:
 
     def get(self, *a, **kw):
         return self.response
-
 
 class TestBlueskyApiErrors:
     def test_create_post_plain_400_is_not_auth_error(self, monkeypatch):
@@ -865,9 +820,7 @@ class TestBlueskyApiErrors:
         assert ok is True
         assert cleanup == [("https://bsky.social", "rj")]
 
-
 # ── API routes ───────────────────────────────────────────────────────────────
-
 
 class TestBlueskyAccountRoutes:
     @pytest.fixture()
@@ -1041,9 +994,7 @@ class TestBlueskyAccountRoutes:
             ).fetchone()
             assert len(row["name"]) == 100
 
-
 # ── Echo API validation ──────────────────────────────────────────────────────
-
 
 class TestEchoDestinationValidation:
     @pytest.fixture()

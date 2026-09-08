@@ -12,26 +12,6 @@ import security
 import settings
 from app import app
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
     """Signed-in multi-mode TestClient over the temp DB."""
@@ -53,7 +33,6 @@ def multi_client(monkeypatch, db_tmp):
     client = TestClient(app)
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
-
 
 class TestAccountsPageSections:
     def test_one_section_per_destination_type(self, multi_client):

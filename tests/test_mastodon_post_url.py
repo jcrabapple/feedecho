@@ -16,35 +16,7 @@ import settings
 import scheduler
 from database import get_db
 
-from test_cw_and_images import _item, _setup_echo
-
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = None, None
-    import os
-    import tempfile
-
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler as sched_mod
-
-    monkeypatch.setattr(sched_mod, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
+from test_cw_and_images import _item
 
 def _post_url_for(echo_id=1):
     with get_db() as db:
@@ -53,40 +25,39 @@ def _post_url_for(echo_id=1):
         ).fetchone()
     return row["status"], row["post_url"]
 
-
 class TestMastodonPostUrlStored:
-    def test_success_stores_the_api_url(self, db_tmp, monkeypatch):
+    def test_success_stores_the_api_url(self, db_tmp, monkeypatch, setup_echo):
         monkeypatch.setattr(
             scheduler,
             "post_status",
             lambda **kw: {"id": "110", "url": "https://mastodon.social/@user/110"},
         )
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=0)
         assert scheduler.process_echo(echo, _item()) is True
 
         status, post_url = _post_url_for()
         assert status == "success"
         assert post_url == "https://mastodon.social/@user/110"
 
-    def test_response_without_url_still_succeeds(self, db_tmp, monkeypatch):
+    def test_response_without_url_still_succeeds(self, db_tmp, monkeypatch, setup_echo):
         # An instance that omits `url` must not turn a delivered post into a
         # failure; the link is a bonus, not the delivery receipt.
         monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "111"})
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=0)
         assert scheduler.process_echo(echo, _item()) is True
 
         status, post_url = _post_url_for()
         assert status == "success"
         assert post_url is None
 
-    def test_non_string_url_is_ignored(self, db_tmp, monkeypatch):
+    def test_non_string_url_is_ignored(self, db_tmp, monkeypatch, setup_echo):
         # post_url is a TEXT column; whatever an odd instance returns must be
         # dropped (or a clean empty), never stringified-and-stored: a stored
         # "12345" would render a broken link.
         monkeypatch.setattr(
             scheduler, "post_status", lambda **kw: {"id": "112", "url": 12345}
         )
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=0)
         assert scheduler.process_echo(echo, _item()) is True
 
         status, post_url = _post_url_for()
@@ -119,23 +90,21 @@ class TestMastodonPostUrlStored:
         page = _history_page(multi_env, monkeypatch)
         assert ">view post" not in page
 
-    def test_failed_delivery_stores_nothing(self, db_tmp, monkeypatch):
+    def test_failed_delivery_stores_nothing(self, db_tmp, monkeypatch, setup_echo):
         def boom(**kw):
             raise RuntimeError("down")
 
         monkeypatch.setattr(scheduler, "post_status", boom)
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=0)
         assert scheduler.process_echo(echo, _item()) is False
 
         status, post_url = _post_url_for()
         assert status == "failed"
         assert post_url is None
 
-
 # ── rendering ────────────────────────────────────────────────────────────────
 
 TENANT_ID = 21
-
 
 @pytest.fixture
 def multi_env(monkeypatch, tmp_path):
@@ -172,7 +141,6 @@ def multi_env(monkeypatch, tmp_path):
 
     return security
 
-
 def _history_page(multi_env, monkeypatch):
     from app import app
 
@@ -183,7 +151,6 @@ def _history_page(multi_env, monkeypatch):
             multi_env.sign_session(TENANT_ID, "user@example.com"),
         )
         return c.get("/history").text
-
 
 @pytest.mark.multi
 class TestHistoryRendersPostLink:

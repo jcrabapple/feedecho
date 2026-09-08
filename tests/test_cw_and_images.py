@@ -5,32 +5,6 @@ import tempfile
 
 import pytest
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -42,60 +16,8 @@ def _item(**overrides):
     item.update(overrides)
     return item
 
-
-def _setup_echo(db_tmp, echo_overrides=None):
-    """Create a test account, feed, and echo. Returns the echo row."""
-    import database
-
-    echo_kwargs = {
-        "destination_type": "mastodon",
-        "destination_id": 1,
-        "template": "{{ title }}",
-        "visibility": "public",
-        "filter_keywords": "",
-        "filter_mode": "exclude",
-        "content_warning": "",
-        "attach_image": 0,
-        "enabled": 1,
-    }
-    if echo_overrides:
-        echo_kwargs.update(echo_overrides)
-
-    with database.get_db() as db:
-        db.execute(
-            "INSERT INTO accounts (name, username, instance, access_token) "
-            "VALUES (?, ?, ?, ?)",
-            ("main", "user", "https://mastodon.social", "tok"),
-        )
-        db.execute(
-            "INSERT INTO feeds (name, url) VALUES (?, ?)",
-            ("f", "https://example.com/feed"),
-        )
-        db.execute(
-            """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
-                                   visibility, filter_keywords, filter_mode,
-                                   content_warning, attach_image, enabled)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                echo_kwargs["destination_type"],
-                echo_kwargs["destination_id"],
-                echo_kwargs["template"],
-                echo_kwargs["visibility"],
-                echo_kwargs["filter_keywords"],
-                echo_kwargs["filter_mode"],
-                echo_kwargs["content_warning"],
-                echo_kwargs["attach_image"],
-                echo_kwargs["enabled"],
-            ),
-        )
-        return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
-
-
-# ── Content Warning Tests ────────────────────────────────────────────────────
-
-
 class TestContentWarning:
-    def test_cw_sent_as_spoiler_text(self, db_tmp, monkeypatch):
+    def test_cw_sent_as_spoiler_text(self, db_tmp, monkeypatch, setup_echo):
         """CW text must be passed as spoiler_text and sensitive=True."""
         import scheduler
 
@@ -104,14 +26,14 @@ class TestContentWarning:
             scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
         )
 
-        echo = _setup_echo(db_tmp, {"content_warning": "Spoilers"})
+        echo = setup_echo({"content_warning": "Spoilers"})
         scheduler.process_echo(echo, _item())
 
         assert len(sent) == 1
         assert sent[0]["spoiler_text"] == "Spoilers"
         assert sent[0]["sensitive"] is True
 
-    def test_no_cw_means_no_spoiler_text(self, db_tmp, monkeypatch):
+    def test_no_cw_means_no_spoiler_text(self, db_tmp, monkeypatch, setup_echo):
         """Without a CW, spoiler_text must be absent and sensitive=False."""
         import scheduler
 
@@ -120,7 +42,7 @@ class TestContentWarning:
             scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
         )
 
-        echo = _setup_echo(db_tmp, {"content_warning": ""})
+        echo = setup_echo({"content_warning": ""})
         scheduler.process_echo(echo, _item())
 
         assert len(sent) == 1
@@ -128,7 +50,7 @@ class TestContentWarning:
         # spoiler_text key should not be in the kwargs, or should be empty
         assert not sent[0].get("spoiler_text")
 
-    def test_cw_empty_string_treated_as_no_cw(self, db_tmp, monkeypatch):
+    def test_cw_empty_string_treated_as_no_cw(self, db_tmp, monkeypatch, setup_echo):
         """An empty CW string should not trigger sensitive=True."""
         import scheduler
 
@@ -137,12 +59,12 @@ class TestContentWarning:
             scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
         )
 
-        echo = _setup_echo(db_tmp, {"content_warning": ""})
+        echo = setup_echo({"content_warning": ""})
         scheduler.process_echo(echo, _item())
 
         assert sent[0]["sensitive"] is False
 
-    def test_cw_strips_whitespace(self, db_tmp, monkeypatch):
+    def test_cw_strips_whitespace(self, db_tmp, monkeypatch, setup_echo):
         """CW text should be stripped before sending."""
         import scheduler
 
@@ -151,17 +73,15 @@ class TestContentWarning:
             scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
         )
 
-        echo = _setup_echo(db_tmp, {"content_warning": "  Spacers  "})
+        echo = setup_echo({"content_warning": "  Spacers  "})
         scheduler.process_echo(echo, _item())
 
         assert sent[0]["spoiler_text"] == "Spacers"
 
-
 # ── Image Attachment Tests ───────────────────────────────────────────────────
 
-
 class TestImageAttachment:
-    def test_attach_image_disabled_no_upload(self, db_tmp, monkeypatch):
+    def test_attach_image_disabled_no_upload(self, db_tmp, monkeypatch, setup_echo):
         """When attach_image=0, no image fetch or upload should occur."""
         import scheduler
 
@@ -174,7 +94,7 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 0})
+        echo = setup_echo({"attach_image": 0})
         item = _item(image_url="https://example.com/image.jpg")
         scheduler.process_echo(echo, item)
 
@@ -182,7 +102,7 @@ class TestImageAttachment:
         assert len(upload_calls) == 0
         assert sent[0].get("media_ids") is None
 
-    def test_attach_image_no_image_url_posts_text_only(self, db_tmp, monkeypatch):
+    def test_attach_image_no_image_url_posts_text_only(self, db_tmp, monkeypatch, setup_echo):
         """When attach_image=1 but item has no image_url, post text-only."""
         import scheduler
 
@@ -195,7 +115,7 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_url="")
         scheduler.process_echo(echo, item)
 
@@ -203,7 +123,7 @@ class TestImageAttachment:
         assert len(upload_calls) == 0
         assert sent[0].get("media_ids") is None
 
-    def test_attach_image_success(self, db_tmp, monkeypatch):
+    def test_attach_image_success(self, db_tmp, monkeypatch, setup_echo):
         """When attach_image=1 and item has image_url, upload and attach."""
         import scheduler
 
@@ -218,14 +138,14 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: {"id": "media-123"}
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_url="https://example.com/photo.jpg")
         scheduler.process_echo(echo, item)
 
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-123"]
 
-    def test_attach_up_to_four_images_from_image_urls(self, db_tmp, monkeypatch):
+    def test_attach_up_to_four_images_from_image_urls(self, db_tmp, monkeypatch, setup_echo):
         """When item carries image_urls, upload and attach up to 4 images."""
         import scheduler
 
@@ -242,7 +162,7 @@ class TestImageAttachment:
         monkeypatch.setattr(scheduler, "fetch_image", fake_fetch)
         monkeypatch.setattr(scheduler, "upload_media", fake_upload)
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_urls=[
             {"url": "https://example.com/1.jpg", "alt": "one"},
             {"url": "https://example.com/2.jpg", "alt": "two"},
@@ -254,7 +174,7 @@ class TestImageAttachment:
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-1", "media-2", "media-3", "media-4"]
 
-    def test_caps_at_four_images(self, db_tmp, monkeypatch):
+    def test_caps_at_four_images(self, db_tmp, monkeypatch, setup_echo):
         """More than 4 image_urls are truncated to 4."""
         import scheduler
 
@@ -271,7 +191,7 @@ class TestImageAttachment:
         monkeypatch.setattr(scheduler, "fetch_image", fake_fetch)
         monkeypatch.setattr(scheduler, "upload_media", fake_upload)
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_urls=[
             {"url": f"https://example.com/{i}.jpg", "alt": ""} for i in range(6)
         ])
@@ -281,7 +201,7 @@ class TestImageAttachment:
         assert len(sent[0]["media_ids"]) == 4
         assert counter[0] == 4
 
-    def test_image_urls_json_string_supported(self, db_tmp, monkeypatch):
+    def test_image_urls_json_string_supported(self, db_tmp, monkeypatch, setup_echo):
         """image_urls may arrive as a JSON string (from the feed_items column)."""
         import json as _json
         import scheduler
@@ -298,7 +218,7 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: counter.__setitem__(0, counter[0] + 1) or {"id": f"media-{counter[0]}"}
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_urls=_json.dumps([
             {"url": "https://example.com/a.jpg", "alt": "a"},
             {"url": "https://example.com/b.jpg", "alt": "b"},
@@ -308,7 +228,7 @@ class TestImageAttachment:
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-1", "media-2"]
 
-    def test_falls_back_to_single_image_url(self, db_tmp, monkeypatch):
+    def test_falls_back_to_single_image_url(self, db_tmp, monkeypatch, setup_echo):
         """Legacy rows without image_urls still attach the single image_url."""
         import scheduler
 
@@ -323,14 +243,14 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: {"id": "media-legacy"}
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_url="https://example.com/single.jpg", image_alt="legacy alt")
         scheduler.process_echo(echo, item)
 
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-legacy"]
 
-    def test_skips_failed_fetch_and_continues(self, db_tmp, monkeypatch):
+    def test_skips_failed_fetch_and_continues(self, db_tmp, monkeypatch, setup_echo):
         """A failing image fetch skips that image but attaches the rest."""
         import scheduler
 
@@ -349,7 +269,7 @@ class TestImageAttachment:
         monkeypatch.setattr(scheduler, "fetch_image", flaky_fetch)
         monkeypatch.setattr(scheduler, "upload_media", fake_upload)
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_urls=[
             {"url": "https://example.com/broken.jpg", "alt": ""},
             {"url": "https://example.com/good.jpg", "alt": ""},
@@ -359,7 +279,7 @@ class TestImageAttachment:
         assert len(sent) == 1
         assert sent[0]["media_ids"] == ["media-1"]
 
-    def test_caller_image_alt_overrides_feed_alt_on_primary_slot(self, db_tmp, monkeypatch):
+    def test_caller_image_alt_overrides_feed_alt_on_primary_slot(self, db_tmp, monkeypatch, setup_echo):
         """item['image_alt'] (user-edited) wins over feed alt for the first image."""
         import scheduler
 
@@ -381,7 +301,7 @@ class TestImageAttachment:
             lambda *a, **kw: "AI-GENERATED",
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(
             image_alt="USER EDITED ALT",
             image_urls=[
@@ -395,7 +315,7 @@ class TestImageAttachment:
         assert descriptions[0] == "USER EDITED ALT"
         assert descriptions[1] == "AI-GENERATED"
 
-    def test_image_fetch_failure_posts_text_only(self, db_tmp, monkeypatch):
+    def test_image_fetch_failure_posts_text_only(self, db_tmp, monkeypatch, setup_echo):
         """If fetch_image returns None (network/SSRF/size), post text-only."""
         import scheduler
 
@@ -409,7 +329,7 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw)
         )
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_url="https://example.com/broken.jpg")
         scheduler.process_echo(echo, item)
 
@@ -417,7 +337,7 @@ class TestImageAttachment:
         assert len(upload_calls) == 0
         assert sent[0].get("media_ids") is None
 
-    def test_image_upload_failure_posts_text_only(self, db_tmp, monkeypatch):
+    def test_image_upload_failure_posts_text_only(self, db_tmp, monkeypatch, setup_echo):
         """If upload_media returns None (API failure), post text-only."""
         import scheduler
 
@@ -430,14 +350,14 @@ class TestImageAttachment:
         )
         monkeypatch.setattr(scheduler, "upload_media", lambda **kw: None)
 
-        echo = _setup_echo(db_tmp, {"attach_image": 1})
+        echo = setup_echo({"attach_image": 1})
         item = _item(image_url="https://example.com/photo.png")
         scheduler.process_echo(echo, item)
 
         assert len(sent) == 1
         assert sent[0].get("media_ids") is None
 
-    def test_cw_and_image_combined(self, db_tmp, monkeypatch):
+    def test_cw_and_image_combined(self, db_tmp, monkeypatch, setup_echo):
         """CW and image attachment should work together."""
         import scheduler
 
@@ -452,8 +372,8 @@ class TestImageAttachment:
             scheduler, "upload_media", lambda **kw: {"id": "m-1"}
         )
 
-        echo = _setup_echo(
-            db_tmp, {"content_warning": "Spoilers", "attach_image": 1}
+        echo = setup_echo(
+            {"content_warning": "Spoilers", "attach_image": 1}
         )
         item = _item(image_url="https://example.com/cover.jpg")
         scheduler.process_echo(echo, item)
@@ -463,9 +383,7 @@ class TestImageAttachment:
         assert sent[0]["sensitive"] is True
         assert sent[0]["media_ids"] == ["m-1"]
 
-
 # ── Feed Parser Image Extraction Tests ───────────────────────────────────────
-
 
 class TestImageExtraction:
     def test_extract_rss_images_multiple_img_tags(self):
@@ -692,9 +610,7 @@ class TestImageExtraction:
         entry = {"title": "No image", "content_text": "Just text"}
         assert _extract_json_feed_image(entry) == ""
 
-
 # ── Mastodon API Parameter Tests ──────────────────────────────────────────────
-
 
 class TestMastodonPostStatusParams:
     def test_spoiler_text_included_when_provided(self, monkeypatch):
@@ -796,7 +712,6 @@ class TestMastodonPostStatusParams:
             access_token="pres", content="hello",
         )
         assert "media_ids[]" not in captured["data"]
-
 
 class TestMastodonUploadMedia:
     def test_upload_returns_dict_on_success(self, monkeypatch):

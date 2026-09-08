@@ -22,28 +22,6 @@ from app import app
 HOOK_URL = "https://hooks.example.com/feedecho"
 HOOK_URL_SECRET = "https://hooks.example.com/feedecho?token=SUPERSECRETTOKEN"
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -60,7 +38,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 def _setup_webhook_echo(db_tmp, echo_overrides=None, headers=None):
     """Create a webhook account, feed, and echo. Returns the echo row."""
@@ -109,7 +86,6 @@ def _setup_webhook_echo(db_tmp, echo_overrides=None, headers=None):
     with db_tmp.get_db() as db:
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 def _resp(payload, status_code=200, headers=None):
     r = mock.Mock()
     r.status_code = status_code
@@ -117,9 +93,7 @@ def _resp(payload, status_code=200, headers=None):
     r.headers = headers or {}
     return r
 
-
 # ── Client: parse_headers ───────────────────────────────────────────────────
-
 
 class TestParseHeaders:
     def test_empty_returns_empty(self):
@@ -170,9 +144,7 @@ class TestParseHeaders:
         with pytest.raises(ValueError, match="too long"):
             webhook.parse_headers("X-A: " + "v" * (webhook.MAX_HEADERS_TEXT + 1))
 
-
 # ── Client: normalize_webhook_url ───────────────────────────────────────────
-
 
 class TestNormalizeWebhookURL:
     def test_https_passes(self):
@@ -218,9 +190,7 @@ class TestNormalizeWebhookURL:
             == "http://127.0.0.1:8080/hook"
         )
 
-
 # ── Client: build_payload / load_headers ────────────────────────────────────
-
 
 class TestBuildPayload:
     def test_full_shape(self):
@@ -253,7 +223,6 @@ class TestBuildPayload:
         assert webhook.build_payload({"id": "x", "tags": None}, "T")["tags"] == []
         assert webhook.build_payload({"id": "x", "date": None}, "T")["published"] == ""
 
-
 class TestLoadHeaders:
     def test_roundtrip(self):
         headers = {"Authorization": "Bearer xyz"}
@@ -269,9 +238,7 @@ class TestLoadHeaders:
     def test_control_char_value_dropped(self):
         assert webhook.load_headers('{"X-A": "a\\rb"}') == {}
 
-
 # ── Client: send_webhook ────────────────────────────────────────────────────
-
 
 class TestSendWebhook:
     @pytest.fixture(autouse=True)
@@ -393,7 +360,6 @@ class TestSendWebhook:
         # meaningful for a URL the guard already approved.
         assert order == ["guard", "ssrf"]
 
-
 class TestTestConnection:
     def test_success(self, monkeypatch):
         monkeypatch.setattr(settings, "MULTI", False)
@@ -411,9 +377,7 @@ class TestTestConnection:
         assert ok is False
         assert "bad" in msg
 
-
 # ── Scheduler dispatch ──────────────────────────────────────────────────────
-
 
 class TestSendWebhookDispatch:
     def test_success(self, db_tmp, monkeypatch):
@@ -528,9 +492,7 @@ class TestSendWebhookDispatch:
         assert gave_up is True
         assert sent == []
 
-
 # ── Routes ──────────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
@@ -553,7 +515,6 @@ def multi_client(monkeypatch, db_tmp):
     client = TestClient(app)
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
-
 
 class TestWebhookRoutes:
     @pytest.fixture(autouse=True)

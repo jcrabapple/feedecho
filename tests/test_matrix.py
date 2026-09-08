@@ -18,28 +18,6 @@ import security
 import settings
 from app import app
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -50,7 +28,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 def _setup_matrix_echo(db_tmp, echo_overrides=None):
     """Create a Matrix account, feed, and echo. Returns the echo row."""
@@ -108,7 +85,6 @@ def _setup_matrix_echo(db_tmp, echo_overrides=None):
     with db_tmp.get_db() as db:
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 def _resp(payload, status_code=200, headers=None):
     r = mock.Mock()
     r.status_code = status_code
@@ -116,9 +92,7 @@ def _resp(payload, status_code=200, headers=None):
     r.headers = headers or {}
     return r
 
-
 # ── Client: normalize_homeserver / normalize_room ───────────────────────────
-
 
 class TestNormalizeHomeserver:
     def test_bare_host_gets_https(self):
@@ -146,7 +120,6 @@ class TestNormalizeHomeserver:
     def test_non_http_raises(self):
         with pytest.raises(ValueError):
             matrix.normalize_homeserver("ftp://matrix.org")
-
 
 class TestNormalizeRoom:
     def test_room_id_passes_through(self):
@@ -177,9 +150,7 @@ class TestNormalizeRoom:
         with pytest.raises(ValueError):
             matrix.normalize_room("just some text")
 
-
 # ── Client: discover_base_url ────────────────────────────────────────────────
-
 
 class TestDiscoverBaseURL:
     """discover_base_url calls validate_outbound_url (real DNS), so each test
@@ -237,9 +208,7 @@ class TestDiscoverBaseURL:
             base = matrix.discover_base_url("https://matrix.org")
         assert base == "https://matrix.org"
 
-
 # ── Client: whoami / resolve_room / joined_rooms ────────────────────────────
-
 
 class TestWhoami:
     @pytest.fixture(autouse=True)
@@ -266,7 +235,6 @@ class TestWhoami:
             with pytest.raises(matrix.MatrixAuthError):
                 matrix.whoami("https://matrix.org", "bad-token")
 
-
 class TestResolveRoom:
     @pytest.fixture(autouse=True)
     def _bypass_ssrf(self, monkeypatch):
@@ -287,7 +255,6 @@ class TestResolveRoom:
             with pytest.raises(matrix.MatrixError):
                 matrix.resolve_room("https://matrix.org", "t", "#nope:example.org")
 
-
 class TestJoinedRooms:
     @pytest.fixture(autouse=True)
     def _bypass_ssrf(self, monkeypatch):
@@ -305,9 +272,7 @@ class TestJoinedRooms:
             joined = matrix.joined_rooms("https://matrix.org", "t")
         assert joined == set()
 
-
 # ── Client: connect ─────────────────────────────────────────────────────────
-
 
 class TestConnect:
     def test_returns_base_user_room(self):
@@ -349,9 +314,7 @@ class TestConnect:
             with pytest.raises(matrix.MatrixPermissionError):
                 matrix.connect("https://matrix.org", "tok", "!abc:example.org")
 
-
 # ── Client: send_message / send_event ──────────────────────────────────────
-
 
 class TestSendMessage:
     @pytest.fixture(autouse=True)
@@ -402,7 +365,6 @@ class TestSendMessage:
         with pytest.raises(matrix.MatrixError):
             matrix.send_message("https://matrix.org", "tok", "!room:example.org", "   ", "txn-1")
 
-
 class TestTransactionId:
     def test_deterministic(self):
         assert matrix.transaction_id(1, "item-1") == matrix.transaction_id(1, "item-1")
@@ -414,9 +376,7 @@ class TestTransactionId:
         tid = matrix.transaction_id(1, "item-1", suffix="img")
         assert tid.endswith(".img")
 
-
 # ── Client: upload_media / send_image ───────────────────────────────────────
-
 
 class TestUploadMedia:
     @pytest.fixture(autouse=True)
@@ -444,7 +404,6 @@ class TestUploadMedia:
             with pytest.raises(matrix.MatrixError):
                 matrix.upload_media("https://matrix.org", "tok", b"\x89PNG", "image/png")
 
-
 class TestSendImage:
     @pytest.fixture(autouse=True)
     def _bypass_ssrf(self, monkeypatch):
@@ -466,9 +425,7 @@ class TestSendImage:
         assert body["info"]["mimetype"] == "image/png"
         assert body["info"]["size"] == 1024
 
-
 # ── Scheduler dispatch ──────────────────────────────────────────────────────
-
 
 class TestSendMatrixDispatch:
     def test_success(self, db_tmp, monkeypatch):
@@ -572,9 +529,7 @@ class TestSendMatrixDispatch:
             ).fetchone()
         assert row["status"] == "success"
 
-
 # ── Routes ──────────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
@@ -597,7 +552,6 @@ def multi_client(monkeypatch, db_tmp):
     client = TestClient(app)
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
-
 
 class TestMatrixRoutes:
     def test_connect_creates_row(self, multi_client):

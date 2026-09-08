@@ -5,32 +5,6 @@ import tempfile
 
 import pytest
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -40,7 +14,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 class TestParseKeywords:
     def test_basic(self):
@@ -54,7 +27,6 @@ class TestParseKeywords:
         assert parse_keywords("") == []
         assert parse_keywords(None) == []
         assert parse_keywords(" , , ") == []
-
 
 class TestIsFiltered:
     def test_exclude_match_in_title(self):
@@ -100,7 +72,6 @@ class TestIsFiltered:
 
         # 'give' is a substring of 'giveaway' — substring matching is intended
         assert is_filtered(_item(), "give", "exclude") is True
-
 
 class TestSchedulerFiltering:
     def test_filtered_item_recorded_and_skips_delivery(self, db_tmp, monkeypatch):

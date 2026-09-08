@@ -18,30 +18,7 @@ import database
 import notify
 import settings
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test (repo convention)."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-    import scheduler
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-    yield database
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 UID = 5
-
 
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
@@ -68,13 +45,11 @@ def multi_client(monkeypatch, db_tmp):
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
 
-
 @pytest.fixture()
 def restore_settings():
     """Re-read settings from the real env after tests that reload it."""
     yield
     importlib.reload(settings)
-
 
 def _setup_email_echo(db, template="{{ title }} — {{ link }}"):
     """Create a test email account, feed, and digest echo. Returns the row."""
@@ -95,7 +70,6 @@ def _setup_email_echo(db, template="{{ title }} — {{ link }}"):
         )
         return conn.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -107,9 +81,7 @@ def _item(**overrides):
     item.update(overrides)
     return item
 
-
 # ── HIGH 1: email recipient validation ──────────────────────────────────────
-
 
 class TestEmailRecipientValidation:
     def test_rejects_crlf_recipient(self, multi_client):
@@ -140,9 +112,7 @@ class TestEmailRecipientValidation:
         )
         assert r.status_code == 303
 
-
 # ── MEDIUM 2: micro.blog cap counts only NEW rows ───────────────────────────
-
 
 class TestMicroblogCapCountsNewOnly:
     def _connect(self, client, blogs, token="t"):
@@ -201,9 +171,7 @@ class TestMicroblogCapCountsNewOnly:
         r = self._connect(multi_client, blog, token="rotated")
         assert r.status_code == 303
 
-
 # ── MEDIUM 3: digest overflow is held, not silently truncated ───────────────
-
 
 class TestDigestOverflowHeld:
     def _queue(self, echo, n, content_len):
@@ -320,9 +288,7 @@ class TestDigestOverflowHeld:
         assert remaining == 1
         assert all(r["status"] == "queued" for r in statuses)
 
-
 # ── MEDIUM 4: digest send failures reach the notify counter ─────────────────
-
 
 class TestDigestFailureNotifies:
     def test_failed_flush_marks_rows_failed_without_retry(self, db_tmp, monkeypatch):
@@ -470,9 +436,7 @@ class TestDigestFailureNotifies:
             "'failed' while their digest_items rows are deleted"
         )
 
-
 # ── MEDIUM 6: verification.py uses bound UTC clocks ─────────────────────────
-
 
 class TestVerificationUtcClocks:
     def test_no_current_timestamp_in_verification_sql(self):
@@ -528,9 +492,7 @@ class TestVerificationUtcClocks:
         assert verification.peek_token("live", "verify") == 1
         assert verification.peek_token("dead", "reset") is None
 
-
 # ── MEDIUM 7: JSON Feed detection via URL path ──────────────────────────────
-
 
 class TestJsonFeedDetection:
     def test_query_string_json_url_uses_json_parser(self, monkeypatch):
@@ -560,9 +522,7 @@ class TestJsonFeedDetection:
         result = feed_parser.fetch_feed("https://example.com/feed")
         assert result["items"] == []
 
-
 # ── MEDIUM 8: alt-text checkbox value ───────────────────────────────────────
-
 
 class TestAltTextCheckbox:
     def test_checkbox_submits_one(self):
@@ -590,9 +550,7 @@ class TestAltTextCheckbox:
         page = multi_client.get("/settings")
         assert "checked" in page.text
 
-
 # ── MEDIUM 9: OAuth state secret precedence ─────────────────────────────────
-
 
 class TestOauthStateSecretPrecedence:
     @pytest.fixture()

@@ -18,28 +18,6 @@ import security
 import settings
 from app import app
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -51,12 +29,10 @@ def _item(**overrides):
     item.update(overrides)
     return item
 
-
 WEBHOOK_URL = (
     "https://discord.com/api/webhooks/1234567890123456789/"
     "token_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
-
 
 def _setup_discord_echo(db_tmp, echo_overrides=None):
     """Create a Discord account, feed, and echo. Returns the echo row."""
@@ -104,7 +80,6 @@ def _setup_discord_echo(db_tmp, echo_overrides=None):
     with db_tmp.get_db() as db:
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 def _resp(payload, status_code=200, headers=None):
     r = mock.Mock()
     r.status_code = status_code
@@ -112,9 +87,7 @@ def _resp(payload, status_code=200, headers=None):
     r.headers = headers or {}
     return r
 
-
 # ── Client: normalize_webhook_url ───────────────────────────────────────────
-
 
 class TestNormalizeWebhookURL:
     def test_valid_url_passes_through(self):
@@ -147,9 +120,7 @@ class TestNormalizeWebhookURL:
         with pytest.raises(ValueError):
             discord.normalize_webhook_url("just some text")
 
-
 # ── Client: inspect_webhook / connect / send ────────────────────────────────
-
 
 class TestInspectWebhook:
     def test_returns_name_and_channel(self):
@@ -195,7 +166,6 @@ class TestInspectWebhook:
             with pytest.raises(discord.DiscordError):
                 discord.inspect_webhook(WEBHOOK_URL)
 
-
 class TestConnect:
     def test_returns_normalized_url_and_metadata(self):
         info = {"name": "Feed Bot", "channel_id": "111"}
@@ -210,7 +180,6 @@ class TestConnect:
     def test_malformed_url_raises_value_error(self):
         with pytest.raises(ValueError):
             discord.connect("not a url")
-
 
 class TestSendWebhook:
     def test_posts_content(self):
@@ -291,7 +260,6 @@ class TestSendWebhook:
                 discord.send_webhook(WEBHOOK_URL, "hi")
         assert exc_info.value.retry_after == 60.0
 
-
 class TestBuildEmbed:
     def test_all_fields(self):
         embed = discord.build_embed(
@@ -326,7 +294,6 @@ class TestBuildEmbed:
         assert discord.build_embed("", "", "") is None
         assert discord.build_embed("", "javascript:alert(1)", "") is None
 
-
 class TestTestConnection:
     def test_ok(self):
         with mock.patch.object(
@@ -344,9 +311,7 @@ class TestTestConnection:
         assert ok is False
         assert "bad" in msg
 
-
 # ── Scheduler dispatch ──────────────────────────────────────────────────────
-
 
 class TestSendDiscordDispatch:
     def test_success(self, db_tmp, monkeypatch):
@@ -500,9 +465,7 @@ class TestSendDiscordDispatch:
             "url": "https://example.com/post/1",
         }
 
-
 # ── Routes ──────────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
@@ -526,13 +489,11 @@ def multi_client(monkeypatch, db_tmp):
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
 
-
 CONNECT_INFO = {
     "webhook_url": WEBHOOK_URL,
     "name": "Feed Bot",
     "channel_id": "1112223334445556667",
 }
-
 
 class TestDiscordRoutes:
     def test_connect_creates_row(self, multi_client):

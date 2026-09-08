@@ -13,32 +13,6 @@ from email import policy
 
 import pytest
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -49,7 +23,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 def _setup_email_echo(db_tmp, echo_overrides=None):
     """Create a test email account, feed, and instant email echo."""
@@ -97,9 +70,7 @@ def _setup_email_echo(db_tmp, echo_overrides=None):
         )
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 # ── Echo dispatch: image fetching and send_email payload ─────────────────────
-
 
 class TestEmailEchoImages:
     def test_attach_image_embeds_fetched_image(self, db_tmp, monkeypatch):
@@ -217,9 +188,7 @@ class TestEmailEchoImages:
         assert len(sent) == 1
         assert len(sent[0]["images"]) == 1
 
-
 # ── MIME construction in email_sender ────────────────────────────────────────
-
 
 class _FakeSMTP:
     messages = []
@@ -242,7 +211,6 @@ class _FakeSMTP:
     def sendmail(self, from_addr, to_addrs, msg):
         _FakeSMTP.messages.append(msg)
 
-
 @pytest.fixture()
 def fake_smtp(monkeypatch):
     import email_sender
@@ -251,7 +219,6 @@ def fake_smtp(monkeypatch):
     monkeypatch.setattr(email_sender.smtplib, "SMTP", _FakeSMTP)
     monkeypatch.setattr(email_sender.settings, "MULTI", False)
     return _FakeSMTP
-
 
 def _cfg():
     return {
@@ -264,11 +231,9 @@ def _cfg():
         "use_tls": False,
     }
 
-
 def _parse_messages():
     p = email_parser.BytesParser(policy=policy.default)
     return [p.parsebytes(m.encode("utf-8")) for m in _FakeSMTP.messages]
-
 
 class TestEmailSenderMime:
     def test_images_produce_related_message(self, fake_smtp):

@@ -21,26 +21,7 @@ import security
 import settings
 from app import app
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-    yield database
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 UID = 5
-
 
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
@@ -62,7 +43,6 @@ def multi_client(monkeypatch, db_tmp):
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
 
-
 def _set_plan(uid, plan, trial_ends_at=None):
     with database.get_db() as db:
         db.execute(
@@ -70,21 +50,17 @@ def _set_plan(uid, plan, trial_ends_at=None):
             (plan, trial_ends_at, uid),
         )
 
-
 def _future(days=10):
     return (datetime.now(timezone.utc) + timedelta(days=days)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
-
 
 def _past(days=1):
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
-
 # ── plans module ────────────────────────────────────────────────────────────
-
 
 class TestLimitFor:
     def test_trial_defaults(self):
@@ -97,7 +73,6 @@ class TestLimitFor:
     def test_zero_means_unlimited(self):
         assert plans.limit_for("paid", "min_poll_interval") == 5  # floor, not cap
         assert plans.limit_for("paid", "max_feeds") == 50
-
 
 class TestTrialState:
     def test_future_trial_is_active(self):
@@ -136,7 +111,6 @@ class TestTrialState:
         # Never lock a user out on a data quirk
         assert plans.trial_state("trial", "not-a-date") == "active"
 
-
 class TestClamps:
     def test_poll_clamped_up_to_plan_floor(self):
         assert plans.clamp_poll_interval(5, "trial") == 15
@@ -156,7 +130,6 @@ class TestClamps:
     def test_drip_zero_stays_zero(self):
         assert plans.clamp_drip_limit(0, "trial") == 0
 
-
 class TestAllowances:
     def test_feed_allowance_raises_at_cap(self):
         with pytest.raises(plans.PlanError, match="5 feeds"):
@@ -169,9 +142,7 @@ class TestAllowances:
         with pytest.raises(plans.PlanError, match="5 connected"):
             plans.check_destination_allowance(5, "trial")
 
-
 # ── Route guards ────────────────────────────────────────────────────────────
-
 
 class TestFeedCapRoute:
     def _fill_feeds(self, client, n):
@@ -254,7 +225,6 @@ class TestFeedCapRoute:
             row = db.execute("SELECT poll_interval FROM feeds").fetchone()
         assert row["poll_interval"] == 1  # no plan clamp in single mode
 
-
 class TestDestinationCapRoute:
     def test_add_destination_blocked_at_cap(self, multi_client):
         for i in range(5):
@@ -296,7 +266,6 @@ class TestDestinationCapRoute:
         assert r.status_code == 200
         assert "5 connected" in r.text
 
-
 class TestEchoDripClampRoute:
     def _setup_feed(self, client):
         client.post(
@@ -332,16 +301,13 @@ class TestEchoDripClampRoute:
             row = db.execute("SELECT drip_limit FROM echoes WHERE user_id = ?", (UID,)).fetchone()
         assert row["drip_limit"] == 60  # trial ceiling
 
-
 # ── Admin plan / extend-trial ───────────────────────────────────────────────
-
 
 @pytest.fixture()
 def admin_client(multi_client):
     with database.get_db() as db:
         db.execute("UPDATE users SET is_admin = 1, email = 'admin@example.com' WHERE id = ?", (UID,))
     return multi_client
-
 
 class TestAdminPlanControls:
     def test_set_plan_to_paid_unpauses(self, admin_client):
@@ -385,9 +351,7 @@ class TestAdminPlanControls:
         )
         assert r.status_code == 403
 
-
 # ── Scheduler trial-pause gate ──────────────────────────────────────────────
-
 
 class TestTrialPauseScheduler:
     def _setup_feed_and_echo(self):
@@ -455,9 +419,7 @@ class TestTrialPauseScheduler:
             posted = db.execute("SELECT COUNT(*) AS c FROM posted_items").fetchone()["c"]
         assert feeds == 1 and echoes == 1 and posted == 0
 
-
 # ── Kimi-gate fixes: regression pins ────────────────────────────────────────
-
 
 class TestEchoRoutesNotCapBlocked:
     """F1: at-cap users must still be able to create/edit echoes."""
@@ -504,7 +466,6 @@ class TestEchoRoutesNotCapBlocked:
             ).fetchone()
         assert row["name"] == "renamed"
 
-
 class TestMicroblogMultiInsertCap:
     """F3: a token covering N blogs inserts N rows; the cap counts them all."""
 
@@ -549,7 +510,6 @@ class TestMicroblogMultiInsertCap:
             count = db.execute("SELECT COUNT(*) AS c FROM microblog_accounts").fetchone()["c"]
         assert count == 2
 
-
 class TestExtendTrialDowngradeGuard:
     """F4: extend-trial must not silently downgrade paid/beta users."""
 
@@ -577,7 +537,6 @@ class TestExtendTrialDowngradeGuard:
             ).fetchone()
         assert row["plan"] == "trial"
         assert plans.trial_state("trial", row["trial_ends_at"]) == "active"
-
 
 class TestDigestGate:
     """F6: the digest sweep must skip paused/suspended owners."""
@@ -633,7 +592,6 @@ class TestDigestGate:
         )
         scheduler.flush_digests()
         assert len(sent) == 1
-
 
 class TestDripClampSetBased:
     """F5/F7: drip clamp reads plan from the joined echo row, fails closed."""

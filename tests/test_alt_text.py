@@ -6,32 +6,6 @@ import base64
 
 import pytest
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _set_alt_text_settings(db_tmp, enabled=True, base_url="https://api.openai.com/v1",
                            model="gpt-4o-mini", api_key="sk-test-key"):
     """Write vision API settings to the database."""
@@ -53,9 +27,7 @@ def _set_alt_text_settings(db_tmp, enabled=True, base_url="https://api.openai.co
             ("alt_text_ai_api_key", api_key),
         )
 
-
 # ── Alt Text Module Tests ────────────────────────────────────────────────────
-
 
 class TestIsEnabled:
     def test_enabled_when_configured(self, db_tmp):
@@ -87,9 +59,8 @@ class TestIsEnabled:
         import alt_text
         assert alt_text.is_enabled() is False
 
-
 class TestGenerateAltText:
-    def test_returns_empty_when_disabled(self, db_tmp, monkeypatch):
+    def test_returns_empty_when_disabled(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp, enabled=False)
         import alt_text
 
@@ -97,14 +68,14 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
-    def test_returns_empty_when_unconfigured(self, db_tmp, monkeypatch):
+    def test_returns_empty_when_unconfigured(self, db_tmp, monkeypatch, setup_echo):
         import alt_text
 
         # No settings at all
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
-    def test_returns_description_on_success(self, db_tmp, monkeypatch):
+    def test_returns_description_on_success(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text
 
@@ -136,7 +107,7 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == "A red sports car on a mountain road."
 
-    def test_strips_whitespace_from_response(self, db_tmp, monkeypatch):
+    def test_strips_whitespace_from_response(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text
 
@@ -168,7 +139,7 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == "Padded description"
 
-    def test_returns_empty_on_http_error(self, db_tmp, monkeypatch):
+    def test_returns_empty_on_http_error(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text
 
@@ -192,7 +163,7 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
-    def test_returns_empty_on_network_error(self, db_tmp, monkeypatch):
+    def test_returns_empty_on_network_error(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text
 
@@ -213,7 +184,7 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
-    def test_returns_empty_on_missing_content(self, db_tmp, monkeypatch):
+    def test_returns_empty_on_missing_content(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text
 
@@ -241,7 +212,7 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == ""
 
-    def test_returns_empty_on_malformed_json(self, db_tmp, monkeypatch):
+    def test_returns_empty_on_malformed_json(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import alt_text
 
@@ -312,7 +283,7 @@ class TestGenerateAltText:
         b64_data = image_part["image_url"]["url"].split(",", 1)[1]
         assert base64.b64decode(b64_data) == b"fake-image"
 
-    def test_uses_reasoning_content_fallback(self, db_tmp, monkeypatch):
+    def test_uses_reasoning_content_fallback(self, db_tmp, monkeypatch, setup_echo):
         """Some models return content in reasoning_content instead of content."""
         _set_alt_text_settings(db_tmp)
         import alt_text
@@ -345,9 +316,7 @@ class TestGenerateAltText:
         result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
         assert result == "A blue sky over the ocean."
 
-
 # ── Scheduler Integration Tests ──────────────────────────────────────────────
-
 
 def _item(**overrides):
     item = {
@@ -360,54 +329,8 @@ def _item(**overrides):
     item.update(overrides)
     return item
 
-
-def _setup_echo(db_tmp, echo_overrides=None):
-    echo_kwargs = {
-        "destination_type": "mastodon",
-        "destination_id": 1,
-        "template": "{{ title }}",
-        "visibility": "public",
-        "filter_keywords": "",
-        "filter_mode": "exclude",
-        "content_warning": "",
-        "attach_image": 1,
-        "enabled": 1,
-    }
-    if echo_overrides:
-        echo_kwargs.update(echo_overrides)
-
-    with db_tmp.get_db() as db:
-        db.execute(
-            "INSERT INTO accounts (name, username, instance, access_token) "
-            "VALUES (?, ?, ?, ?)",
-            ("main", "user", "https://mastodon.social", "tok"),
-        )
-        db.execute(
-            "INSERT INTO feeds (name, url) VALUES (?, ?)",
-            ("f", "https://example.com/feed"),
-        )
-        db.execute(
-            """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
-                                   visibility, filter_keywords, filter_mode,
-                                   content_warning, attach_image, enabled)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                echo_kwargs["destination_type"],
-                echo_kwargs["destination_id"],
-                echo_kwargs["template"],
-                echo_kwargs["visibility"],
-                echo_kwargs["filter_keywords"],
-                echo_kwargs["filter_mode"],
-                echo_kwargs["content_warning"],
-                echo_kwargs["attach_image"],
-                echo_kwargs["enabled"],
-            ),
-        )
-        return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
-
-
 class TestSchedulerAltTextIntegration:
-    def test_alt_text_passed_to_upload_when_enabled(self, db_tmp, monkeypatch):
+    def test_alt_text_passed_to_upload_when_enabled(self, db_tmp, monkeypatch, setup_echo):
         _set_alt_text_settings(db_tmp)
         import scheduler
         import alt_text
@@ -425,14 +348,14 @@ class TestSchedulerAltTextIntegration:
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
         )
 
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=1)
         scheduler.process_echo(echo, _item(image_url="https://example.com/pic.jpg"))
 
         assert len(upload_calls) == 1
         assert upload_calls[0]["description"] == "A scenic mountain landscape."
         assert sent[0]["media_ids"] == ["m1"]
 
-    def test_no_alt_text_call_when_disabled(self, db_tmp, monkeypatch):
+    def test_no_alt_text_call_when_disabled(self, db_tmp, monkeypatch, setup_echo):
         """When AI alt text is not configured, generate_alt_text must not be called."""
         # Do NOT call _set_alt_text_settings — nothing configured
         import scheduler
@@ -453,14 +376,14 @@ class TestSchedulerAltTextIntegration:
             scheduler, "upload_media", lambda **kw: {"id": "m1"}
         )
 
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=1)
         scheduler.process_echo(echo, _item(image_url="https://example.com/pic.jpg"))
 
         assert len(alt_calls) == 0, "alt text generation must not run when disabled"
         # Image should still be uploaded, just without description
         assert sent[0]["media_ids"] == ["m1"]
 
-    def test_alt_text_failure_does_not_block_upload(self, db_tmp, monkeypatch):
+    def test_alt_text_failure_does_not_block_upload(self, db_tmp, monkeypatch, setup_echo):
         """If generate_alt_text raises, the image should still upload without description."""
         _set_alt_text_settings(db_tmp)
         import scheduler
@@ -481,14 +404,14 @@ class TestSchedulerAltTextIntegration:
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
         )
 
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=1)
         scheduler.process_echo(echo, _item(image_url="https://example.com/pic.jpg"))
 
         assert len(upload_calls) == 1
         assert upload_calls[0]["description"] == ""
         assert sent[0]["media_ids"] == ["m1"]
 
-    def test_empty_alt_text_does_not_block_upload(self, db_tmp, monkeypatch):
+    def test_empty_alt_text_does_not_block_upload(self, db_tmp, monkeypatch, setup_echo):
         """If generate_alt_text returns empty string, upload proceeds without description."""
         _set_alt_text_settings(db_tmp)
         import scheduler
@@ -506,7 +429,7 @@ class TestSchedulerAltTextIntegration:
             scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
         )
 
-        echo = _setup_echo(db_tmp)
+        echo = setup_echo(attach_image=1)
         scheduler.process_echo(echo, _item(image_url="https://example.com/pic.jpg"))
 
         assert len(upload_calls) == 1

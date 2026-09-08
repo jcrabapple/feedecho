@@ -23,22 +23,6 @@ from app import app
 UID = 5
 ADMIN_ID = 9
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-    yield database
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 @pytest.fixture()
 def multi_env(monkeypatch, db_tmp):
     """Multi mode, invites REQUIRED, admin + regular user rows."""
@@ -63,13 +47,11 @@ def multi_env(monkeypatch, db_tmp):
         )
     return db_tmp
 
-
 @pytest.fixture()
 def multi_env_open(monkeypatch, multi_env):
     """Multi mode with invites NOT required."""
     monkeypatch.setattr(settings, "INVITES_REQUIRED", False)
     return multi_env
-
 
 def _client(user_id, email):
     c = TestClient(app)
@@ -77,11 +59,9 @@ def _client(user_id, email):
         c.cookies.set("feedecho_session", security.sign_session(user_id, email))
     return c
 
-
 @pytest.fixture()
 def admin_client(multi_env):
     return _client(ADMIN_ID, "admin@example.com")
-
 
 def _register(client, code=None, email="new@example.com", **overrides):
     data = {"email": email, "password": "longenough", "confirm": "longenough"}
@@ -90,9 +70,7 @@ def _register(client, code=None, email="new@example.com", **overrides):
     data.update(overrides)
     return client.post("/register", data=data, follow_redirects=False)
 
-
 # ── Module: generation and consumption ──────────────────────────────────────
-
 
 class TestGenerateAndConsume:
     def test_generated_codes_are_uppercase_unique_12chars(self, db_tmp):
@@ -173,9 +151,7 @@ class TestGenerateAndConsume:
             ).fetchone()
         assert row["used_by"] is None and row["used_at"] is None
 
-
 # ── Register gate ───────────────────────────────────────────────────────────
-
 
 class TestRegisterGate:
     def test_register_page_shows_code_field_when_required(self, multi_env):
@@ -279,9 +255,7 @@ class TestRegisterGate:
         # And a single-mode-style signup flow never sees invite errors.
         assert invites.invites_required() is False
 
-
 # ── Admin routes ────────────────────────────────────────────────────────────
-
 
 class TestAdminInviteRoutes:
     def test_generate_creates_codes(self, admin_client):

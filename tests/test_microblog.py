@@ -19,28 +19,6 @@ import security
 import settings
 from app import app
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -51,7 +29,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 def _setup_microblog_echo(db_tmp, echo_overrides=None):
     """Create a micro.blog account, feed, and echo. Returns the echo row."""
@@ -98,9 +75,7 @@ def _setup_microblog_echo(db_tmp, echo_overrides=None):
     with db_tmp.get_db() as db:
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 # ── Client: list_destinations / fetch_config ───────────────────────────────
-
 
 def _config_response(payload, status_code=200):
     resp = mock.Mock()
@@ -108,7 +83,6 @@ def _config_response(payload, status_code=200):
     resp.json.return_value = payload
     resp.headers = {}
     return resp
-
 
 class TestListDestinations:
     def test_returns_uid_and_name(self):
@@ -186,7 +160,6 @@ class TestListDestinations:
             with pytest.raises(microblog.MicroblogError):
                 microblog.list_destinations("t")
 
-
 class TestCreatePost:
     def _post(self, **kwargs):
         kwargs.setdefault("token", "token-123")
@@ -254,7 +227,6 @@ class TestCreatePost:
         with pytest.raises(microblog.MicroblogError):
             microblog.create_post(token="t", content="   ")
 
-
 def test_test_connection_reports_blog_names():
     with mock.patch.object(microblog, "pinned_request") as req:
         req.return_value = _config_response(
@@ -264,9 +236,7 @@ def test_test_connection_reports_blog_names():
     assert ok
     assert "My Blog" in message
 
-
 # ── Scheduler dispatch ──────────────────────────────────────────────────────
-
 
 class TestMicroblogDispatch:
     def test_happy_path_posts_and_records_success(self, db_tmp, monkeypatch):
@@ -425,9 +395,7 @@ class TestMicroblogDispatch:
         assert row["status"] == "failed"
         assert row["attempt_count"] == 1
 
-
 # ── Routes ──────────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def multi_client(monkeypatch, db_tmp):
@@ -450,7 +418,6 @@ def multi_client(monkeypatch, db_tmp):
     client = TestClient(app)
     client.cookies.set("feedecho_session", security.sign_session(UID, "u@example.com"))
     return client
-
 
 class TestMicroblogRoutes:
     def test_connect_creates_one_row_per_blog(self, multi_client):

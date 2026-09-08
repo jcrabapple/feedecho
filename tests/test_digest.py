@@ -5,32 +5,6 @@ import tempfile
 
 import pytest
 
-
-@pytest.fixture()
-def db_tmp(monkeypatch):
-    """Point the DB layer at a fresh temp file per test."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
-
-    import database
-
-    monkeypatch.setattr(database, "DB_PATH", database.Path(path))
-    database.init_db()
-
-    import scheduler
-
-    monkeypatch.setattr(scheduler, "get_db", database.get_db)
-
-    yield database
-
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
-
-
 def _item(**overrides):
     item = {
         "id": "item-1",
@@ -41,7 +15,6 @@ def _item(**overrides):
     }
     item.update(overrides)
     return item
-
 
 def _setup_email_echo(db_tmp, echo_overrides=None):
     """Create a test email account, feed, and echo. Returns the echo row."""
@@ -89,9 +62,7 @@ def _setup_email_echo(db_tmp, echo_overrides=None):
         )
         return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
 
-
 # ── Queue for Digest Tests ───────────────────────────────────────────────────
-
 
 class TestDigestQueueing:
     def test_digest_mode_queues_item(self, db_tmp, monkeypatch):
@@ -204,9 +175,7 @@ class TestDigestQueueing:
             rows = db.execute("SELECT * FROM digest_items WHERE echo_id = 1").fetchall()
         assert len(rows) == 1
 
-
 # ── Digest Flush Tests ───────────────────────────────────────────────────────
-
 
 class TestDigestFlush:
     def test_flush_sends_one_email_per_echo(self, db_tmp, monkeypatch):

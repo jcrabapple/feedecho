@@ -476,6 +476,33 @@ Created at repo root: `utils.py`. Stdlib-only, no imports from the app's own mod
 
 ---
 
+## 7. Adoption outcome (2026-09-08, post-audit)
+
+Tier 1 + 2 shipped in **v1.49.1**; Tier 3 + 4 landed on master as four gated phases. Per-finding resolution:
+
+**Landed (zero/low behavior change):**
+- §1.1, §1.2, §1.3, §2.1, §2.2, §2.4, §3.13, §3.14, §3.15, §4.1 — Tier 1+2 (v1.49.1).
+- §27, §28 — Phase A: `tests/conftest.py` (`db_tmp`, `setup_echo`). §28's conflicting default resolved to `attach_image=0`; the four `test_alt_text.py` bare calls now pass `attach_image=1` explicitly. `test_mastodon_post_url.py`'s cross-file `_setup_echo` import (unmapped by the audit) migrated.
+- §3.4, §3.5, §3.6, §3.7, §3.8, §3.3 — Phase B: `_require_admin` + new 403 exception handler, `_get_user_or_404`, `_error`, `_upsert_settings`, `settings._env_int`, `normalize_discord_webhook_url` rename.
+- §2.3 — Phase C: `plans._check_allowance` with explicit singular/plural (exact message strings preserved; two tests assert them).
+- §3.1 — Phase D: scheduler dispatcher skeleton extracted (`_destination_account`/`_echo_attach_image`/`_resolve_alt_text`/`_guard_claim`/`_finalize_success`). **Fixed TWO permanent-account drift bugs, not one**: the audit flagged mastodon, but `_send_email_echo` had the same missing `permanent=True` on its missing-account path (confirmed on master; the unified helper fixes both).
+
+**Rejected after full read (the consolidation would change behavior):**
+- §3.11 (`classify_http_status`): the three `_raise_for_status` are NOT the same shape — matrix is errcode-driven (no status ranges), discord and webhook map different status sets. Shared classifier would alter permanent/transient semantics. `classify_http_status` added then removed.
+- §3.9 / §3.10 (templates): `accounts.html`'s 7 sections share a visual pattern but bespoke connect forms/columns; a macro needs ~15 params and obscures per-destination differences. `echoes.html`'s if/elif is a presentation badge-map, not the `_ACCOUNTS` data registry — not the same enumeration.
+- §2.7 (`test_connection` boilerplate): per the audit's own recommendation.
+
+**Already covered / no action:**
+- §3.2 (schema): column-name parity test `test_pg_schema_columns_match_sqlite_per_table` already exists in `test_dialect.py`. The F2 code-generation rewrite stays deferred (L effort, needs its own migration story).
+- §29 (`_register`/`_login`/`_uid`): `test_invites.py`'s `_register` differs from the other two copies — per-scenario divergence is real, so they stay local per the audit's own guidance.
+
+**Needs product decision (deferred to Jason):**
+- §2.5 / §2.6 (`feed_parser` image/audio extraction): the single-url/single-alt extractors are a strict SUBSET of the list extractor with deliberately looser behavior (no `data:`/video skipping, no HTML unescape). Collapsing them to `imgs[0]` passes all existing tests while silently changing edge-case behavior — a false-negative drift, not a safe dedup. Requires a decision on whether the single extractors should adopt the list extractor's stricter rules. §2.6 audio enclosure is low-value; skip.
+
+**Companion deliverable note:** §6 above claims `utils.py` was "created at repo root" — it was not (the audit environment never wrote it to disk). It was authored from the §6 spec during Tier 1 adoption.
+
+---
+
 ## Appendix: ruled out (checked, not duplication)
 
 - `security.py` — reviewed in full, no internal duplication found.

@@ -368,49 +368,46 @@ def login_page(request: Request):
     return _render_auth(request, "login.html", multi=True)
 
 
-def login_submit(
-    request: Request,
-    email: str = Form(""),
-    password: str = Form(""),
-    token: str = Form(""),
-):
-    if not settings.MULTI:
-        # Single mode: shared-secret token (original behavior).
-        import secrets as _secrets
+def _login_single_mode(request: Request, token: str):
+    """Shared-secret token login (original single-tenant behavior)."""
+    import secrets as _secrets
 
-        if not settings.AUTH_TOKEN:
-            return RedirectResponse(url="/", status_code=302)
-        ip = _client_ip(request)
-        # Verify first, throttle second. Gating the comparison on the bucket
-        # would let anyone who can reach /login keep the operator out of their
-        # own instance indefinitely by POSTing wrong tokens: single mode has no
-        # second credential and no account recovery. A correct token always
-        # works and clears the bucket; wrong ones are what get rate limited.
-        #
-        # Compare bytes: compare_digest raises TypeError on non-ASCII str.
-        if token and _secrets.compare_digest(
-            token.encode("utf-8", "surrogatepass"),
-            settings.AUTH_TOKEN.encode("utf-8", "surrogatepass"),
-        ):
-            _clear_failures(ip)
-            response = RedirectResponse(url="/", status_code=302)
-            response.set_cookie(
-                key=AUTH_COOKIE_NAME,
-                value=token,
-                httponly=True,
-                samesite="lax",
-                secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
-            )
-            return response
-        _record_failure(ip)
-        if _throttled(ip):
-            return _render_auth(
-                request,
-                "login.html",
-                error="Too many failed attempts. Try again in a few minutes.",
-            )
-        return _render_auth(request, "login.html", error="Invalid token")
+    if not settings.AUTH_TOKEN:
+        return RedirectResponse(url="/", status_code=302)
+    ip = _client_ip(request)
+    # Verify first, throttle second. Gating the comparison on the bucket
+    # would let anyone who can reach /login keep the operator out of their
+    # own instance indefinitely by POSTing wrong tokens: single mode has no
+    # second credential and no account recovery. A correct token always
+    # works and clears the bucket; wrong ones are what get rate limited.
+    #
+    # Compare bytes: compare_digest raises TypeError on non-ASCII str.
+    if token and _secrets.compare_digest(
+        token.encode("utf-8", "surrogatepass"),
+        settings.AUTH_TOKEN.encode("utf-8", "surrogatepass"),
+    ):
+        _clear_failures(ip)
+        response = RedirectResponse(url="/", status_code=302)
+        response.set_cookie(
+            key=AUTH_COOKIE_NAME,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https" or settings.FORCE_SECURE_COOKIE,
+        )
+        return response
+    _record_failure(ip)
+    if _throttled(ip):
+        return _render_auth(
+            request,
+            "login.html",
+            error="Too many failed attempts. Try again in a few minutes.",
+        )
+    return _render_auth(request, "login.html", error="Invalid token")
 
+
+def _login_multi_mode(request: Request, email: str, password: str):
+    """Email + password + session login (multi-tenant behavior)."""
     ip = _client_ip(request)
     if _throttled(ip):
         return _render_auth(
@@ -449,6 +446,26 @@ def login_submit(
     response = RedirectResponse(url="/", status_code=302)
     _set_session_cookie(response, user["id"], user["email"], request, user["session_epoch"])
     return response
+
+
+def login_submit(
+    request: Request,
+    email: str = Form(""),
+    password: str = Form(""),
+    token: str = Form(""),
+):
+    """Dispatch to the mode-appropriate login strategy.
+
+    Single-tenant and multi-tenant login are different algorithms (a
+    shared-secret token compare vs. an email/password/session lookup)
+    that happened to share one function; split per the design-patterns
+    audit's Strategy-pattern finding 3.2 so each mode reads as its own
+    self-contained flow instead of one function branching for its entire
+    body.
+    """
+    if not settings.MULTI:
+        return _login_single_mode(request, token)
+    return _login_multi_mode(request, email, password)
 
 
 def logout(request: Request):

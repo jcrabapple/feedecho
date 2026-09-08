@@ -121,22 +121,33 @@ class TestParseIncludesImageAlt:
 
 
 class TestSchedulerPrefersFeedAlt:
-    """The three poster paths seed their description from item['image_alt']."""
+    """The poster paths seed their description from item['image_alt']."""
 
     @pytest.fixture()
     def src(self):
         return (REPO := __import__("pathlib").Path(__file__).resolve().parent.parent) / "scheduler.py"
 
+    def test_shared_resolver_seeds_from_feed_alt(self, src):
+        # After the dispatch-skeleton extraction (Phase D), the feed-alt-wins
+        # logic lives in one place: _resolve_alt_text's `feed_alt` parameter.
+        text = src.read_text(encoding="utf-8")
+        assert re.search(r"def _resolve_alt_text\(echo, item, feed_alt", text)
+        # AI is the fallback branch, not the default
+        assert re.search(
+            r'def _resolve_alt_text.*?elif alt_text\.is_enabled\(.*?description = alt_text\.generate_alt_text',
+            text,
+            re.S,
+        )
+
     def test_mastodon_path_seeds_from_image_alt(self, src):
         text = src.read_text(encoding="utf-8")
-        m = re.search(r"description = \(item\.get\(\"image_alt\"\)", text)
+        m = re.search(r"_resolve_alt_text\(echo, item, entry\[\"alt\"\]", text)
         assert m, "Mastodon path must seed description from item['image_alt']"
-        # AI is the fallback branch, not the default
-        assert re.search(r'elif alt_text\.is_enabled\([^\n]*\n\s*try:\n\s*description = alt_text\.generate_alt_text', text)
 
     def test_bluesky_path_seeds_from_image_alt(self, src):
         text = src.read_text(encoding="utf-8")
-        assert 'alt_description = (item.get("image_alt") or "").strip()' in text
+        assert 'alt_description = _resolve_alt_text(' in text
+        assert '(item.get("image_alt") or "").strip()' in text
 
     def test_microblog_path_seeds_from_image_alt(self, src):
         text = src.read_text(encoding="utf-8")

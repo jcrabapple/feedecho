@@ -16,6 +16,33 @@ def _item(**overrides):
     item.update(overrides)
     return item
 
+class TestMissingAccount:
+    def test_missing_account_fails_permanently(self, db_tmp, monkeypatch, setup_echo):
+        """A deleted Mastodon account is unrecoverable: finalize 'gave_up'.
+
+        Every other destination passes permanent=True on its missing-account
+        path; the Mastodon dispatcher drifted and left it off, so a removed
+        account burned through the transient retry pipeline first. This
+        mirrors test_bluesky.py's test_missing_account_fails_permanently.
+        """
+        import database
+        import scheduler
+
+        echo = setup_echo(attach_image=0)
+        with database.get_db() as db:
+            db.execute("DELETE FROM accounts")
+
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True  # gave_up unblocks the cursor
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+            assert row["status"] == "gave_up"
+            assert "not found" in row["error_message"]
+
+
 class TestContentWarning:
     def test_cw_sent_as_spoiler_text(self, db_tmp, monkeypatch, setup_echo):
         """CW text must be passed as spoiler_text and sensitive=True."""

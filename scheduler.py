@@ -1162,6 +1162,122 @@ def _item_image_entries(item: dict, limit: int = 4) -> list[dict]:
     return image_entries
 
 
+# --- Shared destination-dispatch skeleton ----------------------------------
+#
+# The seven _send_* dispatchers below all run the same shape: fetch the
+# account row (missing = permanent failure), resolve the attach_image flag,
+# re-validate the claim right before the irreversible send, then finalize.
+# These helpers hold that shared skeleton so a fix lands in one place — the
+# mastodon missing-account path drifting off permanent=True is what happens
+# when it is copy-pasted instead.
+
+
+def _destination_account(
+    table: str,
+    account_id: int,
+    echo,
+    posted_id: int,
+    claim_token: str,
+    label: str,
+    user_scoped: bool = False,
+):
+    """Fetch the destination account row; fail permanently when gone.
+
+    A missing account can never heal on retry (the user deleted it), so the
+    row finalizes straight to 'gave_up'. Returns ``(account, None)`` on
+    success, or ``(None, fail_result)`` after finalizing the row — callers
+    return ``fail_result`` directly, preserving _fail_post's gave_up=True
+    contract that unblocks the feed cursor.
+    """
+    if user_scoped:
+        sql = f"SELECT * FROM {table} WHERE id = ? AND user_id = ?"
+        params = (account_id, echo["user_id"])
+    else:
+        sql = f"SELECT * FROM {table} WHERE id = ?"
+        params = (account_id,)
+    with get_db() as db:
+        account = db.execute(sql, params).fetchone()
+
+    if not account:
+        fail_result = _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"{label} {account_id} not found",
+            permanent=True,
+        )
+        return None, fail_result
+    return account, None
+
+
+def _echo_attach_image(echo) -> bool:
+    """The echo's attach_image flag, defaulting off for legacy/partial rows."""
+    try:
+        return bool(echo["attach_image"])
+    except (KeyError, IndexError):
+        return False
+
+
+def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
+    """Feed-provided alt text wins; AI generation is the fallback.
+
+    Returns the alt text to attach to an uploaded image ("" when neither
+    source produced one). AI failures degrade to "" — the image still posts.
+    """
+    description = feed_alt
+    if description:
+        logger.info(
+            "Echo %s: using feed-provided alt text for item %s (%d chars)",
+            echo["id"], item["id"], len(description),
+        )
+    elif alt_text.is_enabled(user_id=echo["user_id"]):
+        try:
+            description = alt_text.generate_alt_text(
+                img_bytes, img_type, user_id=echo["user_id"]
+            )
+            if description:
+                logger.info(
+                    "Echo %s: generated alt text for item %s (%d chars)",
+                    echo["id"], item["id"], len(description),
+                )
+        except Exception:
+            logger.warning(
+                "Echo %s: alt text generation failed for item %s",
+                echo["id"], item["id"],
+                exc_info=True,
+            )
+    return description
+
+
+def _guard_claim(posted_id: int, claim_token: str, echo_id, item_id, dest_name: str) -> bool:
+    """Re-validate claim ownership immediately before the irreversible send.
+
+    Dispatch paths do slow network I/O (image fetch, alt text, upload)
+    between _claim_post and the send; if the lease lapsed and another worker
+    reclaimed the row, sending now would duplicate the public post. Returns
+    True when this worker still owns the claim.
+    """
+    if not _still_owns_claim(posted_id, claim_token):
+        logger.warning(
+            "Echo %s: claim lost before %s dispatch; skipping item %s",
+            echo_id,
+            dest_name,
+            item_id,
+        )
+        return False
+    return True
+
+
+def _finalize_success(
+    posted_id: int, claim_token: str, echo_id, post_url: str | None = None
+) -> bool:
+    """Mark the row delivered and clear the echo's failure alert state."""
+    ok = _update_post(posted_id, claim_token, "success", post_url=post_url)
+    if ok:
+        record_success(echo_id)
+    return ok
+
+
 def _send_mastodon(
     echo,
     item: dict,
@@ -1170,16 +1286,11 @@ def _send_mastodon(
     posted_id: int,
     claim_token: str,
 ) -> bool:
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM accounts WHERE id = ?",
-            (account_id,),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id, claim_token, echo["id"], f"Account {account_id} not found"
-        )
+    account, fail_result = _destination_account(
+        "accounts", account_id, echo, posted_id, claim_token, "Account"
+    )
+    if account is None:
+        return fail_result
 
     # Content warning: per-echo CW text, applied via Mastodon's spoiler_text
     try:
@@ -1192,10 +1303,7 @@ def _send_mastodon(
     # limit) from the item's image_urls list, falling back to the single
     # image_url for legacy rows.
     media_ids: list[str] = []
-    try:
-        attach_image = bool(echo["attach_image"])
-    except (KeyError, IndexError):
-        attach_image = False
+    attach_image = _echo_attach_image(echo)
 
     if attach_image:
         image_entries = _item_image_entries(item)
@@ -1211,28 +1319,7 @@ def _send_mastodon(
             img_bytes, img_type = image_result
             # Feed-provided alt text wins (the author wrote it); AI
             # generation is the fallback when the feed has none.
-            description = entry["alt"]
-            if description:
-                logger.info(
-                    "Echo %s: using feed-provided alt text for item %s (%d chars)",
-                    echo["id"], item["id"], len(description),
-                )
-            elif alt_text.is_enabled(user_id=echo["user_id"]):
-                try:
-                    description = alt_text.generate_alt_text(
-                        img_bytes, img_type, user_id=echo["user_id"]
-                    )
-                    if description:
-                        logger.info(
-                            "Echo %s: generated alt text for item %s (%d chars)",
-                            echo["id"], item["id"], len(description),
-                        )
-                except Exception:
-                    logger.warning(
-                        "Echo %s: alt text generation failed for item %s",
-                        echo["id"], item["id"],
-                        exc_info=True,
-                    )
+            description = _resolve_alt_text(echo, item, entry["alt"], img_bytes, img_type)
             uploaded = upload_media(
                 instance=account["instance"],
                 access_token=decrypt_secret(account["access_token"]),
@@ -1266,12 +1353,7 @@ def _send_mastodon(
     # so the lease can lapse and another worker reclaim the row. Without this
     # both workers post and the loser's _update_post silently no-ops. The
     # Bluesky path has always done this.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before Mastodon dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Mastodon"):
         return False
 
     try:
@@ -1297,10 +1379,7 @@ def _send_mastodon(
     if isinstance(raw_url, str) and raw_url:
         post_url = raw_url
 
-    ok = _update_post(posted_id, claim_token, "success", post_url=post_url or None)
-    if ok:
-        record_success(echo["id"])
-    return ok
+    return _finalize_success(posted_id, claim_token, echo["id"], post_url=post_url or None)
 
 
 def _send_email_echo(
@@ -1321,28 +1400,15 @@ def _send_email_echo(
         return _queue_for_digest(echo, item, content, posted_id, claim_token)
 
     # Instant mode: send immediately
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM email_accounts WHERE id = ?",
-            (email_account_id,),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id,
-            claim_token,
-            echo["id"],
-            f"Email account {email_account_id} not found",
-        )
+    account, fail_result = _destination_account(
+        "email_accounts", email_account_id, echo, posted_id, claim_token, "Email account"
+    )
+    if account is None:
+        return fail_result
 
     # Email is a one-way send too, so the same claim re-check applies: SMTP
     # connect and delivery can outlast the lease.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before email dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "email"):
         return False
 
     # Image embedding: mirroring the Mastodon path, attach_image fetches the
@@ -1350,10 +1416,7 @@ def _send_email_echo(
     # inline in the message. A failed fetch skips that image — the email
     # still goes out with the rendered text.
     images: list[dict] = []
-    try:
-        attach_image = bool(echo["attach_image"])
-    except (KeyError, IndexError):
-        attach_image = False
+    attach_image = _echo_attach_image(echo)
     if attach_image:
         total_bytes = 0
         for entry in _item_image_entries(item, limit=EMAIL_MAX_IMAGES):
@@ -1391,10 +1454,7 @@ def _send_email_echo(
     except Exception:
         logger.exception("Echo %s: email delivery failed", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], "Email delivery failed")
-    ok = _update_post(posted_id, claim_token, "success")
-    if ok:
-        record_success(echo["id"])
-    return ok
+    return _finalize_success(posted_id, claim_token, echo["id"])
 
 
 def _bsky_session(account) -> dict:
@@ -1480,20 +1540,11 @@ def _send_bluesky(
     posted_id: int,
     claim_token: str,
 ) -> bool:
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM bluesky_accounts WHERE id = ?",
-            (account_id,),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id,
-            claim_token,
-            echo["id"],
-            f"Bluesky account {account_id} not found",
-            permanent=True,
-        )
+    account, fail_result = _destination_account(
+        "bluesky_accounts", account_id, echo, posted_id, claim_token, "Bluesky account"
+    )
+    if account is None:
+        return fail_result
 
     # Content preparation is pure string work, but a bug here must not strand
     # the claimed row — finalize it as failed so the bounded retry owns it.
@@ -1514,10 +1565,7 @@ def _send_bluesky(
 
     # Image attachment: optional, single image, with AI alt text when enabled.
     # Any failure in the pipeline degrades to a text-only post.
-    try:
-        attach_image = bool(echo["attach_image"])
-    except (KeyError, IndexError):
-        attach_image = False
+    attach_image = _echo_attach_image(echo)
 
     image_blob = None
     alt_description = ""
@@ -1530,26 +1578,13 @@ def _send_bluesky(
                     img_bytes, img_type = image_result
                     if img_type in BLUESKY_IMAGE_TYPES and len(img_bytes) <= MAX_BLOB_BYTES:
                         # Feed-provided alt text wins; AI is the fallback.
-                        alt_description = (item.get("image_alt") or "").strip()
-                        if alt_description:
-                            logger.info(
-                                "Echo %s: using feed-provided alt text for item %s (%d chars)",
-                                echo["id"], item["id"], len(alt_description),
-                            )
-                        elif alt_text.is_enabled(user_id=echo["user_id"]):
-                            try:
-                                alt_description = (
-                                    alt_text.generate_alt_text(
-                                        img_bytes, img_type, user_id=echo["user_id"]
-                                    ) or ""
-                                )
-                            except Exception:
-                                logger.warning(
-                                    "Echo %s: alt text generation failed for item %s",
-                                    echo["id"],
-                                    item["id"],
-                                    exc_info=True,
-                                )
+                        alt_description = _resolve_alt_text(
+                            echo,
+                            item,
+                            (item.get("image_alt") or "").strip(),
+                            img_bytes,
+                            img_type,
+                        ) or ""
                         blob = upload_blob(
                             pds=session["pds"],
                             access_jwt=session["access_jwt"],
@@ -1596,12 +1631,7 @@ def _send_bluesky(
 
     # Re-validate claim ownership immediately before the post: if the lease
     # lapsed and another worker reclaimed this row, posting would duplicate.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before Bluesky dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Bluesky"):
         return False
 
     def _do_post(access_jwt: str, repo: str) -> dict:
@@ -1681,10 +1711,7 @@ def _send_bluesky(
         rkey = uri.rsplit("/", 1)[-1]
         post_url = f"https://bsky.app/profile/{session['did']}/post/{rkey}"
 
-    ok = _update_post(posted_id, claim_token, "success", post_url=post_url)
-    if ok:
-        record_success(echo["id"])
-    return ok
+    return _finalize_success(posted_id, claim_token, echo["id"], post_url=post_url)
 
 
 def _send_microblog(
@@ -1703,20 +1730,12 @@ def _send_microblog(
     mp-photo-alt when the alt-text feature is enabled — matching the
     Mastodon/Bluesky degrade-to-text-only behavior on any image problem.
     """
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM microblog_accounts WHERE id = ? AND user_id = ?",
-            (account_id, echo["user_id"]),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id,
-            claim_token,
-            echo["id"],
-            f"Micro.blog account {account_id} not found",
-            permanent=True,
-        )
+    account, fail_result = _destination_account(
+        "microblog_accounts", account_id, echo, posted_id, claim_token,
+        "Micro.blog account", user_scoped=True,
+    )
+    if account is None:
+        return fail_result
 
     # Image passthrough: Micro.blog fetches photo= itself, so unlike the
     # Mastodon/Bluesky paths there is no blob upload. Alt text still needs
@@ -1725,10 +1744,7 @@ def _send_microblog(
     # strand the claimed row either.
     photo_url = ""
     photo_alt = ""
-    try:
-        attach_image = bool(echo["attach_image"])
-    except (KeyError, IndexError):
-        attach_image = False
+    attach_image = _echo_attach_image(echo)
 
     if attach_image:
         image_url = item.get("image_url", "")
@@ -1766,12 +1782,7 @@ def _send_microblog(
     # Re-validate claim ownership immediately before the post: alt-text
     # generation above is slow network I/O, so the lease can lapse and
     # another worker reclaim the row. Same pattern as Mastodon/Bluesky.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before micro.blog dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "micro.blog"):
         return False
 
     try:
@@ -1803,10 +1814,7 @@ def _send_microblog(
     # returns it in the Location header (captured as result["location"]).
     post_url = result.get("location", "") if isinstance(result, dict) else ""
 
-    ok = _update_post(posted_id, claim_token, "success", post_url=post_url)
-    if ok:
-        record_success(echo["id"])
-    return ok
+    return _finalize_success(posted_id, claim_token, echo["id"], post_url=post_url)
 
 
 def _send_matrix(
@@ -1828,20 +1836,12 @@ def _send_matrix(
     whose response was lost is de-duplicated by the homeserver instead of
     posting the item twice.
     """
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM matrix_accounts WHERE id = ? AND user_id = ?",
-            (account_id, echo["user_id"]),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id,
-            claim_token,
-            echo["id"],
-            f"Matrix account {account_id} not found",
-            permanent=True,
-        )
+    account, fail_result = _destination_account(
+        "matrix_accounts", account_id, echo, posted_id, claim_token,
+        "Matrix account", user_scoped=True,
+    )
+    if account is None:
+        return fail_result
 
     base_url = account["base_url"] or account["homeserver"]
     access_token = decrypt_secret(account["access_token"])
@@ -1850,10 +1850,7 @@ def _send_matrix(
     # Image work happens BEFORE the text event so its slow I/O (fetch, alt
     # text, upload) does not sit between the text send and the claim's final
     # state. Any failure degrades to text-only, as on the other destinations.
-    try:
-        attach_image = bool(echo["attach_image"])
-    except (KeyError, IndexError):
-        attach_image = False
+    attach_image = _echo_attach_image(echo)
 
     mxc_uri = ""
     image_body = ""
@@ -1871,24 +1868,13 @@ def _send_matrix(
                         and len(img_bytes) <= MATRIX_MAX_UPLOAD_BYTES
                     ):
                         # Feed-provided alt text wins; AI is the fallback.
-                        alt_description = (item.get("image_alt") or "").strip()
-                        if not alt_description and alt_text.is_enabled(
-                            user_id=echo["user_id"]
-                        ):
-                            try:
-                                alt_description = (
-                                    alt_text.generate_alt_text(
-                                        img_bytes, img_type, user_id=echo["user_id"]
-                                    )
-                                    or ""
-                                )
-                            except Exception:
-                                logger.warning(
-                                    "Echo %s: alt text generation failed for item %s",
-                                    echo["id"],
-                                    item["id"],
-                                    exc_info=True,
-                                )
+                        alt_description = _resolve_alt_text(
+                            echo,
+                            item,
+                            (item.get("image_alt") or "").strip(),
+                            img_bytes,
+                            img_type,
+                        ) or ""
                         mxc_uri = matrix_upload_media(
                             base_url,
                             access_token,
@@ -1924,12 +1910,7 @@ def _send_matrix(
     # Re-validate claim ownership immediately before the post: the image
     # pipeline above is slow network I/O, so the lease can lapse and another
     # worker reclaim the row. Same pattern as the other senders.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before Matrix dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Matrix"):
         return False
 
     try:
@@ -1989,15 +1970,12 @@ def _send_matrix(
                 exc_info=True,
             )
 
-    ok = _update_post(
+    return _finalize_success(
         posted_id,
         claim_token,
-        "success",
+        echo["id"],
         post_url=matrix_permalink(room_id, event_id),
     )
-    if ok:
-        record_success(echo["id"])
-    return ok
 
 
 def _matrix_image_filename(content_type: str) -> str:
@@ -2033,27 +2011,16 @@ def _send_discord(
     A deleted or revoked webhook (401/404) is permanent until the user
     reconnects; rate limits and 5xx ride the transient retry pipeline.
     """
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM discord_accounts WHERE id = ? AND user_id = ?",
-            (account_id, echo["user_id"]),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id,
-            claim_token,
-            echo["id"],
-            f"Discord account {account_id} not found",
-            permanent=True,
-        )
+    account, fail_result = _destination_account(
+        "discord_accounts", account_id, echo, posted_id, claim_token,
+        "Discord account", user_scoped=True,
+    )
+    if account is None:
+        return fail_result
 
     webhook_url = decrypt_secret(account["webhook_url"])
 
-    try:
-        attach_image = bool(echo["attach_image"])
-    except (KeyError, IndexError):
-        attach_image = False
+    attach_image = _echo_attach_image(echo)
 
     embed = None
     if attach_image:
@@ -2066,12 +2033,7 @@ def _send_discord(
     # Discord work has no slow image pipeline that could lapse the lease, but
     # the claim is still re-validated so this path keeps the same contract as
     # the other senders.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before Discord dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Discord"):
         return False
 
     try:
@@ -2100,10 +2062,7 @@ def _send_discord(
 
     # Discord replies 204 with no message id (and a jump link would need the
     # guild id, which webhooks do not expose), so there is no post_url.
-    ok = _update_post(posted_id, claim_token, "success", post_url="")
-    if ok:
-        record_success(echo["id"])
-    return ok
+    return _finalize_success(posted_id, claim_token, echo["id"], post_url="")
 
 
 def _send_webhook(
@@ -2125,32 +2084,19 @@ def _send_webhook(
 
     There is no per-message URL for a generic webhook, so post_url is "".
     """
-    with get_db() as db:
-        account = db.execute(
-            "SELECT * FROM webhook_accounts WHERE id = ? AND user_id = ?",
-            (account_id, echo["user_id"]),
-        ).fetchone()
-
-    if not account:
-        return _fail_post(
-            posted_id,
-            claim_token,
-            echo["id"],
-            f"Webhook account {account_id} not found",
-            permanent=True,
-        )
+    account, fail_result = _destination_account(
+        "webhook_accounts", account_id, echo, posted_id, claim_token,
+        "Webhook account", user_scoped=True,
+    )
+    if account is None:
+        return fail_result
 
     payload = webhook_build_payload(item, content, feed_name=feed_name)
     headers = load_headers(account["headers"])
 
     # Same contract as the other senders: re-validate the claim immediately
     # before the irreversible step.
-    if not _still_owns_claim(posted_id, claim_token):
-        logger.warning(
-            "Echo %s: claim lost before webhook dispatch; skipping item %s",
-            echo["id"],
-            item["id"],
-        )
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "webhook"):
         return False
 
     try:
@@ -2177,10 +2123,7 @@ def _send_webhook(
             posted_id, claim_token, echo["id"], "Webhook delivery failed"
         )
 
-    ok = _update_post(posted_id, claim_token, "success", post_url="")
-    if ok:
-        record_success(echo["id"])
-    return ok
+    return _finalize_success(posted_id, claim_token, echo["id"], post_url="")
 
 
 def _queue_for_digest(

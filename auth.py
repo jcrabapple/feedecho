@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,6 +22,7 @@ import invites
 import plans
 from database import get_db
 from security import SESSION_TTL_SECONDS, hash_password, read_session, sign_session, verify_password
+from utils import EMAIL_RE as _EMAIL_RE
 
 # Minimal in-memory login throttle: 5 failed attempts per IP per 5 minutes.
 # Deliberately cheap and boring; real abuse controls (per-user caps, IP
@@ -37,8 +37,6 @@ _login_lock = threading.Lock()
 _MAX_REGISTER_ATTEMPTS = 10
 _REGISTER_WINDOW_SECONDS = 10 * 60
 _register_attempts: dict[str, list[float]] = {}
-
-_EMAIL_RE = re.compile(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$")
 
 
 # Forgot-password IP throttle: 5 requests per IP per 10 minutes. Keeps an

@@ -88,6 +88,7 @@ from webhook import (
 from scheduler import start_scheduler, stop_scheduler, check_feed, process_echo
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
+from utils import is_valid_email
 
 import logging_setup
 
@@ -1567,7 +1568,10 @@ async def admin_email_save(request: Request):
                       code=400, message="SMTP port must be a number between 1 and 65535")
 
     from_email = (form.get("smtp_from_email") or "").strip()
-    if from_email and not re.match(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$", from_email):
+    # Bare-host sender addresses (feedecho@localhost) are legitimate for a
+    # local relay, matching the per-tenant SMTP route's rule; both shapes
+    # still reject whitespace and control characters.
+    if from_email and not is_valid_email(from_email, require_domain_dot=False):
         return render("error.html", request, status_code=400,
                       code=400, message="From address is not a valid email address")
 
@@ -3172,7 +3176,7 @@ async def add_email_account(
     # whitespace here rather than at send time (same rule as the SMTP
     # settings route below).
     email = email.strip()
-    if not re.match(r"^[^@\s\r\n]+@[^@\s\r\n]+$", email):
+    if not is_valid_email(email, require_domain_dot=False):
         return _render_accounts_error(
             request, "Enter a valid email address"
         )
@@ -3839,11 +3843,11 @@ async def save_smtp_settings(
                 "error.html", request, status_code=400, code=400,
                 message="SMTP host must be a public hostname or IP address",
             )
-    if smtp_from_email and not re.match(
-        # No dot required in the domain: a self-hosted relay legitimately uses
-        # feedecho@localhost or a bare internal hostname. This rejects
-        # whitespace, control characters and anything without a single @.
-        r"^[^@\s\r\n]+@[^@\s\r\n]+$", smtp_from_email.strip()
+    # No dot required in the domain: a self-hosted relay legitimately uses
+    # feedecho@localhost or a bare internal hostname. This rejects
+    # whitespace, control characters and anything without a single @.
+    if smtp_from_email and not is_valid_email(
+        smtp_from_email.strip(), require_domain_dot=False
     ):
         return render("error.html", request, status_code=400, code=400,
                       message="From address is not a valid email address")

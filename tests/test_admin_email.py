@@ -72,6 +72,23 @@ class TestAdminEmailSettings:
         assert cfg["from_email"] == "no-reply@example.com"
         assert cfg["use_tls"] is True
 
+    def test_admin_from_address_accepts_bare_host(self, multi_env):
+        # Deliberate 2026-09-08 decision: the admin relay's sender address
+        # follows the same bare-host rule as per-tenant SMTP (a local relay
+        # can legitimately send as feedecho@localhost).
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            resp = _save_smtp(c, smtp_from_email="feedecho@localhost")
+        assert resp.status_code == 302
+        cfg = email_sender.get_system_smtp_settings()
+        assert cfg and cfg["from_email"] == "feedecho@localhost"
+
+    def test_admin_from_address_still_rejects_garbage(self, multi_env):
+        for bad in ("not-an-address", "evil@ex ample.com", "a@b.com\r\nBcc: v@example.com"):
+            with _client(ADMIN_ID, "admin@example.com") as c:
+                resp = _save_smtp(c, smtp_from_email=bad)
+            assert resp.status_code == 400, bad
+            assert "valid email" in resp.text, bad
+
     def test_blank_password_keeps_stored_value(self, multi_env):
         with _client(ADMIN_ID, "admin@example.com") as c:
             _save_smtp(c)

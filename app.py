@@ -1814,13 +1814,16 @@ async def admin_delete_user(user_id: int, request: Request):
       the caller is an admin, so deleting another admin always leaves at
       least one admin (themselves); the final admin can only be removed by
       their own delete, which is refused.
-    - Safety: the form must repeat the account's email exactly
-      (confirm_text), because an admin-delete is irreversible and this is
-      the same protection class as the self-serve password confirmation.
+    - Safety: the form must contain the fixed token DELETE (confirm_text),
+      because an admin-delete is irreversible. The typed-email pattern was
+      tried first (v1.53.0) and is hostile on mobile: autocorrect/autofill
+      mangles random spam addresses, so the confirmation never matched. A
+      fixed token is keyboard-proof; the account identity is shown in the
+      input placeholder and the JS confirm dialog instead.
     """
     uid = _require_admin(request)
     form = await request.form()
-    confirm_text = (form.get("confirm_email") or "").strip()
+    confirm_text = (form.get("confirm_text") or "").strip()
     with get_db() as db:
         row = _get_user_or_404(db, user_id, columns="id, email, is_admin")
         if user_id == uid:
@@ -1832,12 +1835,12 @@ async def admin_delete_user(user_id: int, request: Request):
             if guard:
                 return render("error.html", request, status_code=400,
                               code=400, message=guard)
-        if confirm_text.lower() != row["email"].strip().lower():
+        if confirm_text.strip().upper() != "DELETE":
             return render(
                 "error.html", request, status_code=400, code=400,
                 message=(
-                    "Confirmation failed: type the account's email address "
-                    "exactly to delete it"
+                    "Confirmation failed: type DELETE (in capitals) to "
+                    "delete this account"
                 ),
             )
         email = row["email"]

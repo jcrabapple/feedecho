@@ -59,6 +59,15 @@ AUTH_COOKIE_NAME = "feedecho_auth"
 # cost as known-email attempts (no timing-based user enumeration).
 _DUMMY_HASH = hash_password("feedecho-timing-equalizer")
 
+# Holds strong references to fire-and-forget asyncio Tasks (currently just
+# the password-reset email dispatch below) so the event loop can't garbage
+# -collect one mid-execution, per the asyncio docs' own warning about
+# unreferenced create_task() results. Exception-safety doesn't depend on
+# this (_send_reset_email already guards its entire body), so this is
+# hygiene, not a live-bug fix. Error-handling audit finding 3.1
+# (docs/reviews/2026-09-08-error-handling-audit.md).
+_background_tasks: set = set()
+
 
 def current_user_id(request: Request) -> int:
     """The authenticated user for this request (multi mode), or the
@@ -349,8 +358,14 @@ def register_submit(
                 "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
             )
     except Exception as exc:  # noqa: BLE001 — verification must not block signup
-        logging.getLogger("feedecho").warning(
-            "Verification email for %s failed: %s", email, exc
+        # ERROR + exc_info=True to match _send_reset_email's logging below —
+        # previously WARNING with no traceback, so a genuine bug here (as
+        # opposed to the expected "SMTP unconfigured" case) had no stack
+        # trace anywhere to diagnose it. Error-handling audit finding 5.2
+        # (docs/reviews/2026-09-08-error-handling-audit.md). Still non-blocking: signup
+        # succeeds either way, per the comment above.
+        logging.getLogger("feedecho").error(
+            "Verification email for %s failed: %s", email, exc, exc_info=True
         )
 
     # Card-gated trial: send a freshly registered user straight into Stripe
@@ -570,9 +585,11 @@ def forgot_submit(request: Request, email: str = Form("")):
             _record_forgot(ip)
             import asyncio
 
-            asyncio.create_task(
+            task = asyncio.create_task(
                 asyncio.to_thread(_send_reset_email, user["id"], user["email"])
             )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
     return _render_auth(request, "forgot_password.html", sent=True)
 
 

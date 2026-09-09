@@ -10,6 +10,7 @@ import hashlib
 import html
 import ipaddress
 import json
+import logging
 import socket
 import threading
 import httpx
@@ -18,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, urljoin, urlparse
 import settings
 
+logger = logging.getLogger("feedecho.feed_parser")
 
 USER_AGENT = "feedecho/1.0 (+https://github.com/yourusername/feedecho)"
 MAX_FEED_SIZE = 10 * 1024 * 1024  # 10 MB cap
@@ -1208,6 +1210,14 @@ def fetch_image(url: str) -> tuple[bytes, str] | None:
 
         return content, content_type
     except Exception:
+        # A single dead link or blocked host is routine (dead feeds,
+        # geo-blocked images) and not worth a log line above DEBUG — but a
+        # *systemic* failure (misconfigured FALLBACK_PROXY_URL, an outbound
+        # network policy change) previously had zero trace anywhere, since
+        # this caught network errors, redirect-loop/oversize ValueErrors,
+        # and fallback-proxy failures alike with no logging at all.
+        # Error-handling audit finding 5.3a (docs/reviews/2026-09-08-error-handling-audit.md).
+        logger.debug("Image fetch failed for %s", url, exc_info=True)
         return None
 
 

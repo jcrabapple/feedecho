@@ -201,6 +201,21 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
             IndexError,
             AttributeError,
         ) as e:
+            # A permanent client error (bad API key, malformed request, wrong
+            # endpoint path) fails identically on every retry — burning the
+            # retry budget on it just delays the empty-string fallback for no
+            # benefit. e.response can be None here (some callers construct
+            # HTTPStatusError without one), so only special-case when a real
+            # status code is available; anything else falls through to the
+            # normal retry path unchanged. Error-handling audit finding 4.3
+            # (docs/reviews/2026-09-08-error-handling-audit.md).
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in (400, 401, 403, 404):
+                logger.warning(
+                    "Alt text API call failed permanently (HTTP %s), not retrying: %s",
+                    status, e,
+                )
+                return ""
             logger.warning(
                 "Alt text API call failed (attempt %d/%d): %s",
                 attempt,
@@ -208,6 +223,6 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
                 e,
             )
             if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY)
+                time.sleep(RETRY_DELAY * attempt)
 
     return ""

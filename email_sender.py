@@ -6,6 +6,7 @@ verification, password reset).
 """
 
 import html
+import logging
 import smtplib
 import ssl
 from email.mime.image import MIMEImage
@@ -17,6 +18,8 @@ from database import get_db
 from feed_parser import SSRFError, validate_outbound_url
 from security import decrypt_secret
 from utils import rows_to_dict
+
+logger = logging.getLogger("feedecho.email_sender")
 
 
 def get_smtp_settings(user_id: int = 1) -> dict | None:
@@ -201,6 +204,13 @@ def test_smtp_connection(to_email: str = "", user_id: int = 1) -> tuple[bool, st
         )
         return True, f"Test email sent to {test_to}"
     except Exception as e:
+        # Catches misconfiguration (wrong host/password) and genuine bugs
+        # alike with no server-side trace either way, previously — an admin
+        # clicking "test" is low-volume enough that ERROR + full traceback
+        # here won't spam logs, and it's the only place a real bug in this
+        # path would ever surface. Error-handling audit finding 5.3b
+        # (docs/reviews/2026-09-08-error-handling-audit.md).
+        logger.error("SMTP test connection failed for user %s", user_id, exc_info=True)
         return False, str(e)
 
 
@@ -223,4 +233,5 @@ def test_system_smtp_connection(to_email: str = "") -> tuple[bool, str]:
         )
         return True, f"Test email sent to {test_to}"
     except Exception as e:
+        logger.error("System SMTP test connection failed", exc_info=True)
         return False, str(e)

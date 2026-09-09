@@ -691,7 +691,19 @@ class CSRFOriginMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if request.method in self._UNSAFE and not self._same_origin(request):
-            return Response(status_code=403)
+            # A bare Response(status_code=403) previously returned here with
+            # no body and no Content-Type, bypassing forbidden_handler and
+            # every other error page in the app — a legitimate user whose
+            # form got cross-origin-rejected (see the false-positive-prone
+            # heuristics documented above) saw a blank page with zero
+            # explanation. Error-handling audit finding 1.4
+            # (docs/reviews/2026-09-08-error-handling-audit.md).
+            if "text/html" in request.headers.get("accept", ""):
+                return render(
+                    "error.html", request, status_code=403, code=403,
+                    message="Your request could not be verified. Please try again.",
+                )
+            return JSONResponse({"detail": "Cross-origin request rejected"}, status_code=403)
         return await call_next(request)
 
     @staticmethod
@@ -5896,10 +5908,31 @@ async def not_found_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(403)
 async def forbidden_handler(request: Request, exc: HTTPException):
+    message = exc.detail if isinstance(exc.detail, str) else "Forbidden"
     if request.headers.get("accept", "").startswith("application/json"):
-        return JSONResponse({"detail": "Admin access required"}, status_code=403)
-    return render("error.html", request, status_code=403,
-                  code=403, message="Admin access required")
+        return JSONResponse({"detail": message}, status_code=403)
+    return render("error.html", request, status_code=403, code=403, message=message)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # RequestIdMiddleware (above) already logs this exception with full
+    # request context (method, path, duration, peer, user id) before
+    # re-raising, and its own traceback capture is what actually records
+    # this for debugging — this handler only shapes the response so an
+    # unexpected bug gets the same branded page as every other error
+    # category instead of Starlette's bare default. Registering a handler
+    # for the bare Exception type does not change how HTTPException (400/
+    # 402/403/404/409/502/etc.) is handled: Starlette resolves handlers by
+    # walking the raised exception's MRO, and HTTPException's own handler
+    # (built-in, or the 403/404 overrides above) is more specific and is
+    # matched first — this handler only ever receives exceptions that
+    # aren't an HTTPException of any kind. Error-handling audit finding 1.1
+    # (docs/reviews/2026-09-08-error-handling-audit.md).
+    if request.headers.get("accept", "").startswith("application/json"):
+        return JSONResponse({"detail": "Internal server error"}, status_code=500)
+    return render("error.html", request, status_code=500,
+                  code=500, message="Something went wrong. Please try again.")
 
 
 @app.get("/favicon.svg", include_in_schema=False)

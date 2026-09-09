@@ -1626,3 +1626,54 @@ function adminConfirmDelete(form) {
     }
     return confirm('Permanently delete ' + email + ' and ALL their data (feeds, echoes, destinations, post history)? This cannot be undone.');
 }
+
+// The admin action forms below all follow the same safety pattern as
+// adminConfirmDelete: the user's email (attacker-controlled at registration
+// time) travels through a data-* attribute, which Jinja autoescapes into a
+// safe HTML attribute value. We read it here with .dataset and build the
+// confirm() text via plain string concatenation, so it is never re-parsed as
+// JS the way a template-generated inline onsubmit string would be.
+
+function adminConfirmSuspend(form) {
+    var email = (form.dataset.email || '').trim();
+    return confirm('Suspend ' + email + '? Their feeds stop posting until unsuspended.');
+}
+
+function adminConfirmRemoveAdmin(form) {
+    var email = (form.dataset.email || '').trim();
+    return confirm('Remove admin access from ' + email + '?');
+}
+
+function adminConfirmMakeAdmin(form) {
+    var email = (form.dataset.email || '').trim();
+    return confirm('Make ' + email + ' an admin? They gain full operator access, including user and invite management.');
+}
+
+function adminConfirmSetPlan(form) {
+    var email = (form.dataset.email || '').trim();
+    var plan = (form.plan || {}).value || '';
+    return confirm('Set plan for ' + email + ' to ' + plan + '? This changes their access and billing.');
+}
+
+function adminConfirmExtendTrial(form) {
+    var email = (form.dataset.email || '').trim();
+    var days = (form.days || {}).value || '';
+    return confirm('Extend ' + email + '\'s trial by ' + days + ' day(s)?');
+}
+
+// Folder rename/delete confirm dialogs follow the same pattern: the folder
+// name (free text the owner chose) comes in via data-folder-name rather than
+// being interpolated straight into the inline onsubmit JS string.
+
+function folderConfirmRename(form) {
+    var name = (form.dataset.folderName || '').trim();
+    var n = prompt('Rename folder:', name);
+    if (!n) return false;
+    form.name.value = n;
+    return true;
+}
+
+function folderConfirmDelete(form) {
+    var name = (form.dataset.folderName || '').trim();
+    return confirm('Delete folder \'' + name + '\'? Feeds inside will become uncategorized.');
+}

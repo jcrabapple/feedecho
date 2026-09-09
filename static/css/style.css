@@ -2,7 +2,19 @@
 
 :root {
     /* Shared brand hues (OKLCH: lightness chroma hue) */
-    --hue-coral: 35;    /* warm coral — primary */
+    /* UX audit finding 1 (2026-09-08): this was 35, only 10° from
+       --hue-red (25) below — on a neutral background that's not reliably
+       distinguishable from the danger color, especially for anyone with
+       a red-green color vision deficiency, and it showed up concretely
+       on first load (the Sign Up button + the autofocused, empty email
+       field's focus ring both read as an error state before any
+       interaction). 50 keeps the same warm, energetic family the
+       "coral" name and comment describe while sitting roughly midway
+       between --hue-red (25) and --hue-gold (85), so it no longer
+       collides with either. This is a brand-color judgment call, not a
+       bug fix — flagged in the PR for design review; the number is a
+       single, easily-tunable value if a different target hue is wanted. */
+    --hue-coral: 50;
     --hue-teal: 195;    /* teal — secondary/info */
     --hue-gold: 85;     /* golden — warning */
     --hue-green: 150;   /* success */

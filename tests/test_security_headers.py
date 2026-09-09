@@ -51,6 +51,9 @@ def test_csrf_rejects_cross_origin_post(client):
         data={"smtp_host": "smtp.example.com", "smtp_port": "587"},
     )
     assert r.status_code == 403
+    # JSON request: branded detail body, not a bare empty 403 (error-handling
+    # audit finding 1.4).
+    assert r.json() == {"detail": "Cross-origin request rejected"}
 
 
 def test_csrf_rejects_null_origin(client):

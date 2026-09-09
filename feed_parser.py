@@ -895,6 +895,17 @@ def _extract_first_link(html_str: str, base_url: str = "") -> str:
     return href
 
 
+def _is_image_media(media: dict) -> bool:
+    """True when a media_content/media_thumbnail entry is an image."""
+    medium = str(media.get("medium", "")).lower()
+    if medium in ("video", "audio"):
+        return False
+    m_type = str(media.get("type", "")).lower()
+    if m_type and not m_type.startswith("image/"):
+        return False
+    return True
+
+
 def _extract_rss_images(entry: dict) -> list[dict]:
     """Extract up to 4 image {url, alt} pairs from an RSS/Atom entry.
 
@@ -916,16 +927,6 @@ def _extract_rss_images(entry: dict) -> list[dict]:
         if any(img["url"] == url for img in images):
             return
         images.append({"url": url, "alt": (alt or "").strip()})
-
-    def _is_image_media(media: dict) -> bool:
-        """True when a media_content/media_thumbnail entry is an image."""
-        medium = str(media.get("medium", "")).lower()
-        if medium in ("video", "audio"):
-            return False
-        m_type = str(media.get("type", "")).lower()
-        if m_type and not m_type.startswith("image/"):
-            return False
-        return True
 
     # Media RSS media_content (may carry media:text captions)
     for media in entry.get("media_content") or []:
@@ -980,9 +981,12 @@ def _extract_rss_image(entry: dict) -> str:
     for key in ("media_content", "media_thumbnail"):
         media_list = entry.get(key, [])
         if media_list and isinstance(media_list, list):
-            url = media_list[0].get("url", "") if isinstance(media_list[0], dict) else ""
-            if url:
-                return url
+            for media in media_list:
+                if not isinstance(media, dict) or not _is_image_media(media):
+                    continue
+                url = media.get("url", "")
+                if url:
+                    return url
 
     # RSS enclosures
     for enc in entry.get("enclosures", []):
@@ -1014,9 +1018,13 @@ def _extract_rss_image_alt(entry: dict) -> str:
     """
     for key in ("media_content", "media_thumbnail"):
         media_list = entry.get(key, [])
-        if media_list and isinstance(media_list, list) and isinstance(media_list[0], dict):
-            if media_list[0].get("url", ""):
-                text = media_list[0].get("media_text", "")
+        if media_list and isinstance(media_list, list):
+            for media in media_list:
+                if not isinstance(media, dict) or not _is_image_media(media):
+                    continue
+                if not media.get("url", ""):
+                    continue
+                text = media.get("media_text", "")
                 if isinstance(text, list) and text:
                     text = text[0].get("text", "") if isinstance(text[0], dict) else ""
                 if isinstance(text, str) and text.strip():

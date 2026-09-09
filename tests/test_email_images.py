@@ -305,6 +305,36 @@ class TestEmailSenderMime:
         # Alt text is escaped too, including quotes.
         assert 'alt="&quot;&gt;&lt;script&gt;"' in html_text
 
+    def test_subject_with_embedded_crlf_is_sanitized(self, fake_smtp):
+        """A feed-item title containing raw CR/LF must not blow up as_string().
+
+        Python's email.mime (compat32 policy) raises HeaderParseError /
+        HeaderWriteError when a header value contains an embedded \\r or \\n,
+        which previously meant a malicious/malformed feed title (e.g. from a
+        CDATA title with an embedded newline) would connect to and
+        authenticate against the SMTP server, then fail on serialization —
+        identically on every retry, permanently breaking delivery for that
+        item. The subject must be sanitized so the header is well-formed and
+        the send still goes through.
+        """
+        import email_sender
+
+        malicious_subject = "Breaking News\r\nBcc: evil@example.com\r\nMore text"
+        email_sender._send_via(
+            _cfg(), "to@example.com", malicious_subject, "Hello"
+        )
+
+        # Must not raise, and the CR/LF must be gone from the header value.
+        msg = _parse_messages()[0]
+        subject_header = msg.get("Subject")
+        assert "\r" not in subject_header
+        assert "\n" not in subject_header
+        # Content is preserved (replaced with spaces), not silently dropped
+        # or truncated to something unrelated.
+        assert "Breaking News" in subject_header
+        assert "Bcc: evil@example.com" in subject_header
+        assert "More text" in subject_header
+
     def test_send_email_passes_images_through(self, monkeypatch):
         """send_email forwards the images kwarg to _send_via."""
         import email_sender

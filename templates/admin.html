@@ -98,6 +98,14 @@
                         <button type="submit" class="btn-sm">Extend trial</button>
                     </form>
                     {% endif %}
+                    <form method="post" action="/admin/users/{{ u.id }}/delete" class="inline-form admin-delete-form"
+                          data-email="{{ u.email }}"
+                          onsubmit="return adminConfirmDelete(this)">
+                        <label class="sr-only" for="delete-{{ u.id }}">Type the account email to confirm deletion</label>
+                        <input type="text" name="confirm_email" id="delete-{{ u.id }}" autocomplete="off"
+                               placeholder="type {{ u.email }}" class="admin-delete-input">
+                        <button type="submit" class="btn-sm btn-danger">Delete</button>
+                    </form>
                 </td>
             </tr>
             {% set usage = usage_by_user.get(u.id) %}

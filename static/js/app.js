@@ -1613,3 +1613,16 @@ async function readerLoadMore(btn) {
         }
     }
 })();
+
+// Admin user deletion: require the account's email to be typed exactly
+// (server re-validates; this keeps irreversible admin deletes two-step).
+function adminConfirmDelete(form) {
+    var expected = (form.dataset.email || '').trim().toLowerCase();
+    var typed = ((form.querySelector('[name="confirm_email"]') || {}).value || '').trim().toLowerCase();
+    if (typed !== expected) {
+        // Mismatch (or empty): nothing is submitted; the confirm dialog is
+        // the only feedback channel app.js is allowed to use here.
+        return confirm('The typed email does not match the account ' + expected + '. Nothing will be deleted.');
+    }
+    return confirm('Permanently delete ' + expected + ' and ALL their data (feeds, echoes, destinations, post history)? This cannot be undone.');
+}

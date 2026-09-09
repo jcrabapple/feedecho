@@ -1793,6 +1793,65 @@ async def admin_extend_trial(user_id: int, request: Request):
     return RedirectResponse(url="/admin", status_code=302)
 
 
+@app.post("/admin/users/{user_id}/delete")
+async def admin_delete_user(user_id: int, request: Request):
+    """Hard-delete a user account and every row it owns (admin action).
+
+    The spam-cleanup counterpart to Suspend: suspension stops posting but
+    leaves the row, so the same throwaway address can be re-registered and
+    the user list keeps growing. This reuses the self-serve account
+    deletion machinery (D4):
+
+    - `_hard_delete_user` removes every owned row (feeds, echoes,
+      destinations, settings, queued/sent history) plus the user row, with
+      child rows scoped through their parent ids.
+    - The billing hook (`cancel_subscription_for_account_deletion`) runs
+      first via `_account_deletion_hooks` and VETOES (AccountDeletionAbort)
+      when Stripe cannot be reached, so a paying customer is never deleted
+      with a live, still-charging subscription.
+    - Guard: self-delete refusal. That is also the last-admin protection:
+      the caller is an admin, so deleting another admin always leaves at
+      least one admin (themselves); the final admin can only be removed by
+      their own delete, which is refused.
+    - Safety: the form must repeat the account's email exactly
+      (confirm_text), because an admin-delete is irreversible and this is
+      the same protection class as the self-serve password confirmation.
+    """
+    uid = _require_admin(request)
+    form = await request.form()
+    confirm_text = (form.get("confirm_email") or "").strip()
+    with get_db() as db:
+        row = _get_user_or_404(db, user_id, columns="id, email")
+        if user_id == uid:
+            # The operator's own row: refusing here IS the last-admin guard
+            # (the caller is an admin, so deleting another admin always
+            # leaves at least one — themselves).
+            return render("error.html", request, status_code=400,
+                          code=400, message="You cannot delete your own account")
+        if confirm_text.lower() != row["email"].strip().lower():
+            return render(
+                "error.html", request, status_code=400, code=400,
+                message=(
+                    "Confirmation failed: type the account's email address "
+                    "exactly to delete it"
+                ),
+            )
+        email = row["email"]
+        for hook in _account_deletion_hooks:
+            try:
+                hook(user_id)
+            except AccountDeletionAbort as exc:
+                # Fail closed: never orphan a live subscription (same
+                # contract as the self-serve path).
+                return render("error.html", request, status_code=400,
+                              code=400, message=str(exc))
+            except Exception:  # noqa: BLE001 — best-effort hooks must not block
+                logger.exception("account-deletion hook failed for user %s", user_id)
+        _hard_delete_user(db, user_id)
+    logger.info("Admin %s DELETED user %s (%s) and all their data", uid, user_id, email)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
 @app.post("/admin/invites/generate")
 async def admin_generate_invites(request: Request):
     """Mint 1-50 fresh invite codes."""

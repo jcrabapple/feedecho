@@ -1,5 +1,7 @@
 """Tests for Reader Phase 5: Saved Searches as Smart Feeds."""
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -8,6 +10,24 @@ import security
 import settings
 from app import app
 import scheduler
+
+
+def _saved_search_badge(html: str, s_id: int) -> int:
+    """Extract the sidebar unread-count badge for one saved search's link.
+
+    Both the per-feed unread badge and the saved-search badge share the
+    ``reader-feed-unread`` class, so a plain substring/regex search over
+    the whole page can accidentally match the wrong badge when the two
+    counts collide. Scope the search to the saved search's own <a> block.
+    """
+    m = re.search(
+        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?".*?</a>' % s_id,
+        html,
+        re.S,
+    )
+    assert m, f"saved search {s_id} link not found in page"
+    badge = re.search(r'reader-feed-unread">(\d+)</span>', m.group(0))
+    return int(badge.group(1)) if badge else 0
 
 
 @pytest.fixture()
@@ -137,6 +157,33 @@ def test_reader_saved_search_view_and_counts(p5_env):
     assert "AI Breakthrough announced" in html
     # and should NOT show "Old AI Paper" because of is:unread
     assert "Old AI Paper" not in html
+
+
+def test_saved_search_badge_matches_page_when_no_is_operator(p5_env):
+    """A saved search with no is: operator must show a sidebar badge count
+    equal to the number of items the saved search page itself displays
+    (all matches, read or not) — not an unread-only count. Bug review
+    2026-09-09 finding #13.
+    """
+    r_create = p5_env.post(
+        "/api/saved-searches",
+        data={"name": "AI Everything", "query": "AI"},
+        headers={"Accept": "application/json"},
+    )
+    s_id = r_create.json()["id"]
+
+    r_page = p5_env.get(f"/reader?saved={s_id}")
+    assert r_page.status_code == 200
+    html = r_page.text
+
+    # "AI" matches it-1 (unread, starred) and it-3 (read); it-2 has no "AI".
+    # The page itself shows both, regardless of read state.
+    assert "AI Breakthrough announced" in html
+    assert "Old AI Paper" in html
+    assert "General Technology Update" not in html
+
+    # The sidebar badge must agree with that: 2, not the unread-only count (1).
+    assert _saved_search_badge(html, s_id) == 2
 
 
 def test_saved_searches_plan_allowance_enforced(p5_env):

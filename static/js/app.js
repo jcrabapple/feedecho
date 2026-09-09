@@ -285,12 +285,16 @@ function editEcho(echoId) {
     const blueskyOpts = document.getElementById('bluesky-options').innerHTML.trim();
     const microblogOpts = document.getElementById('microblog-options').innerHTML.trim();
     const matrixOpts = document.getElementById('matrix-options').innerHTML.trim();
+    const discordOpts = document.getElementById('discord-options').innerHTML.trim();
+    const webhookOpts = document.getElementById('webhook-options').innerHTML.trim();
 
     const mastoStyle = destType === 'mastodon' ? '' : 'display:none';
     const emailStyle = destType === 'email' ? '' : 'display:none';
     const blueskyStyle = destType === 'bluesky' ? '' : 'display:none';
     const microblogStyle = destType === 'microblog' ? '' : 'display:none';
     const matrixStyle = destType === 'matrix' ? '' : 'display:none';
+    const discordStyle = destType === 'discord' ? '' : 'display:none';
+    const webhookStyle = destType === 'webhook' ? '' : 'display:none';
 
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form" aria-label="Edit echo">
@@ -305,6 +309,8 @@ function editEcho(echoId) {
                         ${blueskyOpts ? '<option value="bluesky"' + (destType === 'bluesky' ? ' selected' : '') + '>Bluesky Account</option>' : ''}
                         ${microblogOpts ? '<option value="microblog"' + (destType === 'microblog' ? ' selected' : '') + '>Micro.blog Blog</option>' : ''}
                         ${matrixOpts ? '<option value="matrix"' + (destType === 'matrix' ? ' selected' : '') + '>Matrix Room</option>' : ''}
+                        ${discordOpts ? '<option value="discord"' + (destType === 'discord' ? ' selected' : '') + '>Discord Channel</option>' : ''}
+                        ${webhookOpts ? '<option value="webhook"' + (destType === 'webhook' ? ' selected' : '') + '>Webhook</option>' : ''}
                     </select>
                 </label>
             </div>
@@ -339,6 +345,16 @@ function editEcho(echoId) {
             <div class="form-row" id="edit-matrix-fields-${echoId}" style="${matrixStyle}">
                 <label>Matrix Room
                     <select name="matrix_account_id">${matrixOpts}</select>
+                </label>
+            </div>
+            <div class="form-row" id="edit-discord-fields-${echoId}" style="${discordStyle}">
+                <label>Discord Channel
+                    <select name="discord_account_id">${discordOpts}</select>
+                </label>
+            </div>
+            <div class="form-row" id="edit-webhook-fields-${echoId}" style="${webhookStyle}">
+                <label>Webhook
+                    <select name="webhook_account_id">${webhookOpts}</select>
                 </label>
             </div>
             <div class="form-row">
@@ -406,6 +422,10 @@ function editEcho(echoId) {
     if (microblogSelect) microblogSelect.value = destId;
     const matrixSelect = row.querySelector('select[name="matrix_account_id"]');
     if (matrixSelect) matrixSelect.value = destId;
+    const discordSelect = row.querySelector('select[name="discord_account_id"]');
+    if (discordSelect) discordSelect.value = destId;
+    const webhookSelect = row.querySelector('select[name="webhook_account_id"]');
+    if (webhookSelect) webhookSelect.value = destId;
 
     // Sync conditional rows to the echo's current delivery mode: without this
     // a digest echo opens showing both "batch into one email" and "Max posts
@@ -424,6 +444,8 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-bluesky-fields-${echoId}`).style.display = destType === 'bluesky' ? '' : 'none';
     document.getElementById(`edit-microblog-fields-${echoId}`).style.display = destType === 'microblog' ? '' : 'none';
     document.getElementById(`edit-matrix-fields-${echoId}`).style.display = destType === 'matrix' ? '' : 'none';
+    document.getElementById(`edit-discord-fields-${echoId}`).style.display = destType === 'discord' ? '' : 'none';
+    document.getElementById(`edit-webhook-fields-${echoId}`).style.display = destType === 'webhook' ? '' : 'none';
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
     const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);
@@ -1580,7 +1602,7 @@ async function readerLoadMore(btn) {
         }
 
         // Hydrate timestamps and trigger auto-read if active
-        if (typeof hydrateLocalTimes === 'function') hydrateLocalTimes();
+        if (typeof formatLocalTimes === 'function') formatLocalTimes();
         if (readerAutoReadActive && typeof readerAutoReadScroll === 'function') {
             readerAutoReadScroll();
         }

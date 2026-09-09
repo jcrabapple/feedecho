@@ -85,6 +85,7 @@ from notify import (
 )
 from template_engine import render_template
 import alt_text
+import images
 from utils import FeedItem
 from utils import utc_now_str as _now
 
@@ -1522,6 +1523,31 @@ def _send_bluesky(
                 image_result = fetch_image(image_url)
                 if image_result:
                     img_bytes, img_type = image_result
+                    # Oversized for Bluesky? Downscale/re-encode to fit (the
+                    # 2026-09-09 glass.photo report: ~2.9 MB source JPEGs
+                    # degraded every glass post to text-only under the old
+                    # 1 MB cap). None = Pillow unavailable or still too big —
+                    # keep the existing skip-to-text-only fallback.
+                    if len(img_bytes) > MAX_BLOB_BYTES:
+                        downscaled = images.downscale_image(
+                            img_bytes, img_type, MAX_BLOB_BYTES
+                        )
+                        if downscaled:
+                            img_bytes, img_type = downscaled
+                            logger.info(
+                                "Echo %s: downscaled Bluesky image for item %s to %d bytes (%s)",
+                                echo["id"],
+                                item["id"],
+                                len(img_bytes),
+                                img_type,
+                            )
+                        else:
+                            logger.warning(
+                                "Echo %s: Bluesky image still exceeds the %d byte blob limit after downscale attempt for item %s, posting text-only",
+                                echo["id"],
+                                MAX_BLOB_BYTES,
+                                item["id"],
+                            )
                     if img_type in BLUESKY_IMAGE_TYPES and len(img_bytes) <= MAX_BLOB_BYTES:
                         # Feed-provided alt text wins; AI is the fallback.
                         alt_description = _resolve_alt_text(

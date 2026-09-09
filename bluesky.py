@@ -28,7 +28,10 @@ POST_RECORD_TYPE = "app.bsky.feed.post"
 
 MAX_POST_GRAPHEMES = 300
 MAX_ALT_GRAPHEMES = 1000
-MAX_BLOB_BYTES = 1_000_000  # bsky.social PDS limit for image blobs
+# Bluesky raised the app.bsky.embed.images limit 1 MB -> 2 MB in April 2026
+# (atproto PR #4823). Images above this are downscaled/re-encoded by
+# images.downscale_image before upload (scheduler._send_bluesky).
+MAX_BLOB_BYTES = 2_000_000
 BLUESKY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 # How long to trust a cached access JWT before refreshing (JWT exp takes
@@ -427,7 +430,7 @@ def upload_blob(
     if content_type not in BLUESKY_IMAGE_TYPES:
         raise BlueskyError(f"Unsupported image type for Bluesky: {content_type}")
     if len(image_bytes) > MAX_BLOB_BYTES:
-        raise BlueskyError("Image exceeds the 1 MB Bluesky blob limit")
+        raise BlueskyError("Image exceeds the Bluesky blob limit")
 
     try:
         response = pinned_request(

@@ -17,6 +17,7 @@ is uploaded without alt text, which Mastodon accepts.
 import base64
 import logging
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -39,6 +40,37 @@ SYSTEM_PROMPT = (
     "Output ONLY the image description, no reasoning, no numbering, no preamble. "
     "Be concise — one or two sentences maximum."
 )
+
+# Suffix the code appends to the configured base URL. Tenants routinely paste
+# a FULL endpoint (vendor docs show the complete URL — Mistral's do, and the
+# 2026-09-09 glass.photo report came from exactly that), which used to produce
+# a doubled path -> HTTP 404 -> silent no-alt.
+_COMPLETIONS_SUFFIX = "/chat/completions"
+
+
+def normalize_base_url(base_url: str) -> str:
+    """Strip a pasted full endpoint down to the API root.
+
+    ``https://api.mistral.ai/v1/chat/completions`` -> ``https://api.mistral.ai/v1``.
+    Repeated suffixes collapse too. Empty input returns empty.
+    """
+    raw = (base_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        if parts.scheme and parts.netloc:
+            path = parts.path.rstrip("/")
+            while path.endswith(_COMPLETIONS_SUFFIX):
+                path = path[: -len(_COMPLETIONS_SUFFIX)].rstrip("/")
+            return parts._replace(path=path).geturl().rstrip("/")
+    except Exception:
+        pass
+    url = raw.rstrip("/")
+    while url.endswith(_COMPLETIONS_SUFFIX):
+        url = url[: -len(_COMPLETIONS_SUFFIX)].rstrip("/")
+    return url
+
 
 USER_PROMPT = (
     f"Describe this image for alt text in one or two sentences. "
@@ -70,7 +102,7 @@ def is_enabled(user_id: int = 1) -> bool:
     s = _get_settings(user_id=user_id)
     return (
         s.get("alt_text_ai_enabled") == "1"
-        and bool(s.get("alt_text_ai_base_url"))
+        and bool(normalize_base_url(s.get("alt_text_ai_base_url", "")))
         and bool(s.get("alt_text_ai_model"))
         and bool(s.get("alt_text_ai_api_key"))
     )
@@ -86,7 +118,7 @@ def endpoint_rejection_reason(user_id: int = 1) -> str:
     if not app_settings.MULTI:
         return ""
     cfg = _get_settings(user_id=user_id)
-    base_url = cfg.get("alt_text_ai_base_url", "").rstrip("/")
+    base_url = normalize_base_url(cfg.get("alt_text_ai_base_url", ""))
     if not base_url:
         return ""
     try:
@@ -98,25 +130,31 @@ def endpoint_rejection_reason(user_id: int = 1) -> str:
     return ""
 
 
-def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -> str:
-    """Generate alt text for an image via a vision API.
+def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -> tuple[str, str]:
+    """Generate alt text, reporting WHY it failed.
 
-    Returns the description string, or "" if disabled, unconfigured,
-    or the API call fails. Never raises — alt text is best-effort.
+    Returns ``(description, reason)``. ``description`` is "" unless a
+    description was produced; ``reason`` is "" on success or when the
+    feature is disabled/unconfigured, and a short human-readable string on
+    any failure. Never raises.
+
+    The posting paths use :func:`generate_alt_text` and only care about the
+    description; the settings-page Test button surfaces the reason so a
+    misconfigured endpoint reports failure instead of a false green.
     """
     # Named cfg, not settings: the module-level `settings` module is needed
     # below, and shadowing it here would turn app_settings.MULTI into a dict
     # lookup.
     cfg = _get_settings(user_id=user_id)
     if cfg.get("alt_text_ai_enabled") != "1":
-        return ""
+        return "", ""
 
-    base_url = cfg.get("alt_text_ai_base_url", "").rstrip("/")
+    base_url = normalize_base_url(cfg.get("alt_text_ai_base_url", ""))
     model = cfg.get("alt_text_ai_model", "")
     api_key = decrypt_secret(cfg.get("alt_text_ai_api_key", ""))
 
     if not (base_url and model and api_key):
-        return ""
+        return "", ""
 
     b64 = base64.b64encode(image_bytes).decode("ascii")
     data_url = f"data:{content_type};base64,{b64}"
@@ -149,9 +187,9 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
     if app_settings.MULTI:
         try:
             validate_outbound_url(endpoint)
-        except SSRFError as e:
+        except (SSRFError, ValueError) as e:
             logger.warning("Alt text base URL rejected: %s", e)
-            return ""
+            return "", str(e)
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -187,12 +225,14 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
             # is absent, not when it is an empty list.
             choices = parsed.get("choices") if isinstance(parsed, dict) else None
             if not isinstance(choices, list) or not choices:
-                return ""
+                return "", "API returned no choices (content filter or incompatible endpoint)"
             message = choices[0].get("message") if isinstance(choices[0], dict) else None
             if not isinstance(message, dict):
-                return ""
+                return "", "API response had no message object"
             content = message.get("content") or message.get("reasoning_content")
-            return content.strip() if isinstance(content, str) else ""
+            if not isinstance(content, str) or not content.strip():
+                return "", "API returned an empty description"
+            return content.strip(), ""
         except (
             httpx.HTTPStatusError,
             httpx.RequestError,
@@ -215,7 +255,15 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
                     "Alt text API call failed permanently (HTTP %s), not retrying: %s",
                     status, e,
                 )
-                return ""
+                hint = {
+                    401: "API key rejected",
+                    403: "API key lacks access to this model",
+                    404: (
+                        "endpoint not found — the base URL is likely wrong "
+                        "(use the API root, e.g. https://api.mistral.ai/v1)"
+                    ),
+                }.get(status, "request rejected")
+                return "", f"HTTP {status}: {hint}"
             logger.warning(
                 "Alt text API call failed (attempt %d/%d): %s",
                 attempt,
@@ -225,4 +273,14 @@ def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY * attempt)
 
-    return ""
+    return "", "API unreachable after retries"
+
+
+def generate_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) -> str:
+    """Generate alt text for an image via a vision API.
+
+    Returns the description string, or "" if disabled, unconfigured,
+    or the API call fails. Never raises — alt text is best-effort.
+    """
+    description, _reason = attempt_alt_text(image_bytes, content_type, user_id=user_id)
+    return description

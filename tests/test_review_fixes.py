@@ -272,6 +272,7 @@ class TestNoBlockingCallsOnAsyncHandlers:
         "send_system_email",
         "send_email",
         "generate_alt_text",
+        "attempt_alt_text",
         "resolve_pds",
         "create_session",
         "list_destinations",
@@ -430,9 +431,11 @@ class TestAltTextTenantScopingAndSsrf:
 
         def _fake(image_bytes, content_type, user_id=1):
             seen["user_id"] = user_id
-            return "a description"
+            return "a description", ""  # (description, reason) — attempt_alt_text
 
-        monkeypatch.setattr(alt_text, "generate_alt_text", _fake)
+        # The endpoint calls attempt_alt_text (it must see failure reasons);
+        # monkeypatching generate_alt_text would leave the real path live.
+        monkeypatch.setattr(alt_text, "attempt_alt_text", _fake)
         # This test is about which tenant's settings are used, not about
         # address validation; example.com subdomains do not resolve.
         monkeypatch.setattr(alt_text, "endpoint_rejection_reason", lambda user_id=1: "")

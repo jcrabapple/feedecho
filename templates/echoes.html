@@ -5,6 +5,17 @@
 
 <p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, a generic webhook, or email) using a template.</p>
 
+{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or webhook_accounts %}
+{% if not feeds or not has_destination %}
+<p class="empty-state">
+    You'll need
+    {% if not feeds and not has_destination %}at least one feed and one connected destination{% elif not feeds %}at least one feed{% else %}a connected destination{% endif %}
+    before you can create an echo.
+    {% if not feeds %}<a href="/feeds">Add a feed</a>{% endif %}
+    {% if not feeds and not has_destination %}&middot;{% endif %}
+    {% if not has_destination %}<a href="/accounts">Connect a destination</a>{% endif %}
+</p>
+{% else %}
 <form method="post" action="/api/echoes" class="echo-form">
     <div class="form-row">
         <label>Feed
@@ -187,6 +198,7 @@
     <input type="hidden" name="return_to" value="{{ return_to }}">
     <button type="submit">Create Echo</button>
 </form>
+{% endif %}
 
 {% if echoes %}
 <h2>Existing Echoes</h2>
@@ -280,7 +292,7 @@
     </tbody>
 </table>
 </div>
-{% else %}
+{% elif feeds and has_destination %}
 <p class="empty-state">No echoes yet. Create one above.</p>
 {% endif %}
 

@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=56">
+    <link rel="stylesheet" href="/static/css/style.css?v=57">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <script>
     // Set theme before first paint to avoid flash. Three states stored in
@@ -37,6 +37,7 @@
         <a href="/" class="nav-brand">
             <img src="/static/img/logo.svg" alt="" aria-hidden="true" class="nav-icon" width="22" height="22"> FeedEcho
         </a>
+        <div class="nav-links-wrap">
         <div class="nav-links">
             {% if authed %}
             <a href="/" {% if request.url.path == '/' %}aria-current="page" class="active"{% endif %}>Dashboard</a>
@@ -56,6 +57,7 @@
             <a href="/login" {% if request.url.path == '/login' %}aria-current="page" class="active"{% endif %}>Log in</a>
             <a href="/register" {% if request.url.path == '/register' %}aria-current="page" class="active"{% endif %}>Sign up</a>
             {% endif %}
+        </div>
         </div>
         <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme" title="Switch theme">◐</button>
         <span class="sr-only" id="theme-mode-live" aria-live="polite"></span>

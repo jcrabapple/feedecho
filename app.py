@@ -3959,9 +3959,14 @@ async def save_alt_text_settings(
     alt_text_ai_api_key: str = Form(""),
 ):
     uid = current_user_id(request)
+    import alt_text
+
     values = {
         "alt_text_ai_enabled": "1" if alt_text_ai_enabled else "0",
-        "alt_text_ai_base_url": alt_text_ai_base_url.strip().rstrip("/"),
+        # normalize_base_url: tenants paste FULL endpoints (Mistral's docs
+        # show the complete /chat/completions URL); the code appends the
+        # suffix itself, and a doubled path 404s silently at post time.
+        "alt_text_ai_base_url": alt_text.normalize_base_url(alt_text_ai_base_url),
         "alt_text_ai_model": alt_text_ai_model.strip(),
     }
     with get_db() as db:
@@ -3998,9 +4003,17 @@ def test_alt_text(request: Request):
         # user_id is mandatory here: omitting it silently fell back to
         # tenant 1, so a tenant tested user 1's endpoint and spent user 1's
         # API key while their own config went unverified.
-        result = alt_text.generate_alt_text(tiny_png, "image/png", user_id=uid)
+        # attempt_alt_text (not generate_alt_text): a permanent 4xx used to
+        # map to "" and report "API reachable" — the 2026-09-09 Mistral
+        # 404 (pasted full endpoint as base URL) tested green while every
+        # real image silently posted without alt text.
+        result, reason = alt_text.attempt_alt_text(
+            tiny_png, "image/png", user_id=uid
+        )
         if result:
             return {"success": True, "message": f"API working. Response: {result[:100]}"}
+        if reason:
+            return {"success": False, "message": f"API test failed: {reason}"}
         return {"success": True, "message": "API reachable (empty response to test image)"}
     except Exception as e:
         return {"success": False, "message": f"API test failed: {e}"}

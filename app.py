@@ -1012,25 +1012,42 @@ def _get_smtp_settings(mask_password: bool = False, user_id: int = 1):
     return smtp
 
 
-def _dependent_echo_count(user_id: int, destination_type: str, account_id: int) -> int:
-    """Live echoes still pointing at this destination.
+def _dependent_echo_count_tx(db, user_id: int, destination_type: str, account_id: int) -> int:
+    """Live echoes still pointing at this destination, on a caller-owned connection.
 
     Deleting a destination out from under an echo leaves it aimed at a row
     that no longer exists, and delivery then fails at run time with nothing
     said at delete time. The Bluesky delete guarded against this from the
     start; Mastodon and email did not.
+
+    Every delete route runs this check and the row DELETE on the same `db`
+    inside one `with get_db() as db:` block, so the count and the delete are
+    atomic — a concurrent request can't create a new echo against this
+    destination in between and slip past the check.
+    """
+    return db.execute(
+        """
+        SELECT COUNT(*) AS c FROM echoes
+         WHERE destination_type = ?
+           AND destination_id = ?
+           AND deleted_at IS NULL
+           AND user_id = ?
+        """,
+        (destination_type, account_id, user_id),
+    ).fetchone()["c"]
+
+
+def _dependent_echo_count(user_id: int, destination_type: str, account_id: int) -> int:
+    """Live echoes still pointing at this destination.
+
+    Convenience wrapper over :func:`_dependent_echo_count_tx` that opens its
+    own connection. Callers that must keep the check and a subsequent delete
+    atomic (all of the destination-delete routes) should call
+    ``_dependent_echo_count_tx`` directly inside their own ``get_db()`` block
+    instead of this function.
     """
     with get_db() as db:
-        return db.execute(
-            """
-            SELECT COUNT(*) AS c FROM echoes
-             WHERE destination_type = ?
-               AND destination_id = ?
-               AND deleted_at IS NULL
-               AND user_id = ?
-            """,
-            (destination_type, account_id, user_id),
-        ).fetchone()["c"]
+        return _dependent_echo_count_tx(db, user_id, destination_type, account_id)
 
 
 def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
@@ -3241,13 +3258,12 @@ def test_account(request: Request, account_id: int):
 @app.post("/api/accounts/{account_id}/delete")
 async def delete_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "mastodon", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This Mastodon account is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "mastodon", account_id):
+            return _render_accounts_error(
+                request,
+                "This Mastodon account is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM accounts WHERE id = ? AND user_id = ?", (account_id, uid)
         )
@@ -3294,13 +3310,12 @@ async def add_email_account(
 @app.post("/api/email-accounts/{account_id}/delete")
 async def delete_email_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "email", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This email address is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "email", account_id):
+            return _render_accounts_error(
+                request,
+                "This email address is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM email_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3401,13 +3416,12 @@ def test_bluesky_account(request: Request, account_id: int):
 @app.post("/api/bluesky-accounts/{account_id}/delete")
 def delete_bluesky_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "bluesky", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This Bluesky account is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "bluesky", account_id):
+            return _render_accounts_error(
+                request,
+                "This Bluesky account is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM bluesky_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3509,13 +3523,12 @@ def test_microblog_account(request: Request, account_id: int):
 @app.post("/api/microblog-accounts/{account_id}/delete")
 def delete_microblog_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "microblog", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This micro.blog account is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "microblog", account_id):
+            return _render_accounts_error(
+                request,
+                "This micro.blog account is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM microblog_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3635,12 +3648,12 @@ def test_matrix_account(request: Request, account_id: int):
 @app.post("/api/matrix-accounts/{account_id}/delete")
 def delete_matrix_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    if _dependent_echo_count(uid, "matrix", account_id):
-        return _render_accounts_error(
-            request,
-            "This Matrix room is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "matrix", account_id):
+            return _render_accounts_error(
+                request,
+                "This Matrix room is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM matrix_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3736,12 +3749,12 @@ def test_discord_account(request: Request, account_id: int):
 @app.post("/api/discord-accounts/{account_id}/delete")
 def delete_discord_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    if _dependent_echo_count(uid, "discord", account_id):
-        return _render_accounts_error(
-            request,
-            "This Discord webhook is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "discord", account_id):
+            return _render_accounts_error(
+                request,
+                "This Discord webhook is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM discord_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3762,8 +3775,13 @@ def add_webhook_account(
 
     Synchronous route: URL validation runs the SSRF guard (multi mode), and
     nothing is POSTed at connect time — the Test button sends the real test
-    delivery. Reconnecting the same URL updates the stored row (name and
-    headers refresh) instead of duplicating it.
+    delivery. Reconnecting the same URL updates the stored row (name always
+    refreshes) instead of duplicating it. Header values are treated like
+    credentials and never echoed back into the form, so a blank
+    ``headers_text`` on reconnect is the natural result of a display-name-only
+    edit, not a request to clear headers — it leaves the previously stored
+    headers untouched. Submitting non-empty headers still fully replaces the
+    old set.
     """
     url = url.strip()
     if not url:
@@ -3802,7 +3820,9 @@ def add_webhook_account(
             VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id, url) DO UPDATE SET
                 name = excluded.name,
-                headers = excluded.headers
+                headers = CASE WHEN excluded.headers != '{}'
+                               THEN excluded.headers
+                               ELSE webhook_accounts.headers END
             """,
             (display_name, url, dump_headers(headers), uid),
         )
@@ -3830,12 +3850,12 @@ def test_webhook_account(request: Request, account_id: int):
 @app.post("/api/webhook-accounts/{account_id}/delete")
 def delete_webhook_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    if _dependent_echo_count(uid, "webhook", account_id):
-        return _render_accounts_error(
-            request,
-            "This webhook is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "webhook", account_id):
+            return _render_accounts_error(
+                request,
+                "This webhook is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM webhook_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),

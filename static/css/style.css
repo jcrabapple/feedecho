@@ -1753,3 +1753,15 @@ details.account-section > summary:focus-visible {
     }
 }
 @keyframes reader-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Admin user-delete form: the confirm input stays narrow so the actions
+   cell does not blow out; the row wraps on mobile like sibling forms. */
+.admin-delete-form {
+    margin-top: 0.35rem;
+}
+.admin-delete-form .admin-delete-input {
+    flex: 0 1 12rem;
+    min-width: 8rem;
+    font-size: 0.8125rem;
+    padding: 0.25rem 0.45rem;
+}

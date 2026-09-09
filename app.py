@@ -4014,7 +4014,7 @@ def test_alt_text(request: Request):
             return {"success": True, "message": f"API working. Response: {result[:100]}"}
         if reason:
             return {"success": False, "message": f"API test failed: {reason}"}
-        return {"success": True, "message": "API reachable (empty response to test image)"}
+        return {"success": False, "message": "API test failed: vision API is not configured or disabled"}
     except Exception as e:
         return {"success": False, "message": f"API test failed: {e}"}
 

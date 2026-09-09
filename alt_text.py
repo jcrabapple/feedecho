@@ -17,6 +17,7 @@ is uploaded without alt text, which Mastodon accepts.
 import base64
 import logging
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -53,7 +54,19 @@ def normalize_base_url(base_url: str) -> str:
     ``https://api.mistral.ai/v1/chat/completions`` -> ``https://api.mistral.ai/v1``.
     Repeated suffixes collapse too. Empty input returns empty.
     """
-    url = (base_url or "").strip().rstrip("/")
+    raw = (base_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        if parts.scheme and parts.netloc:
+            path = parts.path.rstrip("/")
+            while path.endswith(_COMPLETIONS_SUFFIX):
+                path = path[: -len(_COMPLETIONS_SUFFIX)].rstrip("/")
+            return parts._replace(path=path).geturl().rstrip("/")
+    except Exception:
+        pass
+    url = raw.rstrip("/")
     while url.endswith(_COMPLETIONS_SUFFIX):
         url = url[: -len(_COMPLETIONS_SUFFIX)].rstrip("/")
     return url
@@ -89,7 +102,7 @@ def is_enabled(user_id: int = 1) -> bool:
     s = _get_settings(user_id=user_id)
     return (
         s.get("alt_text_ai_enabled") == "1"
-        and bool(s.get("alt_text_ai_base_url"))
+        and bool(normalize_base_url(s.get("alt_text_ai_base_url", "")))
         and bool(s.get("alt_text_ai_model"))
         and bool(s.get("alt_text_ai_api_key"))
     )
@@ -174,7 +187,7 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
     if app_settings.MULTI:
         try:
             validate_outbound_url(endpoint)
-        except SSRFError as e:
+        except (SSRFError, ValueError) as e:
             logger.warning("Alt text base URL rejected: %s", e)
             return "", str(e)
     headers = {

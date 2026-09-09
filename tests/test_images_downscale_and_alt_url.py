@@ -87,6 +87,19 @@ class TestNormalizeBaseUrl:
             alt_text.normalize_base_url("https://api.example.com/chat/completions")
             == "https://api.example.com"
         )
+        assert alt_text.normalize_base_url("chat/completions") == "chat/completions"
+
+    def test_hostname_named_chat_not_corrupted(self):
+        import alt_text
+
+        assert (
+            alt_text.normalize_base_url("http://chat/completions")
+            == "http://chat/completions"
+        )
+        assert (
+            alt_text.normalize_base_url("http://chat/chat/completions")
+            == "http://chat"
+        )
 
     def test_the_reported_mistral_config_now_resolves_to_the_working_endpoint(self):
         import alt_text
@@ -345,6 +358,14 @@ class TestVisionTestEndpointReportsFailures:
         body = single_client.post("/api/settings/alt-text/test").json()
         assert body["success"] is True
 
+    def test_unconfigured_or_invalid_url_reports_failure(
+        self, single_client, monkeypatch
+    ):
+        self._configure(base_url="/chat/completions")
+        body = single_client.post("/api/settings/alt-text/test").json()
+        assert body["success"] is False
+        assert "API test failed" in body["message"] or "not configured" in body["message"]
+
 
 # ── images.downscale_image ────────────────────────────────────────────────────
 
@@ -385,26 +406,31 @@ class TestDownscaleImage:
         import images
         from PIL import Image
 
-        data = _jpeg_bytes(width=5000, height=4000)
+        data = _jpeg_bytes(width=5000, height=2500)
         out, ctype = images.downscale_image(data, "image/jpeg", 60_000)
         im = Image.open(io.BytesIO(out))
         assert max(im.size) <= 3072
+        # Aspect ratio is preserved (2:1 landscape), NOT center-cropped to square
+        assert im.size[0] > im.size[1]
+        assert abs(im.size[0] / im.size[1] - 2.0) < 0.05
 
     def test_exif_orientation_baked_in(self):
         import images
-        from PIL import Image, ImageOps
+        from PIL import Image
 
         im = Image.new("RGB", (600, 1000), (10, 10, 200))
-        # rotate per EXIF tag 274 = 6 (90 deg CW); the stored pixels are portrait
-        transposed = ImageOps.exif_transpose(
-            im
-        )  # sanity: helper works without EXIF
-        assert transposed is not None
+        exif = im.getexif()
+        exif[0x0112] = 6  # 90 deg CW rotation
         buf = io.BytesIO()
-        im.save(buf, format="JPEG", quality=85, exif=b"")
-        result = images.downscale_image(buf.getvalue(), "image/jpeg", 1_000_000)
-        # small enough to pass through untouched
+        im.save(buf, format="JPEG", quality=85, exif=exif)
+        # Force downscale/re-encode pass by setting ceiling below source size
+        result = images.downscale_image(buf.getvalue(), "image/jpeg", len(buf.getvalue()) - 100)
         assert result is not None
+        out_bytes, _ = result
+        out_im = Image.open(io.BytesIO(out_bytes))
+        # Portrait (600x1000) rotated 90 deg CW becomes landscape (1000x600)
+        assert out_im.size[0] > out_im.size[1]
+        assert out_im.size == (1000, 600)
 
     def test_unsupported_type_returns_none(self):
         import images

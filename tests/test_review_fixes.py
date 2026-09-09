@@ -272,6 +272,7 @@ class TestNoBlockingCallsOnAsyncHandlers:
         "send_system_email",
         "send_email",
         "generate_alt_text",
+        "attempt_alt_text",
         "resolve_pds",
         "create_session",
         "list_destinations",

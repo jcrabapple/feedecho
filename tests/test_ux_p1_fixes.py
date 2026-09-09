@@ -60,7 +60,7 @@ class TestFocusVisibility:
     @pytest.mark.parametrize(
         ("selector", "line"),
         [
-            ("inline-form", ".inline-form input:focus {"),
+            ("inline-form", ".inline-form input:focus, .inline-form select:focus {"),
             ("form-row", ".form-row input:focus, .form-row select:focus, .form-row textarea:focus {"),
             ("auth-input", ".auth-input:focus {"),
         ],

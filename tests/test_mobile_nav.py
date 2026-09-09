@@ -41,9 +41,11 @@ class TestMobileNavStructure:
         assert re.search(r"\.nav-brand\s*\{[^}]*order: 1", block, re.S)
         assert re.search(r"\.theme-toggle\s*\{[^}]*order: 2", block, re.S)
         assert re.search(r"\.nav-account\s*\{[^}]*order: 3", block, re.S)
-        # the tab strip is its own full-width row beneath them
-        assert re.search(r"\.nav-links\s*\{[^}]*order: 4", block, re.S, )
-        assert re.search(r"\.nav-links\s*\{[^}]*flex: 1 1 100%", block, re.S)
+        # the tab strip's row is .nav-links-wrap (a non-scrolling positioning
+        # context for the edge-fade cue); .nav-links itself is the inner
+        # scrolling strip and no longer carries order/flex-basis directly.
+        assert re.search(r"\.nav-links-wrap\s*\{[^}]*order: 4", block, re.S)
+        assert re.search(r"\.nav-links-wrap\s*\{[^}]*flex: 1 1 100%", block, re.S)
 
     def test_tab_strip_scrolls_horizontally(self):
         block = _nav_block()
@@ -51,6 +53,16 @@ class TestMobileNavStructure:
         assert "overflow-x: auto" in links_rule
         assert "flex-wrap: nowrap" in links_rule, "tabs must stay on one line, not wrap"
         assert "scrollbar-width: none" in links_rule
+
+    def test_nav_links_wrap_has_scroll_edge_fade(self):
+        """UX audit finding 2 (2026-09-08): a hidden scrollbar with zero other
+        cue meant History/Settings/How To could sit off-screen with nothing
+        indicating more tabs exist. .nav-links-wrap positions a fade at the
+        visible edge, fixed regardless of the inner strip's scroll offset."""
+        block = _nav_block()
+        wrap_rule = re.search(r"\.nav-links-wrap\s*\{([^}]*)\}", block, re.S).group(1)
+        assert "position: relative" in wrap_rule
+        assert re.search(r"\.nav-links-wrap::after\s*\{[^}]*position: absolute", block, re.S)
 
     def test_touch_targets_are_44px(self):
         block = _nav_block()
@@ -103,4 +115,4 @@ class TestNavTemplate:
         assert BASE_HTML.count('action="/logout"') == 2
 
     def test_cache_buster_bumped(self):
-        assert 'style.css?v=56' in BASE_HTML
+        assert 'style.css?v=57' in BASE_HTML

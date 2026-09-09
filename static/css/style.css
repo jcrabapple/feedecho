@@ -145,6 +145,11 @@ body {
   vertical-align: -5px; /* optically center the tile against the nav text */
   margin-right: 0.15rem;
 }
+/* display:contents by default so this wrapper (added only to give the
+   mobile scroll-fade below a non-scrolling positioning context) doesn't
+   become a flex item itself on desktop — .nav-links's margin-left:auto
+   needs to act as a direct child of .navbar to push the tab strip right. */
+.nav-links-wrap { display: contents; }
 .nav-links {
     display: flex;
     gap: 0.15rem;
@@ -423,7 +428,7 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     flex-wrap: wrap;
     margin-bottom: 0.75rem;
 }
-.inline-form input, .inline-form button {
+.inline-form input, .inline-form select, .inline-form button {
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -432,12 +437,18 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     font-size: 0.9rem;
     min-height: 44px; /* iOS touch target */
 }
-.inline-form input { flex: 1; min-width: 0; }
-.inline-form input:focus {
+.inline-form input, .inline-form select { flex: 1; min-width: 0; }
+.inline-form input:focus, .inline-form select:focus {
     border-color: var(--primary);
     outline: 2px solid var(--primary);
     outline-offset: 1px;
 }
+/* The URL field's placeholder ("https://example.com/feed.xml") is the
+   longest and most informative of the row's placeholders — give it more
+   of the row's width than poll-interval/folder need, instead of every
+   field getting an equal flex:1 share and truncating it. UX audit
+   finding 6 (2026-09-08). */
+#feed-url { flex: 2.5; }
 
 /* Accounts "add account" forms stack each field on its own line at every
    viewport width. .inline-form is row-flex by default, so a multi-field
@@ -578,9 +589,19 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     .nav-brand   { order: 1; flex: 0 1 auto; min-width: 0; }
     .theme-toggle { order: 2; flex: 0 0 auto; margin-left: auto; min-height: 44px; min-width: 44px; }
     .nav-account  { order: 3; flex: 0 0 auto; margin-left: 0; padding-left: 0; border-left: 0; position: relative; }
-    .nav-links {
+    /* Wraps .nav-links so the "more content" fade below can stay fixed at
+       the visible edge — a fade generated on .nav-links itself would be
+       inside the scrolling content and scroll away with it instead of
+       overlaying the viewport edge. */
+    .nav-links-wrap {
+        display: block;
+        position: relative;
         order: 4;
         flex: 1 1 100%;
+        margin-left: 0;
+        min-width: 0;
+    }
+    .nav-links {
         margin-left: 0;
         flex-wrap: nowrap;
         overflow-x: auto;
@@ -590,6 +611,24 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         -webkit-overflow-scrolling: touch;
     }
     .nav-links::-webkit-scrollbar { display: none; }
+    /* With the scrollbar hidden, a fully-filled first screen (e.g. exactly
+       6 tabs fitting the viewport) gave zero visual indication that
+       History/Settings/How To existed further right — reachable only by
+       an undiscoverable swipe. This fade is a static "more content" cue
+       (it doesn't disappear once scrolled to the end — a scroll-position
+       -aware version is a reasonable follow-up, but this alone fixes the
+       "looks complete when it isn't" problem). UX audit finding 2
+       (2026-09-08). */
+    .nav-links-wrap::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 28px;
+        pointer-events: none;
+        background: linear-gradient(to right, transparent, var(--surface));
+    }
     .nav-links a {
         flex: 0 0 auto;
         min-height: 44px;              /* touch target */
@@ -960,6 +999,26 @@ code {
     min-height: 44px;
     display: flex;
     align-items: center;
+    gap: 0.4rem;
+    list-style: none;
+    user-select: none;
+}
+/* This <details> toggle previously had no visual cue distinguishing it
+   from plain body text (cursor:pointer alone isn't visible in a static
+   screenshot or discoverable without hovering) — matches the chevron
+   pattern already used for details.account-section below. UX audit
+   finding 4 (2026-09-08). */
+.manual-section summary::-webkit-details-marker { display: none; }
+.manual-section summary::after {
+    content: "▾";
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+}
+.manual-section details:not([open]) > summary::after { transform: rotate(-90deg); }
+.manual-section summary:hover { color: var(--text); text-decoration: underline; }
+.manual-section summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 /* Responsive heading sizes */
@@ -1557,8 +1616,18 @@ details.account-section > summary:focus-visible {
 .reader-feed-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--primary-wash); color: var(--primary); font-size: 0.7rem; font-weight: 700; flex-shrink: 0; }
 .reader-feed-error { color: #d97706; flex-shrink: 0; }
 
-/* Tier 2 — toggle buttons show their pressed state */
-.reader-toolbar-right .btn-sm[aria-pressed="true"] { background: var(--primary-wash); border-color: var(--primary); color: var(--primary); }
+/* Tier 2 — toggle buttons show their pressed state.
+   Solid fill instead of the previous wash-tint-only treatment, to match
+   .reader-tab.active's "selected" language above — the two adjacent
+   toggle groups (Unread/All/Starred/Today vs. Compact/Auto-read/Full
+   text) previously used different visual conventions for the same
+   "currently on" state. UX audit finding 8 (2026-09-08). */
+.reader-toolbar-right .btn-sm[aria-pressed="true"] {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-contrast);
+    font-weight: 600;
+}
 
 /* Compact density: title only, no feed/author/date meta line */
 .reader[data-density="compact"] .reader-item-meta { display: none; }

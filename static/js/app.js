@@ -1617,12 +1617,12 @@ async function readerLoadMore(btn) {
 // Admin user deletion: require the account's email to be typed exactly
 // (server re-validates; this keeps irreversible admin deletes two-step).
 function adminConfirmDelete(form) {
-    var expected = (form.dataset.email || '').trim().toLowerCase();
-    var typed = ((form.querySelector('[name="confirm_email"]') || {}).value || '').trim().toLowerCase();
-    if (typed !== expected) {
-        // Mismatch (or empty): nothing is submitted; the confirm dialog is
+    var email = (form.dataset.email || '').trim();
+    var typed = ((form.querySelector('[name="confirm_text"]') || {}).value || '').trim().toUpperCase();
+    if (typed !== 'DELETE') {
+        // Wrong or empty token: nothing is submitted; the confirm dialog is
         // the only feedback channel allowed here (UX pin: no alert()).
-        return confirm('The typed email does not match the account ' + expected + '. Nothing will be deleted.');
+        return confirm('Type DELETE (in capitals) in the box to delete ' + email + '. Nothing will be deleted yet.');
     }
-    return confirm('Permanently delete ' + expected + ' and ALL their data (feeds, echoes, destinations, post history)? This cannot be undone.');
+    return confirm('Permanently delete ' + email + ' and ALL their data (feeds, echoes, destinations, post history)? This cannot be undone.');
 }

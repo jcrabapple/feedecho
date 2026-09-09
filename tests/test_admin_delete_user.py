@@ -6,9 +6,11 @@ row by reusing the self-serve `_hard_delete_user` machinery (D4), with:
 - admin gating (_require_admin; single mode 404s via _require_admin)
 - self-delete refusal
 - last-active-admin guard (same contract as suspend/demote)
-- typed-email confirmation (confirm_email must match the account email,
-  case-insensitive) — an irreversible bulk-data delete needs a deliberate
-  second step beyond one click
+- fixed-token confirmation (the form must contain DELETE) — an
+  irreversible bulk-data delete needs a deliberate second step beyond one
+  click; the typed-email variant from v1.53.0 was replaced because mobile
+  autocorrect/autofill mangles random spam addresses so the match never
+  landed (2026-09-09 field report)
 - billing deletion hooks run first and may VETO (AccountDeletionAbort) so
   a paying customer is never deleted with a live subscription
 - every owned row gone afterwards (feeds, echoes, destinations, queued
@@ -93,7 +95,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{SPAM_ID}/delete",
-                data={"confirm_email": "spam@uberip.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 302
@@ -103,11 +105,11 @@ class TestAdminDeleteUser:
             assert db.execute("SELECT COUNT(*) c FROM echoes WHERE id = 900").fetchone()["c"] == 0
             assert db.execute("SELECT COUNT(*) c FROM settings WHERE user_id = ?", (SPAM_ID,)).fetchone()["c"] == 0
 
-    def test_confirmation_email_is_required_and_case_insensitive(self, multi_env):
+    def test_confirmation_token_is_required_and_forgiving_of_casing(self, multi_env):
         with _client(ADMIN_ID, "admin@example.com") as c:
             wrong = c.post(
                 f"/admin/users/{SPAM_ID}/delete",
-                data={"confirm_email": "wrong@example.com"},
+                data={"confirm_text": "spam@uberip.com"},
                 follow_redirects=False,
             )
             assert wrong.status_code == 400
@@ -115,10 +117,10 @@ class TestAdminDeleteUser:
                 f"/admin/users/{SPAM_ID}/delete", data={}, follow_redirects=False
             )
             assert missing.status_code == 400
-            # Case-insensitive match passes (deliberate typing convenience)
+            # Case-insensitive + trimmed (mobile keyboards capitalize/gap)
             ok = c.post(
                 f"/admin/users/{SPAM_ID}/delete",
-                data={"confirm_email": "  SPAM@UBERIP.com  "},
+                data={"confirm_text": "  delete  "},
                 follow_redirects=False,
             )
             assert ok.status_code == 302
@@ -129,7 +131,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{ADMIN_ID}/delete",
-                data={"confirm_email": "admin@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 400
@@ -148,7 +150,7 @@ class TestAdminDeleteUser:
         with _client(OTHER_ADMIN_ID, "second-admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{OTHER_ADMIN_ID}/delete",
-                data={"confirm_email": "second-admin@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 400
@@ -160,7 +162,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{OTHER_ADMIN_ID}/delete",
-                data={"confirm_email": "second-admin@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 302
@@ -175,7 +177,7 @@ class TestAdminDeleteUser:
         with _client(99, "u99@example.com") as c:
             resp = c.post(
                 "/admin/users/99/delete",
-                data={"confirm_email": "u99@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 403
@@ -184,7 +186,7 @@ class TestAdminDeleteUser:
         with TestClient(app) as c:
             resp = c.post(
                 "/admin/users/99/delete",
-                data={"confirm_email": "u99@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 401
@@ -195,7 +197,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 "/admin/users/424242/delete",
-                data={"confirm_email": "ghost@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 404
@@ -220,7 +222,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{SPAM_ID}/delete",
-                data={"confirm_email": "spam@uberip.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 400
@@ -244,7 +246,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{SPAM_ID}/delete",
-                data={"confirm_email": "spam@uberip.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 302
@@ -257,7 +259,8 @@ class TestAdminDeleteUser:
             resp = c.get("/admin")
         assert resp.status_code == 200
         assert f'/admin/users/{SPAM_ID}/delete' in resp.text
-        assert 'name="confirm_email"' in resp.text
+        assert 'name="confirm_text"' in resp.text
+        assert 'placeholder="type DELETE"' in resp.text
         assert "adminConfirmDelete" in resp.text
 
     def test_cannot_delete_last_admin_account(self, multi_env, monkeypatch):
@@ -272,7 +275,7 @@ class TestAdminDeleteUser:
         with _client(ADMIN_ID, "admin@example.com") as c:
             resp = c.post(
                 f"/admin/users/{OTHER_ADMIN_ID}/delete",
-                data={"confirm_email": "second-admin@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 400
@@ -286,7 +289,7 @@ class TestAdminDeleteUser:
         monkeypatch.setattr(database, "DB_PATH", tmp_path / "single.db")
         database.init_db()
         with TestClient(app) as c:
-            resp = c.post("/admin/users/1/delete", data={"confirm_email": "x"})
+            resp = c.post("/admin/users/1/delete", data={"confirm_text": "DELETE"})
         assert resp.status_code == 404
 
 
@@ -343,7 +346,7 @@ class TestAdminDeleteUserPG:
         with _client(9, "pgboss@example.com") as c:
             resp = c.post(
                 "/admin/users/10/delete",
-                data={"confirm_email": "pgspam@example.com"},
+                data={"confirm_text": "DELETE"},
                 follow_redirects=False,
             )
         assert resp.status_code == 302

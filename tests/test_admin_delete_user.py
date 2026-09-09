@@ -15,6 +15,8 @@ row by reusing the self-serve `_hard_delete_user` machinery (D4), with:
   posts, posted history, settings, invite claims, the user row itself)
 """
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -258,6 +260,26 @@ class TestAdminDeleteUser:
         assert 'name="confirm_email"' in resp.text
         assert "adminConfirmDelete" in resp.text
 
+    def test_cannot_delete_last_admin_account(self, multi_env, monkeypatch):
+        """When an admin account is the last remaining admin, attempting to
+        delete it (e.g. via a concurrent demotion of the caller) must be
+        refused by _admin_guard_last_admin."""
+        import app as app_module
+
+        monkeypatch.setattr(app_module, "_require_admin", lambda req: ADMIN_ID)
+        with database.get_db() as db:
+            db.execute("UPDATE users SET is_admin = 0 WHERE id = ?", (ADMIN_ID,))
+        with _client(ADMIN_ID, "admin@example.com") as c:
+            resp = c.post(
+                f"/admin/users/{OTHER_ADMIN_ID}/delete",
+                data={"confirm_email": "second-admin@example.com"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 400
+        assert "last admin" in resp.text
+        with database.get_db() as db:
+            assert db.execute("SELECT COUNT(*) c FROM users WHERE id = ?", (OTHER_ADMIN_ID,)).fetchone()["c"] == 1
+
     def test_single_mode_404s(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "MULTI", False)
         monkeypatch.setattr(settings, "AUTH_TOKEN", None)
@@ -266,3 +288,65 @@ class TestAdminDeleteUser:
         with TestClient(app) as c:
             resp = c.post("/admin/users/1/delete", data={"confirm_email": "x"})
         assert resp.status_code == 404
+
+
+@pytest.fixture
+def pg_env(monkeypatch):
+    """Module-local copy of the established PG full-app fixture pattern
+    (tests/test_pg_dialect.py): real multi mode over PG, fresh Fernet key,
+    fresh schema per test."""
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr(settings, "MULTI", True)
+    monkeypatch.setattr(settings, "DATABASE_URL", os.environ["FEEDECHO_TEST_PG_URL"])
+    monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", False)
+    monkeypatch.setattr(settings, "CREDENTIAL_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    auth._login_attempts.clear()
+    auth._register_attempts.clear()
+    database.init_db()
+    return settings
+
+
+@pytest.mark.skipif(
+    not os.environ.get("FEEDECHO_TEST_PG_URL"),
+    reason="FEEDECHO_TEST_PG_URL not set; PG tests are CI-gated",
+)
+class TestAdminDeleteUserPG:
+    """The admin delete sweep must run cleanly against Postgres."""
+
+    def test_pg_admin_delete_sweeps_user(self, pg_env, monkeypatch):
+        # A scheduler job started by the app lifespan could race the
+        # monkeypatch teardown (test_pg_dialect's lesson); no TestClient
+        # lifespan jobs touch users, but keep the test honest anyway.
+        with database.get_db() as db:
+            # High fixed ids + ON CONFLICT DO NOTHING: local re-runs against
+            # a persistent Postgres cannot collide with leftovers (and this
+            # file's sqlite fixtures run on a different engine entirely).
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, is_admin)"
+                " VALUES (9, 'pgboss@example.com', '', 1)"
+                " ON CONFLICT (id) DO UPDATE SET email = excluded.email,"
+                " is_admin = excluded.is_admin"
+            )
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, is_admin)"
+                " VALUES (10, 'pgspam@example.com', '', 0)"
+                " ON CONFLICT (id) DO UPDATE SET email = excluded.email,"
+                " is_admin = excluded.is_admin"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, user_id, name, url)"
+                " VALUES (900, 10, 'f', 'https://x.example/rss')"
+                " ON CONFLICT (id) DO NOTHING"
+            )
+        with _client(9, "pgboss@example.com") as c:
+            resp = c.post(
+                "/admin/users/10/delete",
+                data={"confirm_email": "pgspam@example.com"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 302
+        with database.get_db() as db:
+            assert db.execute("SELECT COUNT(*) c FROM users WHERE id = 10").fetchone()["c"] == 0
+            assert db.execute("SELECT COUNT(*) c FROM feeds WHERE id = 900").fetchone()["c"] == 0

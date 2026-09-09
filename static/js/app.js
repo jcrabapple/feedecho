@@ -1621,7 +1621,7 @@ function adminConfirmDelete(form) {
     var typed = ((form.querySelector('[name="confirm_email"]') || {}).value || '').trim().toLowerCase();
     if (typed !== expected) {
         // Mismatch (or empty): nothing is submitted; the confirm dialog is
-        // the only feedback channel app.js is allowed to use here.
+        // the only feedback channel allowed here (UX pin: no alert()).
         return confirm('The typed email does not match the account ' + expected + '. Nothing will be deleted.');
     }
     return confirm('Permanently delete ' + expected + ' and ALL their data (feeds, echoes, destinations, post history)? This cannot be undone.');

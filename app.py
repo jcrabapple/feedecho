@@ -1530,19 +1530,20 @@ def _admin_lock(db) -> None:
 def _admin_guard_last_admin(db, user_id: int, column: str) -> str | None:
     """Error message if an action would leave zero admins, else None.
 
-    column is 'suspended' (guard: last ACTIVE admin) or 'is_admin'
-    (guard: last admin bit). Single-connection check + write keeps this
-    race-free per request transaction; on Postgres the advisory lock in
-    _admin_lock also serializes concurrent requests against each other.
+    column is 'suspended' (guard: last ACTIVE admin), 'is_admin'
+    (guard: last admin bit), or 'delete' (guard: deleting an admin).
+    Single-connection check + write keeps this race-free per request
+    transaction; on Postgres the advisory lock in _admin_lock also
+    serializes concurrent requests against each other.
     """
     _admin_lock(db)
-    if column == "is_admin":
-        # Demoting: preserve at least one admin bit, whatever its state.
+    if column in ("is_admin", "delete"):
+        # Demoting or deleting: preserve at least one admin bit, whatever its state.
         count = db.execute(
             "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1"
         ).fetchone()["n"]
         if (count or 0) <= 1:
-            return "Cannot demote the last admin account"
+            return "Cannot delete the last admin account" if column == "delete" else "Cannot demote the last admin account"
     else:
         # Suspending an admin: keep at least one ACTIVE admin.
         row = db.execute(
@@ -1821,13 +1822,16 @@ async def admin_delete_user(user_id: int, request: Request):
     form = await request.form()
     confirm_text = (form.get("confirm_email") or "").strip()
     with get_db() as db:
-        row = _get_user_or_404(db, user_id, columns="id, email")
+        row = _get_user_or_404(db, user_id, columns="id, email, is_admin")
         if user_id == uid:
-            # The operator's own row: refusing here IS the last-admin guard
-            # (the caller is an admin, so deleting another admin always
-            # leaves at least one — themselves).
+            # The operator's own row: refusing here IS the self-delete refusal
             return render("error.html", request, status_code=400,
                           code=400, message="You cannot delete your own account")
+        if row["is_admin"]:
+            guard = _admin_guard_last_admin(db, user_id, "delete")
+            if guard:
+                return render("error.html", request, status_code=400,
+                              code=400, message=guard)
         if confirm_text.lower() != row["email"].strip().lower():
             return render(
                 "error.html", request, status_code=400, code=400,
@@ -1837,16 +1841,19 @@ async def admin_delete_user(user_id: int, request: Request):
                 ),
             )
         email = row["email"]
-        for hook in _account_deletion_hooks:
-            try:
-                hook(user_id)
-            except AccountDeletionAbort as exc:
-                # Fail closed: never orphan a live subscription (same
-                # contract as the self-serve path).
-                return render("error.html", request, status_code=400,
-                              code=400, message=str(exc))
-            except Exception:  # noqa: BLE001 — best-effort hooks must not block
-                logger.exception("account-deletion hook failed for user %s", user_id)
+
+    for hook in _account_deletion_hooks:
+        try:
+            hook(user_id)
+        except AccountDeletionAbort as exc:
+            # Fail closed: never orphan a live subscription (same
+            # contract as the self-serve path).
+            return render("error.html", request, status_code=400,
+                          code=400, message=str(exc))
+        except Exception:  # noqa: BLE001 — best-effort hooks must not block
+            logger.exception("account-deletion hook failed for user %s", user_id)
+
+    with get_db() as db:
         _hard_delete_user(db, user_id)
     logger.info("Admin %s DELETED user %s (%s) and all their data", uid, user_id, email)
     return RedirectResponse(url="/admin", status_code=302)

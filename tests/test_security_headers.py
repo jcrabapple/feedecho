@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import database
+import settings
 
 
 @pytest.fixture()
@@ -33,6 +34,32 @@ def test_security_headers_present_on_html(client):
     assert "object-src 'none'" in csp
     assert "base-uri 'self'" in csp
     assert "form-action 'self'" in csp
+
+
+def test_csp_stays_strict_when_billing_disabled(client, monkeypatch):
+    # Self-hosted: no billing seam is mounted, so no form submission ever
+    # needs to leave the origin — form-action stays at exactly 'self'.
+    monkeypatch.setattr(settings, "BILLING_ENABLED", False)
+    csp = client.get("/healthz").headers.get("Content-Security-Policy", "")
+    assert "form-action 'self'" in csp
+    assert "stripe.com" not in csp
+
+
+def test_csp_allows_stripe_redirects_when_billing_enabled(client, monkeypatch):
+    # Hosted billing: the register and Subscribe forms POST to
+    # /api/billing/checkout (and portal), which 303-redirect to
+    # checkout.stripe.com / billing.stripe.com. The browser enforces
+    # form-action on EVERY hop of a form submission's redirect chain, so
+    # both origins must be listed or the redirect is silently killed and
+    # the customer never reaches the payment page (the v1.42.0 regression,
+    # fixed 2026-09-10). Pinned as a full directive: an exact-match here is
+    # what a future CSP edit must consciously update.
+    monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+    csp = client.get("/healthz").headers.get("Content-Security-Policy", "")
+    assert (
+        "form-action 'self' https://checkout.stripe.com https://billing.stripe.com"
+        in csp
+    )
 
 
 def test_hsts_emitted_unconditionally(client):

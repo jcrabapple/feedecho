@@ -616,10 +616,19 @@ def reset_submit(
 # CSP requires migrating all of those to addEventListener / external files —
 # deferred to the A-batch a11y/refactor work.
 #
-# Stripe billing is safe: the hosted checkout flow is a 302 redirect, not a
-# client-side JS iframe or connect to stripe.com.
+# form-action vs. hosted billing: the Subscribe / register forms POST to
+# /api/billing/checkout and /api/billing/portal, which 303-redirect to
+# Stripe-hosted pages (checkout.stripe.com / billing.stripe.com).  The
+# browser enforces form-action on EVERY hop of a form submission's redirect
+# chain — the form's action URL AND each redirect target — so an origin the
+# user's browser must be redirected to has to be listed here.  The original
+# form-action 'self' (S8, v1.42.0) assumed the 302 was exempt; it is not,
+# and every card flow (register -> checkout, Subscribe, Manage billing)
+# was silently blocked in the browser until 2026-09-10.  The Stripe origins
+# are added only when the billing seam is on, so self-hosted deployments
+# keep the strict form-action 'self'.
 
-_CSP_HEADER = (
+_CSP_BASE = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; "
@@ -629,9 +638,28 @@ _CSP_HEADER = (
     "frame-ancestors 'none'; "
     "frame-src 'none'; "
     "object-src 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self'"
+    "base-uri 'self'"
 )
+
+# Stripe-hosted origins the billing redirect chain navigates to: hosted
+# Checkout sessions and Customer Portal sessions.  DO NOT tighten without a
+# browser-level test of the checkout redirect (the v1.42.0 regression).
+_BILLING_FORM_ACTION_ORIGINS = (
+    "https://checkout.stripe.com https://billing.stripe.com"
+)
+
+
+def _csp_header() -> str:
+    """Compose the CSP for a response.
+
+    Reads settings.BILLING_ENABLED per response rather than baking it in at
+    import: the flag is env-fixed in production, and per-request composition
+    keeps tests able to flip it without reimporting the app.
+    """
+    form_action = "form-action 'self'"
+    if settings.BILLING_ENABLED:
+        form_action += " " + _BILLING_FORM_ACTION_ORIGINS
+    return f"{_CSP_BASE}; {form_action}"
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -657,7 +685,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "camera=(), microphone=(), geolocation=(), payment=()"
             )
         if "Content-Security-Policy" not in h:
-            h["Content-Security-Policy"] = _CSP_HEADER
+            h["Content-Security-Policy"] = _csp_header()
         # Emit HSTS unconditionally: browsers ignore the header over plain HTTP
         # (RFC 6797), so it is safe on http:// and correct on https://. Gating on
         # request.url.scheme silently fails behind a TLS-terminating reverse

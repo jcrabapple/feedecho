@@ -169,14 +169,87 @@ class TestTruncateGraphemes:
             c in "\U0001F1E9\U0001F1EA" for c in body
         )
 
-    def test_truncate_zwj_sequence_never_split(self):
+    def test_truncate_zwj_emoji_sequence_never_split(self):
         from bluesky import truncate_graphemes
 
-        # clusters: [a, b, c\u200dd, e, f] — the ZWJ cluster is atomic.
-        text = "abc\u200Ddef"
-        assert truncate_graphemes(text, 4) == "abc\u200Dd…"
+        # "woman technologist": WOMAN + ZWJ + LAPTOP is one atomic cluster
+        # because LAPTOP is Extended_Pictographic (GB11 applies).
+        # clusters: [a, b, <zwj-emoji>, e, f]
+        emoji = "\U0001F469\u200D\U0001F4BB"
+        text = "ab" + emoji + "ef"
+        assert truncate_graphemes(text, 4) == "ab" + emoji + "…"
         # Cutting before the ZWJ cluster drops it whole, never splits it.
         assert truncate_graphemes(text, 3) == "ab…"
+
+    def test_zwj_non_emoji_not_glued_forward(self):
+        """Finding #10 (bug review): GB11 must not fire for a non-emoji
+        character following a ZWJ. A ZWJ used outside an emoji sequence
+        (e.g. some Indic-script ligatures) must not swallow whatever
+        ordinary character follows it into one cluster -- doing so
+        under-counts true grapheme clusters, which can let a post through
+        the 300-grapheme cap that actually has more true clusters than
+        that.
+        """
+        from bluesky import _grapheme_clusters, truncate_graphemes
+
+        # "c" + ZWJ glues onto "c" (GB9 -- ZWJ always attaches backward),
+        # but "d" is plain ASCII, not Extended_Pictographic, so it must
+        # start a new cluster instead of being glued in by the old
+        # unconditional GB11 stand-in.
+        text = "c\u200Dd"
+        clusters = _grapheme_clusters(text)
+        assert len(clusters) == 2
+        assert clusters == ["c\u200D", "d"]
+
+        # With the old (buggy) unconditional glue this whole string counted
+        # as ONE grapheme and truncate_graphemes(text, 1) would return it
+        # unchanged; now it's two, so a max_graphemes=1 cap must truncate.
+        assert len(truncate_graphemes(text, 1)) < len(text)
+
+    def test_byte_cap_enforced_with_few_graphemes(self):
+        """Finding #10 (bug review): app.bsky.feed.post's `text` caps at
+        BOTH maxGraphemes: 300 AND maxLength: 3000 (UTF-8 bytes) -- two
+        independent limits. A string can be well under the grapheme cap
+        and still exceed the byte cap (e.g. many multi-codepoint ZWJ emoji
+        sequences, each one grapheme cluster but tens of bytes).
+        """
+        from bluesky import MAX_POST_BYTES, truncate_graphemes
+
+        # "woman technologist": WOMAN + ZWJ + LAPTOP -- 3 codepoints, ~14
+        # bytes, one grapheme cluster.
+        emoji = "\U0001F469‍\U0001F4BB"
+        text = emoji * 290  # 290 grapheme clusters (< 300), well over 3000 bytes
+        assert len(text.encode("utf-8")) > MAX_POST_BYTES
+
+        result = truncate_graphemes(text, 300, max_bytes=MAX_POST_BYTES)
+        assert len(result.encode("utf-8")) <= MAX_POST_BYTES
+        # Byte-safe: the result must still be valid UTF-8 (no split
+        # multi-byte sequence) and end on a whole grapheme cluster / the
+        # ellipsis, never a torn emoji.
+        assert result.encode("utf-8").decode("utf-8") == result
+        assert result.endswith("…")
+
+    def test_byte_cap_truncates_a_single_oversized_cluster(self):
+        """A single grapheme cluster that alone exceeds the byte cap (e.g.
+        a base character with an excessive combining-mark tail) must still
+        be trimmed rather than shipped whole and over budget -- dropping
+        the whole cluster and falling back to just the ellipsis is the
+        safest byte-safe behavior available at cluster granularity.
+        """
+        from bluesky import MAX_POST_BYTES, truncate_graphemes
+
+        text = "A" + "́" * 2000  # one grapheme cluster, ~4000 bytes
+        result = truncate_graphemes(text, 300, max_bytes=MAX_POST_BYTES)
+        assert len(result.encode("utf-8")) <= MAX_POST_BYTES
+
+    def test_byte_cap_not_enforced_when_omitted(self):
+        """max_bytes defaults to None (backward compatible) -- callers that
+        don't pass it, like the alt-text truncation, are unaffected."""
+        from bluesky import truncate_graphemes
+
+        text = "A" + "́" * 2000
+        result = truncate_graphemes(text, 300)
+        assert result == text
 
 # ── Facets ───────────────────────────────────────────────────────────────────
 

@@ -647,6 +647,8 @@ class TestMastodonPostStatusParams:
         captured = {}
 
         class FakeResponse:
+            status_code = 200
+
             def raise_for_status(self):
                 pass
 
@@ -673,6 +675,8 @@ class TestMastodonPostStatusParams:
         captured = {}
 
         class FakeResponse:
+            status_code = 200
+
             def raise_for_status(self):
                 pass
 
@@ -697,6 +701,8 @@ class TestMastodonPostStatusParams:
         captured = {}
 
         class FakeResponse:
+            status_code = 200
+
             def raise_for_status(self):
                 pass
 
@@ -723,6 +729,7 @@ class TestMastodonPostStatusParams:
 
         class FakeResponse:
             fetch_status = None
+            status_code = 200
 
             def raise_for_status(self):
                 pass
@@ -746,6 +753,8 @@ class TestMastodonUploadMedia:
         import mastodon
 
         class FakeResponse:
+            status_code = 200
+
             def raise_for_status(self):
                 pass
 

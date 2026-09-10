@@ -102,6 +102,61 @@ class TestMastodonPostUrlStored:
         assert status == "failed"
         assert post_url is None
 
+
+class TestMastodonAuthErrorIsPermanent:
+    """Bug review finding #3: a 401/403 from Mastodon (revoked/expired
+    token) must be classified permanent -- marked 'gave_up' immediately
+    instead of scheduled for a retry that can never succeed, mirroring how
+    Bluesky/Matrix/micro.blog already handle their auth errors.
+    """
+
+    def test_401_marks_the_post_permanently_failed(self, db_tmp, monkeypatch, setup_echo):
+        from mastodon import MastodonAuthError
+
+        def boom(**kw):
+            raise MastodonAuthError("Mastodon rejected the access token (HTTP 401).")
+
+        monkeypatch.setattr(scheduler, "post_status", boom)
+        echo = setup_echo(attach_image=0)
+        assert scheduler.process_echo(echo, _item()) is True  # gave_up counts as "handled"
+
+        status, post_url = _post_url_for()
+        assert status == "gave_up"
+        assert post_url is None
+
+    def test_403_marks_the_post_permanently_failed(self, db_tmp, monkeypatch, setup_echo):
+        from mastodon import MastodonAuthError
+
+        def boom(**kw):
+            raise MastodonAuthError("Mastodon rejected the access token (HTTP 403).")
+
+        monkeypatch.setattr(scheduler, "post_status", boom)
+        echo = setup_echo(attach_image=0)
+        assert scheduler.process_echo(echo, _item()) is True
+
+        status, post_url = _post_url_for()
+        assert status == "gave_up"
+        assert post_url is None
+
+    def test_generic_httpx_error_still_scheduled_for_retry(self, db_tmp, monkeypatch, setup_echo):
+        # Contrast case: a non-auth HTTPStatusError (e.g. 500/429) must NOT
+        # be treated as permanent -- it stays in the ordinary bounded-retry
+        # path ('failed', not 'gave_up').
+        import httpx
+
+        def boom(**kw):
+            request = httpx.Request("POST", "https://mastodon.example/api/v1/statuses")
+            response = httpx.Response(503, request=request)
+            raise httpx.HTTPStatusError("server error", request=request, response=response)
+
+        monkeypatch.setattr(scheduler, "post_status", boom)
+        echo = setup_echo(attach_image=0)
+        assert scheduler.process_echo(echo, _item()) is False
+
+        status, post_url = _post_url_for()
+        assert status == "failed"
+        assert post_url is None
+
 # ── rendering ────────────────────────────────────────────────────────────────
 
 TENANT_ID = 21

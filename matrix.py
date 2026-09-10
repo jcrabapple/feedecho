@@ -201,6 +201,22 @@ def permalink(room_id: str, event_id: str) -> str:
     return f"https://matrix.to/#/{quote(room_id, safe='')}/{quote(event_id, safe='')}"
 
 
+def _link_or_plain(match: re.Match) -> str:
+    """Wrap a matched URL in an ``<a>`` tag, unless it looks truncated.
+
+    ``_truncate_body`` cuts on a plain character count and appends an
+    ellipsis with no URL awareness, so a long link can be sliced in half
+    with "…" glued directly onto what's left. The URL regex still matches
+    that partial string, and wrapping it in an anchor would ship a dead/
+    garbled link. Mirrors bluesky.build_facets' truncation guard: if the
+    truncation ellipsis landed inside the match, leave it as plain text.
+    """
+    uri = match.group(0)
+    if "…" in uri:
+        return uri
+    return f'<a href="{uri}">{uri}</a>'
+
+
 def html_body(text: str) -> str:
     """HTML for ``formatted_body``: escaped text with http(s) URLs linkified.
 
@@ -210,9 +226,7 @@ def html_body(text: str) -> str:
     ``&amp;`` inside the href, which is the correct HTML spelling of it.
     """
     escaped = html.escape(text, quote=False)
-    linked = _URL_RE.sub(
-        lambda m: f'<a href="{m.group(0)}">{m.group(0)}</a>', escaped
-    )
+    linked = _URL_RE.sub(_link_or_plain, escaped)
     return linked.replace("\n", "<br />")
 
 

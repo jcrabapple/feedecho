@@ -26,10 +26,11 @@ from feed_parser import (
     truncate,
 )
 from filters import is_filtered, match_reason
-from mastodon import post_status, upload_media
+from mastodon import MastodonAuthError, MastodonError, post_status, upload_media
 from bluesky import (
     BLUESKY_IMAGE_TYPES,
     MAX_BLOB_BYTES,
+    MAX_POST_BYTES,
     MAX_POST_GRAPHEMES,
     BlueskyAuthError,
     BlueskyError,
@@ -1267,13 +1268,26 @@ def _send_mastodon(
             # Feed-provided alt text wins (the author wrote it); AI
             # generation is the fallback when the feed has none.
             description = _resolve_alt_text(echo, item, entry["alt"], img_bytes, img_type)
-            uploaded = upload_media(
-                instance=account["instance"],
-                access_token=decrypt_secret(account["access_token"]),
-                image_bytes=img_bytes,
-                content_type=img_type,
-                description=description,
-            )
+            try:
+                uploaded = upload_media(
+                    instance=account["instance"],
+                    access_token=decrypt_secret(account["access_token"]),
+                    image_bytes=img_bytes,
+                    content_type=img_type,
+                    description=description,
+                )
+            except MastodonAuthError:
+                # Permanent (revoked/expired token): every remaining image
+                # upload would fail the same way, and the post_status call
+                # below will raise the same error and get caught there,
+                # marking the post permanently failed — no need to duplicate
+                # that here, just stop trying to attach images.
+                logger.warning(
+                    "Echo %s: Mastodon token rejected during image upload for item %s",
+                    echo["id"],
+                    item["id"],
+                )
+                break
             if uploaded and uploaded.get("id"):
                 media_ids.append(str(uploaded["id"]))
                 logger.info(
@@ -1313,8 +1327,21 @@ def _send_mastodon(
             spoiler_text=cw_text,
             media_ids=media_ids or None,
         )
-    except Exception:
+    except MastodonAuthError as e:
+        # Token rejected: retries cannot help until the user reconnects.
+        logger.error("Echo %s: Mastodon token rejected: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Mastodon token rejected: {e}",
+            permanent=True,
+        )
+    except MastodonError as e:
         logger.exception("Echo %s: Mastodon post failed", echo["id"])
+        return _fail_post(posted_id, claim_token, echo["id"], f"Mastodon delivery failed: {e}")
+    except Exception:
+        logger.exception("Echo %s: Mastodon post failed unexpectedly", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], "Mastodon delivery failed")
 
     # The API returns the canonical permalink; persisting it gives the
@@ -1496,7 +1523,9 @@ def _send_bluesky(
     # Content preparation is pure string work, but a bug here must not strand
     # the claimed row — finalize it as failed so the bounded retry owns it.
     try:
-        text = truncate_graphemes(content or "", MAX_POST_GRAPHEMES)
+        text = truncate_graphemes(
+            content or "", MAX_POST_GRAPHEMES, max_bytes=MAX_POST_BYTES
+        )
         facets = build_facets(text)
     except Exception:
         logger.exception("Echo %s: Bluesky content preparation failed", echo["id"])

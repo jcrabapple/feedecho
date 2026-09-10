@@ -27,6 +27,11 @@ POST_COLLECTION = "app.bsky.feed.post"
 POST_RECORD_TYPE = "app.bsky.feed.post"
 
 MAX_POST_GRAPHEMES = 300
+# app.bsky.feed.post's `text` field caps at maxLength: 3000 UTF-8 bytes, a
+# second, independent limit from maxGraphemes above — a post can be under
+# 300 grapheme clusters and still be over 3000 bytes (e.g. ZWJ emoji
+# sequences, which pack many bytes into one cluster).
+MAX_POST_BYTES = 3000
 MAX_ALT_GRAPHEMES = 1000
 # Bluesky raised the app.bsky.embed.images limit 1 MB -> 2 MB in April 2026
 # (atproto PR #4823). Images above this are downscaled/re-encoded by
@@ -345,9 +350,57 @@ _VARIATION_SELECTORS = {"\ufe0e", "\ufe0f"}
 _SKIN_TONE_RANGE = range(0x1F3FB, 0x1F400)
 _EMOJI_TAG_RANGE = range(0xE0020, 0xE0080)
 
+# Python's unicodedata does not expose Extended_Pictographic (it is not a
+# general category), and the `regex` package that provides
+# \p{Extended_Pictographic} is not a project dependency (checked
+# requirements.txt / pyproject.toml). This is a range-based approximation
+# covering the Unicode blocks that hold the overwhelming majority of
+# real-world emoji, used only to gate GB11 below. It is NOT a complete
+# UAX #29 implementation: a few rare Extended_Pictographic code points
+# outside these ranges will be missed (under-glue -- same failure mode the
+# old code already had for other boundaries, harmless for the 300/3000
+# caps, just an occasional visually-split emoji), but ordinary letters,
+# digits, and punctuation are reliably excluded, which is what fixes the
+# bug this guards against.
+_EXTENDED_PICTOGRAPHIC_RANGES = (
+    (0x00A9, 0x00A9),    # copyright
+    (0x00AE, 0x00AE),    # registered
+    (0x203C, 0x203C),    # double exclamation
+    (0x2049, 0x2049),    # exclamation question
+    (0x2122, 0x2122),    # trademark
+    (0x2139, 0x2139),    # information
+    (0x2194, 0x21AA),    # arrows used as emoji
+    (0x231A, 0x231B),    # watch, hourglass
+    (0x2328, 0x2328),    # keyboard
+    (0x23CF, 0x23CF),
+    (0x23E9, 0x23FA),    # playback controls / clocks
+    (0x24C2, 0x24C2),
+    (0x25AA, 0x25FE),    # geometric shapes used as emoji
+    (0x2600, 0x27BF),    # misc symbols + dingbats (most classic emoji)
+    (0x2934, 0x2935),
+    (0x2B00, 0x2BFF),    # misc symbols and arrows (stars, etc.)
+    (0x3030, 0x3030),
+    (0x303D, 0x303D),
+    (0x3297, 0x3297),
+    (0x3299, 0x3299),
+    (0x1F000, 0x1FAFF),  # mahjong/dominoes through symbols & pictographs ext-A
+    (0x1FB00, 0x1FBFF),  # legacy computing symbols (some emoji-adjacent)
+)
+
 
 def _is_regional_indicator(ch: str) -> bool:
     return 0x1F1E6 <= ord(ch) <= 0x1F1FF
+
+
+def _is_extended_pictographic(ch: str) -> bool:
+    """Approximate check for Unicode's Extended_Pictographic property.
+
+    Restricts the ZWJ forward-glue (GB11) below to actual emoji
+    continuations -- see _EXTENDED_PICTOGRAPHIC_RANGES for why this is a
+    range-based stand-in rather than a full property lookup.
+    """
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _EXTENDED_PICTOGRAPHIC_RANGES)
 
 
 def _trailing_ri_count(cluster: str) -> int:
@@ -365,11 +418,16 @@ def _grapheme_clusters(text: str) -> list[str]:
 
     A new grapheme starts at any character that is not a combining mark,
     zero-width joiner, variation selector, skin-tone modifier, or emoji tag
-    character. ZWJ glues in both directions (GB9 + a permissive GB11
-    stand-in), so ZWJ emoji sequences like family emoji stay together.
-    Regional-indicator pairs (flags) merge so a flag never splits. The
-    remaining gaps over-merge, which can only under-count graphemes, so
-    truncation never exceeds platform limits.
+    character. A ZWJ always glues to the cluster before it (GB9). A
+    character *after* a ZWJ only glues onto that cluster when it is itself
+    emoji/Extended_Pictographic (an approximation of GB11) -- a ZWJ used for
+    non-emoji purposes (e.g. some Indic-script ligatures) no longer swallows
+    whatever ordinary character happens to follow it. Regional-indicator
+    pairs (flags) merge so a flag never splits. The remaining gaps
+    over-merge, which can only under-count graphemes, so truncation never
+    exceeds platform limits (that reasoning does NOT extend to the ZWJ
+    forward-glue case, which is why it is now gated on Extended_Pictographic
+    instead of firing unconditionally).
     """
     clusters: list[str] = []
     for ch in text:
@@ -384,7 +442,10 @@ def _grapheme_clusters(text: str) -> list[str]:
             is_continuation = (
                 is_continuation
                 or ch == _ZWJ
-                or clusters[-1][-1] == _ZWJ
+                or (
+                    clusters[-1][-1] == _ZWJ
+                    and _is_extended_pictographic(ch)
+                )
                 or (
                     _is_regional_indicator(ch)
                     and _trailing_ri_count(clusters[-1]) == 1
@@ -397,17 +458,42 @@ def _grapheme_clusters(text: str) -> list[str]:
     return clusters
 
 
-def truncate_graphemes(text: str, max_graphemes: int = MAX_POST_GRAPHEMES) -> str:
-    """Truncate to max_graphemes grapheme clusters, appending an ellipsis."""
+def truncate_graphemes(
+    text: str,
+    max_graphemes: int = MAX_POST_GRAPHEMES,
+    max_bytes: int | None = None,
+) -> str:
+    """Truncate to max_graphemes grapheme clusters, appending an ellipsis.
+
+    When max_bytes is given, the result is also capped at that many UTF-8
+    bytes -- app.bsky.feed.post's `text` enforces maxGraphemes AND maxLength
+    (bytes) as two independent limits, and a handful of grapheme clusters
+    can still add up to well over 3000 bytes (e.g. dense ZWJ emoji
+    sequences). Byte truncation drops whole grapheme clusters from the end
+    rather than slicing raw bytes, so it never splits a UTF-8 multi-byte
+    sequence.
+    """
     clusters = _grapheme_clusters(text)
-    if len(clusters) <= max_graphemes:
+    fits_graphemes = len(clusters) <= max_graphemes
+    fits_bytes = max_bytes is None or len(text.encode("utf-8")) <= max_bytes
+    if fits_graphemes and fits_bytes:
         return text
-    head = "".join(clusters[: max_graphemes - 1]).rstrip()
-    # Don't leave a dangling ZWJ at the cut point — it renders as a broken
-    # sequence in most clients.
-    while head.endswith(_ZWJ):
-        head = head[:-1]
-    return head + "…"
+
+    def _assemble(n: int) -> str:
+        head = "".join(clusters[:n]).rstrip()
+        # Don't leave a dangling ZWJ at the cut point -- it renders as a
+        # broken sequence in most clients.
+        while head.endswith(_ZWJ):
+            head = head[:-1]
+        return head + "…"
+
+    n = min(max_graphemes - 1, len(clusters)) if not fits_graphemes else len(clusters)
+    result = _assemble(n)
+    if max_bytes is not None:
+        while n > 0 and len(result.encode("utf-8")) > max_bytes:
+            n -= 1
+            result = _assemble(n)
+    return result
 
 
 # ── Posts and images ─────────────────────────────────────────────────────────

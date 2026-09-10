@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -1282,18 +1283,30 @@ def _send_mastodon(
                     content_type=img_type,
                     description=description,
                 )
-            except MastodonAuthError:
-                # Permanent (revoked/expired token): every remaining image
-                # upload would fail the same way, and the post_status call
-                # below will raise the same error and get caught there,
-                # marking the post permanently failed — no need to duplicate
-                # that here, just stop trying to attach images.
-                logger.warning(
-                    "Echo %s: Mastodon token rejected during image upload for item %s",
+            except MastodonAuthError as e:
+                # Permanent (revoked/expired token, or a token that can post
+                # but lacks the media scope): finalize the post as
+                # permanently failed right here. Falling through to
+                # post_status would silently publish text-only whenever the
+                # token can post but not upload media, and would route a
+                # pure 401 into the transient-retry path whenever
+                # post_status hit an unrelated transient failure.
+                # _fail_post fences on the claim token, so a lease lost
+                # during the image I/O no-ops here exactly as it does on
+                # every other failure path.
+                logger.error(
+                    "Echo %s: Mastodon token rejected during image upload for item %s: %s",
                     echo["id"],
                     item["id"],
+                    e,
                 )
-                break
+                return _fail_post(
+                    posted_id,
+                    claim_token,
+                    echo["id"],
+                    f"Mastodon token rejected: {e}",
+                    permanent=True,
+                )
             if uploaded and uploaded.get("id"):
                 media_ids.append(str(uploaded["id"]))
                 logger.info(
@@ -1347,7 +1360,11 @@ def _send_mastodon(
             f"Mastodon token rejected: {e}",
             permanent=True,
         )
-    except MastodonError as e:
+    except (MastodonError, httpx.HTTPStatusError) as e:
+        # _raise_for_status delegates every non-auth HTTP failure to
+        # httpx's HTTPStatusError, so catch it here rather than in the
+        # generic handler — the API's own error text belongs in the row's
+        # error_message, not a flat "delivery failed".
         logger.exception("Echo %s: Mastodon post failed", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], f"Mastodon delivery failed: {e}")
     except Exception:

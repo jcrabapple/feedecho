@@ -26,7 +26,9 @@ def _saved_search_badge(html: str, s_id: int) -> int:
         re.S,
     )
     assert m, f"saved search {s_id} link not found in page"
-    badge = re.search(r'reader-feed-unread">(\d+)</span>', m.group(0))
+    badge = re.search(
+        r'class="(?:reader-search-count|reader-feed-unread)"[^>]*>(\d+)</span>', m.group(0)
+    )
     return int(badge.group(1)) if badge else 0
 
 
@@ -148,11 +150,11 @@ def test_reader_saved_search_view_and_counts(p5_env):
     assert r_page.status_code == 200
     html = r_page.text
 
-    # Sidebar contains saved search section and unread badge
+    # Sidebar contains saved search section and count badge
     assert "Saved Searches" in html
     assert "AI Unread" in html
     # it-1 is unread and contains AI; it-3 is read; it-2 has no AI. So count is 1.
-    assert '<span class="reader-feed-unread">1</span>' in html
+    assert _saved_search_badge(html, s_id) == 1
     # The item list should show "AI Breakthrough announced"
     assert "AI Breakthrough announced" in html
     # and should NOT show "Old AI Paper" because of is:unread
@@ -201,3 +203,46 @@ def test_saved_searches_plan_allowance_enforced(p5_env):
     )
     assert r4.status_code == 402
     assert "allows 3 saved searches" in r4.json()["detail"]
+
+
+def test_saved_search_badge_uses_count_styling_not_unread_pill(p5_env):
+    """Saved-search badges count TOTAL matches, so they must render the
+    muted .reader-search-count class — not .reader-feed-unread, which
+    brands a permanent total as an unread counter that never clears."""
+    r_create = p5_env.post(
+        "/api/saved-searches",
+        data={"name": "AI Everything", "query": "AI"},
+        headers={"Accept": "application/json"},
+    )
+    s_id = r_create.json()["id"]
+
+    html = p5_env.get(f"/reader?saved={s_id}").text
+
+    assert _saved_search_badge(html, s_id) == 2
+    m = re.search(
+        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?"' % s_id, html, re.S
+    )
+    anchor = html[m.start(): html.find("</a>", m.end()) + 4]
+    assert 'class="reader-search-count"' in anchor
+    assert 'class="reader-feed-unread"' not in anchor
+
+
+def test_saved_search_badge_count_survives_mark_all_read(p5_env):
+    """The badge is a match-count monitor: reading everything it matched
+    must leave the count intact (it is not an unread counter), and mark
+    all read must not corrupt or zero it."""
+    r_create = p5_env.post(
+        "/api/saved-searches",
+        data={"name": "AI Everything", "query": "AI"},
+        headers={"Accept": "application/json"},
+    )
+    s_id = r_create.json()["id"]
+
+    before = _saved_search_badge(p5_env.get(f"/reader?saved={s_id}").text, s_id)
+    assert before == 2
+
+    r = p5_env.post("/api/reader/mark-all-read", data={"feed_id": "10"})
+    assert r.status_code == 200
+
+    after = _saved_search_badge(p5_env.get(f"/reader?saved={s_id}").text, s_id)
+    assert after == 2

@@ -30,6 +30,7 @@ import plans
 import settings
 from _version import __version__ as APP_VERSION
 from security import decrypt_secret, encrypt_secret, hash_secret
+from webhook import dump_headers
 
 FORMAT = "feedecho-export"
 VERSION = 1
@@ -67,6 +68,22 @@ _CREDENTIAL_COLS = {
     "microblog": {"token"},
     "matrix": {"access_token"},
     "discord": {"webhook_url"},
+}
+
+# Required columns per account section: NOT NULL in the schema (database.py)
+# with no usable code-level default, so a missing/blank/wrong-typed value
+# would otherwise bind straight into the INSERT and raise a bare
+# IntegrityError. (`username` for mastodon is NOT NULL-with-a-default and is
+# additionally back-filled from `name` in `_normalize_account`, so it's
+# deliberately not required here.)
+_REQUIRED_ACCOUNT_FIELDS = {
+    "mastodon": ("name", "instance", "access_token"),
+    "email": ("name", "email"),
+    "bluesky": ("name", "handle", "app_password"),
+    "microblog": ("name", "uid", "token"),
+    "matrix": ("name", "homeserver", "access_token", "room_id"),
+    "discord": ("name", "webhook_url"),
+    "webhook": ("name", "url"),
 }
 
 _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
@@ -252,10 +269,58 @@ def _normalize_account(section: str, account: dict) -> None:
             account[key] = value.strip()
     if section == "mastodon" and not account.get("username"):
         account["username"] = account.get("name") or ""
-    if section == "discord" and account.get("webhook_url"):
+    if section == "discord":
         # The natural key is the deterministic digest of the (plaintext) URL,
-        # which is stored encrypted at rest.
-        account["webhook_url_hash"] = hash_secret(str(account["webhook_url"]))
+        # which is stored encrypted at rest. Always recompute from whatever
+        # webhook_url is present -- never trust a webhook_url_hash carried in
+        # the import payload, forged or merely stale -- and clear it outright
+        # when there's no URL to hash from (webhook_url is required below,
+        # so that account is rejected rather than inserted with a hash that
+        # doesn't correspond to any URL).
+        webhook_url = account.get("webhook_url")
+        account["webhook_url_hash"] = (
+            hash_secret(str(webhook_url)) if webhook_url else ""
+        )
+    if section == "matrix" and not isinstance(account.get("base_url"), str):
+        # matrix_accounts.base_url is NOT NULL DEFAULT ''. SQL's DEFAULT only
+        # fires when a column is omitted from the INSERT entirely, not when
+        # an explicit NULL is bound to it (which is what `account.get(...)`
+        # returning None would otherwise do), so a missing/non-string value
+        # must be coerced here.
+        account["base_url"] = str(account.get("base_url") or "")
+    if section == "webhook":
+        # webhook_accounts.headers is NOT NULL DEFAULT '{}' and is stored as
+        # serialized JSON text, not a raw dict -- same DEFAULT-vs-explicit-
+        # NULL reasoning as base_url above, plus a type fixup so a document
+        # carrying a raw JSON object (rather than the string the export
+        # itself always produces) still serializes cleanly instead of
+        # binding a dict into a TEXT column.
+        headers = account.get("headers")
+        if isinstance(headers, dict):
+            account["headers"] = dump_headers(headers)
+        elif headers is None:
+            account["headers"] = "{}"
+
+
+def _validate_account(section: str, account: dict, record_id) -> None:
+    """Ensure an account's required NOT-NULL columns are present and typed.
+
+    Mirrors the feed-URL check in ``import_data``: raises ``ExportError``
+    identifying the offending account/field instead of letting a missing,
+    blank, or wrong-typed value (e.g. a dict where a string is expected)
+    reach the ``INSERT`` and surface as a bare IntegrityError -- the module
+    docstring's contract is that malformed input always raises
+    ``ExportError``, never a bare DB exception.
+    """
+    label = f"{section} account (id {record_id!r})"
+    for col in _REQUIRED_ACCOUNT_FIELDS[section]:
+        value = account.get(col)
+        if not isinstance(value, str) or not value:
+            raise ExportError(f"{label} is missing a required field: {col!r}.")
+    if section == "webhook":
+        headers = account.get("headers")
+        if not isinstance(headers, str):
+            raise ExportError(f"{label} has an invalid 'headers' value.")
 
 
 def _existing_account_id(db, uid: int, section: str, account: dict):
@@ -311,7 +376,11 @@ def _enforce_quotas(db, uid: int, new_feeds: int, new_destinations: int) -> None
 
 
 def _clamp_poll(db, uid: int, poll_interval) -> int:
-    poll = max(1, min(_try_int(poll_interval) or 15, 1440))
+    # `or 15` would treat an explicitly-parsed 0 as falsy and silently
+    # substitute the default instead of clamping it to the floor below, so
+    # the "missing/unparseable" fallback must check for None explicitly.
+    parsed = _try_int(poll_interval)
+    poll = max(1, min(parsed if parsed is not None else 15, 1440))
     if settings.MULTI:
         poll = plans.clamp_poll_interval(poll, _user_plan(db, uid))
     return poll
@@ -366,6 +435,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
         for account in doc["accounts"][section]:
             old_id = _record_id(account, "Account")
             _normalize_account(section, account)
+            _validate_account(section, account, old_id)
             existing = _existing_account_id(db, uid, section, account)
             if existing:
                 account_maps[section][old_id] = existing["id"]

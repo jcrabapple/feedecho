@@ -21,7 +21,7 @@ import secrets
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlparse
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -616,10 +616,19 @@ def reset_submit(
 # CSP requires migrating all of those to addEventListener / external files —
 # deferred to the A-batch a11y/refactor work.
 #
-# Stripe billing is safe: the hosted checkout flow is a 302 redirect, not a
-# client-side JS iframe or connect to stripe.com.
+# form-action vs. hosted billing: the Subscribe / register forms POST to
+# /api/billing/checkout and /api/billing/portal, which 303-redirect to
+# Stripe-hosted pages (checkout.stripe.com / billing.stripe.com).  The
+# browser enforces form-action on EVERY hop of a form submission's redirect
+# chain — the form's action URL AND each redirect target — so an origin the
+# user's browser must be redirected to has to be listed here.  The original
+# form-action 'self' (S8, v1.42.0) assumed the 302 was exempt; it is not,
+# and every card flow (register -> checkout, Subscribe, Manage billing)
+# was silently blocked in the browser until 2026-09-10.  The Stripe origins
+# are added only when the billing seam is on, so self-hosted deployments
+# keep the strict form-action 'self'.
 
-_CSP_HEADER = (
+_CSP_BASE = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; "
@@ -629,9 +638,46 @@ _CSP_HEADER = (
     "frame-ancestors 'none'; "
     "frame-src 'none'; "
     "object-src 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self'"
+    "base-uri 'self'"
 )
+
+# Stripe-hosted origins the billing redirect chain navigates to: hosted
+# Checkout sessions and Customer Portal sessions.  DO NOT tighten without a
+# browser-level test of the checkout redirect (the v1.42.0 regression).
+_BILLING_FORM_ACTION_ORIGINS = (
+    "https://checkout.stripe.com https://billing.stripe.com"
+)
+
+
+# The accounts-page connect form is a form submission (GET forms count)
+# whose redirect chain lands on the user-chosen Mastodon instance's
+# /oauth/authorize. The browser enforces form-action on EVERY hop of a
+# form submission's redirect chain, and that origin is unbounded, so the
+# directive has to allow https: at scheme level. Without it, connecting
+# ANY instance was silently blocked client-side (reported 2026-09-10,
+# same defect class as the Stripe form-action regression below).
+#
+# The wide directive is scoped to the pages that render the connect form
+# (/accounts, and /oauth/connect for its error banner): form-action exists
+# to stop cross-origin form hijacking on credential forms (login, register,
+# admin), and those pages have no business posting anywhere off-origin.
+# Review-gate finding (Gemini 3.8 Flash, 2026-09-10): the first cut applied
+# it to every response.
+_FORM_ACTION_WIDE_PAGES = ("/accounts", "/oauth/connect")
+
+
+def _csp_header(path: str | None = None) -> str:
+    """Compose the CSP for a response.
+
+    Reads settings.BILLING_ENABLED per response rather than baking it in at
+    import: the flag is env-fixed in production, and per-request composition
+    keeps tests able to flip it without reimporting the app.
+    """
+    wide = path is not None and path.rstrip("/") in _FORM_ACTION_WIDE_PAGES
+    form_action = "form-action 'self' https:" if wide else "form-action 'self'"
+    if settings.BILLING_ENABLED:
+        form_action += " " + _BILLING_FORM_ACTION_ORIGINS
+    return f"{_CSP_BASE}; {form_action}"
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -657,7 +703,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "camera=(), microphone=(), geolocation=(), payment=()"
             )
         if "Content-Security-Policy" not in h:
-            h["Content-Security-Policy"] = _CSP_HEADER
+            # The wide form-action (https:) is needed only on the pages that
+            # render the Mastodon connect form — see _FORM_ACTION_WIDE_PAGES.
+            h["Content-Security-Policy"] = _csp_header(request.url.path)
         # Emit HSTS unconditionally: browsers ignore the header over plain HTTP
         # (RFC 6797), so it is safe on http:// and correct on https://. Gating on
         # request.url.scheme silently fails behind a TLS-terminating reverse
@@ -909,13 +957,22 @@ def validate_url(url: str) -> str:
 
     Combines scheme check with SSRF protection (blocks private IPs,
     internal hostnames, non-http schemes, embedded credentials).
+    Malformed URLs that make urllib.parse.urlsplit itself raise ValueError
+    (unclosed IPv6 brackets like "https://[::1") are re-raised as 400s:
+    previously they escaped as an unhandled 500 (review-gate finding,
+    2026-09-10; the same ValueError path is reachable from the manual
+    add-account form).
     """
     if not re.match(r"^https?://", url):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
     try:
         validate_outbound_url(url)
     except SSRFError as e:
+        # SSRFError subclasses ValueError, so this clause MUST come first:
+        # an SSRF rejection should read as one, not as generic malformedness.
         raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"URL is malformed: {e}") from e
     return url.rstrip("/")
 
 
@@ -1012,25 +1069,42 @@ def _get_smtp_settings(mask_password: bool = False, user_id: int = 1):
     return smtp
 
 
-def _dependent_echo_count(user_id: int, destination_type: str, account_id: int) -> int:
-    """Live echoes still pointing at this destination.
+def _dependent_echo_count_tx(db, user_id: int, destination_type: str, account_id: int) -> int:
+    """Live echoes still pointing at this destination, on a caller-owned connection.
 
     Deleting a destination out from under an echo leaves it aimed at a row
     that no longer exists, and delivery then fails at run time with nothing
     said at delete time. The Bluesky delete guarded against this from the
     start; Mastodon and email did not.
+
+    Every delete route runs this check and the row DELETE on the same `db`
+    inside one `with get_db() as db:` block, so the count and the delete are
+    atomic — a concurrent request can't create a new echo against this
+    destination in between and slip past the check.
+    """
+    return db.execute(
+        """
+        SELECT COUNT(*) AS c FROM echoes
+         WHERE destination_type = ?
+           AND destination_id = ?
+           AND deleted_at IS NULL
+           AND user_id = ?
+        """,
+        (destination_type, account_id, user_id),
+    ).fetchone()["c"]
+
+
+def _dependent_echo_count(user_id: int, destination_type: str, account_id: int) -> int:
+    """Live echoes still pointing at this destination.
+
+    Convenience wrapper over :func:`_dependent_echo_count_tx` that opens its
+    own connection. Callers that must keep the check and a subsequent delete
+    atomic (all of the destination-delete routes) should call
+    ``_dependent_echo_count_tx`` directly inside their own ``get_db()`` block
+    instead of this function.
     """
     with get_db() as db:
-        return db.execute(
-            """
-            SELECT COUNT(*) AS c FROM echoes
-             WHERE destination_type = ?
-               AND destination_id = ?
-               AND deleted_at IS NULL
-               AND user_id = ?
-            """,
-            (destination_type, account_id, user_id),
-        ).fetchone()["c"]
+        return _dependent_echo_count_tx(db, user_id, destination_type, account_id)
 
 
 def _render_oauth_error(request: Request, message: str) -> HTMLResponse:
@@ -1304,7 +1378,7 @@ async def dashboard(request: Request):
             ).fetchone()["n"],
             "failed_posts": db.execute(
                 "SELECT COUNT(*) AS n FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
-                " WHERE pi.status = 'failed' AND e.user_id = ?",
+                " WHERE pi.status IN ('failed', 'gave_up') AND e.user_id = ?",
                 (uid,),
             ).fetchone()["n"],
         }
@@ -2458,13 +2532,13 @@ _CURSOR_RE = re.compile(r"^[0-9 :.\-]*\|\d+$")
 
 
 class _SavedSearchCountsCache:
-    """Per-user, 60s TTL cache of saved-search unread counts.
+    """Per-user, 60s TTL cache of saved-search item counts.
 
     Invalidation is keyed by max_item_id (see .get()) rather than pure
     time, so a stale entry never outlives the item that would change it by
     more than the TTL. Every route that mutates saved searches, feeds, or
     read-state must call .invalidate(uid) — wrapped in a class (instead of
-    the previous bare module-level dict) so every one of those 9 call
+    the previous bare module-level dict) so every one of those call
     sites reads as an obvious, greppable method name rather than a
     dict.pop() that looks like ordinary housekeeping and is easy to miss
     in a diff. Design-patterns audit finding 2.8.
@@ -2789,7 +2863,7 @@ async def reader_page(
         ).fetchone()
         max_item_id = max_row["m"] if max_row else 0
 
-        # Compute unread counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
+        # Compute counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
         saved_search_counts: dict[int, int] = {}
         if saved_searches:
             now_time = time.time()
@@ -2806,11 +2880,14 @@ async def reader_page(
 
                 for s in saved_searches:
                     s_filters, s_terms = _parse_reader_query(s["query"])
-                    # Default to unread counts, but is:read or is:starred override the default
-                    has_read_state = any(op == "is" and val in ("read", "starred") for op, val in s_filters)
+                    # Mirror the /reader route's own read-state handling for a
+                    # non-empty query (see the "unread/starred view filter is
+                    # skipped" comment above): no implicit unread-only default,
+                    # only an explicit is:read/is:unread/is:starred filters the
+                    # count. Saved-search queries are never empty (enforced at
+                    # creation), so this always matches what opening the saved
+                    # search actually shows.
                     s_where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL"]
-                    if not has_read_state:
-                        s_where.append("i.is_read = 0")
                     s_params: list = [uid]
                     s_text_scope = None
                     for op, val in s_filters:
@@ -2818,7 +2895,7 @@ async def reader_page(
                             if val == "starred":
                                 s_where.append("i.starred = 1")
                             elif val == "unread":
-                                pass
+                                s_where.append("i.is_read = 0")
                             elif val == "read":
                                 s_where.append("i.is_read = 1")
                         elif op == "feed":
@@ -3246,13 +3323,12 @@ def test_account(request: Request, account_id: int):
 @app.post("/api/accounts/{account_id}/delete")
 async def delete_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "mastodon", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This Mastodon account is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "mastodon", account_id):
+            return _render_accounts_error(
+                request,
+                "This Mastodon account is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM accounts WHERE id = ? AND user_id = ?", (account_id, uid)
         )
@@ -3299,13 +3375,12 @@ async def add_email_account(
 @app.post("/api/email-accounts/{account_id}/delete")
 async def delete_email_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "email", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This email address is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "email", account_id):
+            return _render_accounts_error(
+                request,
+                "This email address is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM email_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3406,13 +3481,12 @@ def test_bluesky_account(request: Request, account_id: int):
 @app.post("/api/bluesky-accounts/{account_id}/delete")
 def delete_bluesky_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "bluesky", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This Bluesky account is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "bluesky", account_id):
+            return _render_accounts_error(
+                request,
+                "This Bluesky account is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM bluesky_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3514,13 +3588,12 @@ def test_microblog_account(request: Request, account_id: int):
 @app.post("/api/microblog-accounts/{account_id}/delete")
 def delete_microblog_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    dependent = _dependent_echo_count(uid, "microblog", account_id)
-    if dependent:
-        return _render_accounts_error(
-            request,
-            "This micro.blog account is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "microblog", account_id):
+            return _render_accounts_error(
+                request,
+                "This micro.blog account is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM microblog_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3640,12 +3713,12 @@ def test_matrix_account(request: Request, account_id: int):
 @app.post("/api/matrix-accounts/{account_id}/delete")
 def delete_matrix_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    if _dependent_echo_count(uid, "matrix", account_id):
-        return _render_accounts_error(
-            request,
-            "This Matrix room is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "matrix", account_id):
+            return _render_accounts_error(
+                request,
+                "This Matrix room is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM matrix_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3741,12 +3814,12 @@ def test_discord_account(request: Request, account_id: int):
 @app.post("/api/discord-accounts/{account_id}/delete")
 def delete_discord_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    if _dependent_echo_count(uid, "discord", account_id):
-        return _render_accounts_error(
-            request,
-            "This Discord webhook is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "discord", account_id):
+            return _render_accounts_error(
+                request,
+                "This Discord webhook is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM discord_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -3767,8 +3840,13 @@ def add_webhook_account(
 
     Synchronous route: URL validation runs the SSRF guard (multi mode), and
     nothing is POSTed at connect time — the Test button sends the real test
-    delivery. Reconnecting the same URL updates the stored row (name and
-    headers refresh) instead of duplicating it.
+    delivery. Reconnecting the same URL updates the stored row (name always
+    refreshes) instead of duplicating it. Header values are treated like
+    credentials and never echoed back into the form, so a blank
+    ``headers_text`` on reconnect is the natural result of a display-name-only
+    edit, not a request to clear headers — it leaves the previously stored
+    headers untouched. Submitting non-empty headers still fully replaces the
+    old set.
     """
     url = url.strip()
     if not url:
@@ -3807,7 +3885,9 @@ def add_webhook_account(
             VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id, url) DO UPDATE SET
                 name = excluded.name,
-                headers = excluded.headers
+                headers = CASE WHEN excluded.headers != '{}'
+                               THEN excluded.headers
+                               ELSE webhook_accounts.headers END
             """,
             (display_name, url, dump_headers(headers), uid),
         )
@@ -3835,12 +3915,12 @@ def test_webhook_account(request: Request, account_id: int):
 @app.post("/api/webhook-accounts/{account_id}/delete")
 def delete_webhook_account(request: Request, account_id: int):
     uid = current_user_id(request)
-    if _dependent_echo_count(uid, "webhook", account_id):
-        return _render_accounts_error(
-            request,
-            "This webhook is used by echoes. Delete or reassign those echoes first.",
-        )
     with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "webhook", account_id):
+            return _render_accounts_error(
+                request,
+                "This webhook is used by echoes. Delete or reassign those echoes first.",
+            )
         db.execute(
             "DELETE FROM webhook_accounts WHERE id = ? AND user_id = ?",
             (account_id, uid),
@@ -4257,6 +4337,8 @@ def rename_folder(request: Request, folder_id: int, name: str = Form(...)):
             "UPDATE folders SET name = ? WHERE id = ? AND user_id = ?",
             (name, folder_id, uid),
         )
+    # Saved searches can filter on folder:<name>, so a rename changes them
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -4279,6 +4361,8 @@ def delete_folder(request: Request, folder_id: int):
             "DELETE FROM folders WHERE id = ? AND user_id = ?",
             (folder_id, uid),
         )
+    # Saved searches can filter on folder:<name>, so deleting one changes them
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -4304,6 +4388,8 @@ def set_feed_folder(request: Request, feed_id: int, folder_id: str = Form("")):
             "UPDATE feeds SET folder_id = ? WHERE id = ? AND user_id = ?",
             (target_folder_id, feed_id, uid),
         )
+    # Saved searches can filter on folder:<name>, so moving a feed changes them
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "folder_id": target_folder_id}
 
 
@@ -4605,6 +4691,8 @@ def import_opml(
                 break
         walk(body_elem if body_elem is not None else root, None, 1)
 
+    # Importing feeds and folders can alter saved-search matches
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(
         url=f"/feeds?imported={imported}&duplicate={duplicate}&invalid={invalid}&capped={capped}",
         status_code=303,
@@ -4677,6 +4765,9 @@ async def edit_feed(
                 "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
                 (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
             )
+    # Saved-search counts apply mute keywords and folder scoping, so editing
+    # either changes them.
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -5869,13 +5960,66 @@ def preview_template(
 
 # ── API: OAuth ───────────────────────────────────────────────────────────────
 
+def _display_instance(instance: str) -> str:
+    """Sanitize an instance string for display in a user-facing banner.
+
+    The raw input can carry embedded credentials (user:password@host);
+    echoing it verbatim would print the password back into the page.
+    Show the URL without userinfo when it parses, else a fixed label.
+    Review-gate finding (Gemini 3.8 Flash, 2026-09-10).
+    """
+    try:
+        parsed = urlsplit(instance)
+        if parsed.username or parsed.password:
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            return f"{parsed.scheme}://{host}{port}"
+    except ValueError:
+        pass
+    return instance
+
+
 @app.get("/oauth/connect")
 def oauth_connect(request: Request, instance: str = ""):
     """Start a session-bound Mastodon OAuth authorization flow."""
     if not instance:
         raise HTTPException(status_code=400, detail="Instance URL is required")
 
-    instance = validate_url(instance)
+    # Form input ("social.lol") is common; default the scheme to https
+    # instead of bouncing the user to a raw 400 JSON page. Only prefix when
+    # no scheme is present — a URL that already carries one must pass
+    # through validation unchanged.
+    instance = instance.strip().rstrip("/")
+    if "://" not in instance:
+        instance = f"https://{instance}"
+
+    try:
+        instance = validate_url(instance)
+    except HTTPException:
+        return _render_accounts_error(
+            request,
+            f"{_display_instance(instance)} isn't a usable Mastodon instance. "
+            "Check the URL (for example https://dmv.community) and try again.",
+        )
+
+    # OAuth authorization and token endpoints must be TLS (RFC 6749 3.1.3
+    # requires it for the user's credentials to survive the browser trip).
+    # http:// here would also be killed by the page's own CSP form-action
+    # ('self' https:) a hop later — reject it up front with a readable
+    # message instead.
+    if instance.startswith("http://"):
+        return _render_accounts_error(
+            request,
+            f"{_display_instance(instance)} uses http://, but Mastodon "
+            "instances must be reachable over https. Check the address.",
+        )
+
+    # Reduce to scheme + host so the authorize URL is always
+    # {origin}/oauth/authorize and oauth_apps caches on a stable origin —
+    # stray paths (/web, /@user) or query strings would otherwise corrupt
+    # both (review-gate finding, 2026-09-10).
+    parsed = urlparse(instance)
+    instance = f"{parsed.scheme}://{parsed.netloc}"
 
     # This cookie is independent from shared-secret auth. It ties the OAuth
     # callback to the browser session that initiated the flow.

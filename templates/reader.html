@@ -20,7 +20,7 @@
             <span class="reader-feed-name" title="{{ s.query }}">{{ s.name }}</span>
             <span class="reader-feed-meta">
               {% if saved_search_counts and saved_search_counts[s.id] %}
-              <span class="reader-feed-unread">{{ saved_search_counts[s.id] }}</span>
+              <span class="reader-search-count" title="{{ saved_search_counts[s.id] }} matching item{{ 's' if saved_search_counts[s.id] != 1 else '' }}">{{ saved_search_counts[s.id] }}</span>
               {% endif %}
             </span>
           </a>

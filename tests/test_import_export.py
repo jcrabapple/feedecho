@@ -230,6 +230,126 @@ class TestRoundTrip:
             assert second["existing_accounts"] == 1
 
 
+class TestAccountValidation:
+    """Finding #6: malformed accounts must raise ExportError, never a bare
+    DB exception, and must never insert a partial/invalid row."""
+
+    @pytest.mark.parametrize("section,account,missing_field", [
+        ("mastodon", {"id": 1, "name": "M", "instance": "https://m.example"}, "access_token"),
+        ("bluesky", {"id": 1, "name": "B", "handle": "h.bsky.social"}, "app_password"),
+        ("matrix", {"id": 1, "name": "Mx", "homeserver": "https://matrix.example", "access_token": "t"}, "room_id"),
+        ("discord", {"id": 1, "name": "D"}, "webhook_url"),
+        ("microblog", {"id": 1, "name": "Mb", "uid": "u"}, "token"),
+        ("webhook", {"id": 1, "name": "W"}, "url"),
+    ])
+    def test_missing_required_field_raises_export_error(
+        self, temp_db, section, account, missing_field
+    ):
+        payload = _payload(accounts={section: [account]})
+        with get_db() as db:
+            with pytest.raises(import_export.ExportError) as exc_info:
+                import_export.import_data(db, 1, payload)
+        assert missing_field in str(exc_info.value)
+        with get_db() as db:
+            table = import_export.ACCOUNT_TABLES[section]
+            count = db.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+        assert count == 0
+
+    def test_webhook_headers_dict_is_serialized_to_json_text(self, temp_db):
+        payload = _payload(accounts={
+            "webhook": [{
+                "id": 1, "name": "W", "url": "https://hooks.example/x",
+                "headers": {"X-Test": "1"},
+            }],
+        })
+        with get_db() as db:
+            summary = import_export.import_data(db, 1, payload)
+            assert summary["added_accounts"] == 1
+            row = db.execute("SELECT headers FROM webhook_accounts").fetchone()
+        assert isinstance(row["headers"], str)
+        assert json.loads(row["headers"]) == {"X-Test": "1"}
+
+    def test_webhook_headers_wrong_type_raises_export_error(self, temp_db):
+        payload = _payload(accounts={
+            "webhook": [{
+                "id": 1, "name": "W", "url": "https://hooks.example/x",
+                "headers": ["not", "a", "dict"],
+            }],
+        })
+        with get_db() as db:
+            with pytest.raises(import_export.ExportError):
+                import_export.import_data(db, 1, payload)
+
+    def test_discord_recomputes_hash_ignoring_stale_payload_value(self, temp_db):
+        """Finding #27: the hash in the payload must never be trusted --
+        it's always recomputed from webhook_url."""
+        payload = _payload(accounts={
+            "discord": [{
+                "id": 1, "name": "D",
+                "webhook_url": "https://discord.example/webhook/abc",
+                "webhook_url_hash": "not-the-real-hash",
+            }],
+        })
+        with get_db() as db:
+            summary = import_export.import_data(db, 1, payload)
+            assert summary["added_accounts"] == 1
+            row = db.execute("SELECT webhook_url_hash FROM discord_accounts").fetchone()
+        from security import hash_secret
+
+        assert row["webhook_url_hash"] == hash_secret(
+            "https://discord.example/webhook/abc"
+        )
+        assert row["webhook_url_hash"] != "not-the-real-hash"
+
+    def test_discord_empty_webhook_url_with_stale_hash_is_rejected(self, temp_db):
+        """An empty webhook_url with a leftover/forged webhook_url_hash must
+        not pass through as a usable dedup key -- validation rejects the
+        account outright rather than inserting a hash with no matching URL."""
+        payload = _payload(accounts={
+            "discord": [{
+                "id": 1, "name": "D", "webhook_url": "",
+                "webhook_url_hash": "stale-hash-from-a-different-url",
+            }],
+        })
+        with get_db() as db:
+            with pytest.raises(import_export.ExportError):
+                import_export.import_data(db, 1, payload)
+        with get_db() as db:
+            count = db.execute(
+                "SELECT COUNT(*) AS c FROM discord_accounts"
+            ).fetchone()["c"]
+        assert count == 0
+
+
+class TestPollIntervalClamp:
+    """Finding #26: an explicit poll_interval of 0 must clamp to the real
+    floor of 1, not be treated as falsy/missing and default to 15."""
+
+    def test_poll_interval_zero_clamps_to_one_not_default(self, temp_db):
+        payload = _payload(feeds=[
+            {"id": 1, "name": "F", "url": "https://a.example/rss", "poll_interval": 0},
+        ])
+        with get_db() as db:
+            import_export.import_data(db, 1, payload)
+            row = db.execute(
+                "SELECT poll_interval FROM feeds WHERE url = ?",
+                ("https://a.example/rss",),
+            ).fetchone()
+        assert row["poll_interval"] == 1
+
+    def test_poll_interval_missing_still_defaults_to_fifteen(self, temp_db):
+        payload = _payload(feeds=[
+            {"id": 1, "name": "F", "url": "https://a.example/rss"},
+        ])
+        with get_db() as db:
+            import_export.import_data(db, 1, payload)
+            row = db.execute(
+                "SELECT poll_interval FROM feeds WHERE url = ?",
+                ("https://a.example/rss",),
+            ).fetchone()
+        assert row["poll_interval"] == 15
+
+
 class TestQuota:
     def _setup_multi(self, monkeypatch, tmp_path, plan_limits):
         db_path = tmp_path / "multi.db"

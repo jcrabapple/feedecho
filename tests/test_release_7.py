@@ -60,6 +60,10 @@ def test_self_hosted_font_file_exists():
 
 
 def test_csp_no_longer_references_google_fonts():
-    csp = app_module._CSP_HEADER
+    # Self-hosting Inter: the CSP must not authorize Google's font CDNs.
+    # Assert on the base directive (the billing-gated form-action extras are
+    # composed per response and never add font sources).
+    csp = app_module._CSP_BASE
     assert "fonts.googleapis.com" not in csp
     assert "fonts.gstatic.com" not in csp
+    assert "fonts.googleapis.com" not in app_module._csp_header()

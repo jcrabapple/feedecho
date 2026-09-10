@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import auth
 import database
 import settings
+import app as app_module
 from app import _account_deletion_hooks, app
 
 
@@ -23,6 +24,12 @@ def multi_env(monkeypatch, tmp_path):
     database.init_db()
     auth._login_attempts.clear()
     auth._register_attempts.clear()
+    # The delete-password throttle bucket lives on the app module, not auth;
+    # the sqlite throttle test poisons it, and the PG test's freshly-registered
+    # user id collides with the poisoned small id -> spurious "Too many
+    # attempts" 200 instead of 303 (order-dependent, reproduced on clean
+    # master: sqlite throttle test then the PG class in one process).
+    app_module._delete_attempts.clear()
     return settings
 
 

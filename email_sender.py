@@ -7,6 +7,7 @@ verification, password reset).
 
 import html
 import logging
+import re
 import smtplib
 import ssl
 from email.mime.image import MIMEImage
@@ -132,7 +133,17 @@ def _send_via(cfg: dict, to_email: str, subject: str, body: str, images: list[di
 
     root["From"] = f"{from_name} <{from_email}>"
     root["To"] = to_email
-    root["Subject"] = subject
+    # Subject is built from untrusted feed content (an item title), unlike
+    # the other header-bound fields above, which are validated against
+    # embedded CR/LF at save time (see app.py's SMTP settings validation and
+    # utils.EMAIL_RE). email.mime's compat32 policy raises HeaderParseError/
+    # HeaderWriteError on serialization if a header value contains a raw
+    # \r or \n, so an unsanitized title with an embedded newline (e.g. from
+    # a CDATA title) would connect to and authenticate against the SMTP
+    # server, then blow up on root.as_string() below — identically on every
+    # retry, permanently breaking delivery for that item. Strip it here so
+    # this is defended regardless of caller.
+    root["Subject"] = re.sub(r"[\r\n]+", " ", subject)
 
     # Plain text version (template output is plain text)
     alternative.attach(MIMEText(body, "plain"))

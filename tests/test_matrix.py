@@ -365,6 +365,43 @@ class TestSendMessage:
         with pytest.raises(matrix.MatrixError):
             matrix.send_message("https://matrix.org", "tok", "!room:example.org", "   ", "txn-1")
 
+    def test_truncated_mid_url_not_linkified(self):
+        """Finding #24 (bug review): _truncate_body cuts on a plain char
+        count with no URL awareness, so a long trailing link can be sliced
+        in half with the ellipsis glued onto what's left. html_body must
+        not wrap that partial string in a dead/garbled <a href>.
+        """
+        with mock.patch.object(matrix, "pinned_request") as req:
+            req.return_value = _resp({"event_id": "$evt:example.org"})
+            long_url = "https://example.com/" + ("a" * 40000)
+            matrix.send_message(
+                "https://matrix.org", "tok", "!room:example.org",
+                f"Check this out: {long_url}", "txn-1",
+            )
+        _, kwargs = req.call_args
+        body = kwargs["json"]
+        # The plain body is truncated and ends with the ellipsis marker.
+        assert body["body"].endswith("…")
+        # The formatted body must not contain an anchor wrapping the
+        # truncated (now-invalid) URL.
+        assert "<a href=\"https://example.com/a" not in body["formatted_body"]
+        # It should still render as inert plain text, ellipsis and all.
+        assert body["formatted_body"].endswith("…")
+
+class TestHtmlBody:
+    def test_full_url_is_linkified(self):
+        html = matrix.html_body("See https://example.com/post now")
+        assert '<a href="https://example.com/post">https://example.com/post</a>' in html
+
+    def test_url_with_truncation_ellipsis_left_as_plain_text(self):
+        # Simulates the output of _truncate_body cutting mid-URL: the
+        # ellipsis lands directly after the partial URL with no separating
+        # whitespace, so the URL regex still matches it as one "URL".
+        text = "See https://example.com/really-long-path-that-got-cut…"
+        html = matrix.html_body(text)
+        assert "<a href" not in html
+        assert "https://example.com/really-long-path-that-got-cut…" in html
+
 class TestTransactionId:
     def test_deterministic(self):
         assert matrix.transaction_id(1, "item-1") == matrix.transaction_id(1, "item-1")

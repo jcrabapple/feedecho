@@ -611,6 +611,57 @@ class TestWebhookRoutes:
         assert rows[0]["name"] == "New"
         assert webhook.load_headers(rows[0]["headers"]) == {"Authorization": "two"}
 
+    def test_reconnect_blank_headers_preserves_existing(self, multi_client):
+        """A name-only edit (Headers left blank, as the form invites) must not
+        wipe previously-stored headers — see the bug review's Finding #8."""
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Old", "headers_text": "Authorization: keep-me"},
+            follow_redirects=False,
+        )
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "New", "headers_text": ""},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT name, headers FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert row["name"] == "New"
+        assert webhook.load_headers(row["headers"]) == {"Authorization": "keep-me"}
+
+    def test_reconnect_new_headers_still_replace_old(self, multi_client):
+        """Only a blank submission is sticky; real new headers still win."""
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Old", "headers_text": "Authorization: one"},
+            follow_redirects=False,
+        )
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "New", "headers_text": "Authorization: two"},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT headers FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert webhook.load_headers(row["headers"]) == {"Authorization": "two"}
+
+    def test_first_connect_with_blank_headers_stores_empty(self, multi_client):
+        """No prior row to preserve: blank headers on first connect store {}."""
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Fresh"},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT headers FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert webhook.load_headers(row["headers"]) == {}
+
     def test_test_endpoint(self, multi_client):
         multi_client.post(
             "/api/webhook-accounts",

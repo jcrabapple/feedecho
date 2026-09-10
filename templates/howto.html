@@ -30,6 +30,7 @@
         <li>In the Bluesky app, open Settings → Privacy and security → App passwords and create one.</li>
         <li>Under <strong>Connect Bluesky</strong>, enter your handle and the app password.</li>
         <li>Click <strong>Connect</strong>. The handle is resolved to your personal data server automatically.</li>
+        <li>Use the <strong>Test</strong> button on the connected account to confirm it before relying on it.</li>
     </ol>
     <h3>Micro.blog</h3>
     <ol class="howto-steps">
@@ -46,9 +47,8 @@
     </ol>
     <h3>Email</h3>
     <ol class="howto-steps">
-        <li>Under <strong>Add email account</strong>, enter a name and the destination address.</li>
-        <li>In <a href="/settings">Settings</a>, configure SMTP so FeedEcho can send on your behalf.</li>
-        <li>Use the <strong>Test</strong> button to confirm delivery before relying on it.</li>
+        <li>Under <strong>Add email address</strong>, enter a name and the destination address.</li>
+        <li>In <a href="/settings">Settings</a>, configure SMTP so FeedEcho can send on your behalf, then use the <strong>Send Test Email</strong> button there to confirm delivery before relying on it.</li>
     </ol>
     <h3>Discord</h3>
     <ol class="howto-steps">
@@ -68,18 +68,31 @@
     <h2>3. Create an echo</h2>
     <p>An echo connects one feed to one account with rules for what gets posted.</p>
     <ol class="howto-steps">
-        <li>Open <a href="/echoes">Echoes</a> and click <strong>New echo</strong>.</li>
+        <li>Open <a href="/echoes">Echoes</a> and fill in the <strong>New echo</strong> form at the top of the page.</li>
         <li>Pick the <strong>feed</strong> and the <strong>account</strong>.</li>
         <li>Write a <strong>template</strong> for the post. Variables like <code>{{ '{{ title }}' }}</code> and <code>{{ '{{ link }}' }}</code> pull from each feed item — the Echoes page lists the full set of available variables.</li>
         <li>Optional rules:
             <ul>
                 <li><strong>Filter keywords</strong> — post only items containing a keyword, or skip items containing it.</li>
                 <li><strong>Content warning</strong> — for Mastodon, adds a spoiler label and marks posts sensitive.</li>
+                <li><strong>Attach image</strong> — include the item's image(s) with the post where the destination supports media uploads.</li>
+                <li><strong>Drip limit</strong> — cap the echo at N posts per hour; extra items wait in a queue and release as the window slides. 0 = off.</li>
                 <li><strong>Digest</strong> — email destinations only; batches items into one email per hour instead of sending per item.</li>
             </ul>
         </li>
-        <li>Save. New feed items post on the next poll, up to the drip limit you set.</li>
+        <li>Click <strong>Create Echo</strong>. New feed items post on the next poll, subject to the drip limit you set.</li>
     </ol>
+</section>
+
+<section>
+    <h2>4. Read your feeds</h2>
+    <p>FeedEcho also has a built-in <a href="/reader">Reader</a>, so you can read items in place instead of piping everything to your social accounts.</p>
+    <ul>
+        <li><strong>Folders</strong> group feeds; import an OPML file from another reader to bring your subscriptions over.</li>
+        <li><strong>Unread and starred</strong> state is tracked per item, and <strong>saved searches</strong> keep the queries you use most.</li>
+        <li><strong>Compose desk</strong> — turn any item into a post without leaving the page: pick any of your connected destinations, tweak the pre-filled title + link text, optionally attach the item's image, then post now or add to the queue.</li>
+        <li>Reading has no posting side effects: an item is delivered only when one of your echoes picks it up.</li>
+    </ul>
 </section>
 
 <section>
@@ -88,6 +101,7 @@
         <li><strong>History</strong> keeps a record of every post and every failure, with retries for transient errors.</li>
         <li><strong>Deleting</strong> a feed or echo is soft: history is preserved.</li>
         <li><strong>Failure alerts</strong>: configure a notify email in Settings to hear about repeated failures.</li>
+        <li><strong>Everything is editable</strong>: feeds, echoes, and accounts can be updated or removed at any time. FeedEcho refuses to delete a destination that echoes still point at — delete or reassign those echoes first, so nothing is left aimed at a missing account.</li>
     </ul>
 </section>
 {% endblock %}

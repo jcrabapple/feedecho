@@ -322,6 +322,43 @@ class TestUpgradeDedupe:
             ).fetchall()
             assert len(idx) == 2
 
+    def test_echo_collision_merged_not_duplicated(self, temp_db):
+        """If the surviving feed already has an echo to the same account, a
+        blind feed_id repoint of the duplicate feed's echo would leave TWO
+        identical echoes on one feed and every new item would post twice.
+        The dedupe must merge: posted_items move to the surviving echo and
+        the colliding echo is deleted."""
+        with get_db() as db:
+            self._make_legacy_duplicates(db)
+            # Base helper already created E1 (feed 1 = survivor, account 1).
+            # Add E2 on the DUPLICATE feed with the same destination: after
+            # the feed dedupe it would collide with E1 (same feed, same
+            # destination) and must be merged into it.
+            db.execute(
+                "INSERT INTO echoes (feed_id, destination_type, destination_id,"
+                " template, user_id) VALUES (2, 'mastodon', 1, 't', 1)"
+            )
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, status)"
+                " VALUES (2, 'i9', 'sent')"
+            )
+
+        init_db()
+
+        with get_db() as db:
+            echoes = db.execute(
+                "SELECT id, feed_id, destination_id FROM echoes"
+            ).fetchall()
+            assert len(echoes) == 1, (
+                "echo collision was not merged: duplicate echo survived"
+            )
+            posts = db.execute(
+                "SELECT echo_id, item_id FROM posted_items WHERE item_id = 'i9'"
+            ).fetchall()
+            # History preserved, moved onto the surviving echo.
+            assert len(posts) == 1
+            assert posts[0]["echo_id"] == echoes[0]["id"]
+
     def test_conflict_do_nothing_insert_reports_rowcount_zero(self, temp_db):
         """The exact INSERT the OPML import route relies on: a conflicting
         insert must be skipped silently and report rowcount 0, not raise."""

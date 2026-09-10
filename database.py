@@ -273,6 +273,39 @@ def _dedupe_accounts_for_unique_index(db) -> None:
         ).fetchall()
         for s in stale:
             old_id = s["id"]
+            # Echoes that would collide after the repoint (an echo already
+            # points at the surviving account from the same feed): merge post
+            # history into the surviving echo, then drop the duplicate — a
+            # blind repoint would double-post every item to the destination.
+            collisions = db.execute(
+                "SELECT o.id AS old_echo_id, k.id AS keep_echo_id"
+                " FROM echoes o JOIN echoes k"
+                " ON k.user_id = o.user_id AND k.feed_id = o.feed_id"
+                " AND k.destination_type = o.destination_type"
+                " AND k.destination_id = ?"
+                " AND k.deleted_at IS NULL"
+                " WHERE o.destination_type = 'mastodon' AND o.destination_id = ?"
+                " AND o.deleted_at IS NULL",
+                (keep_id, old_id),
+            ).fetchall()
+            for c in collisions:
+                db.execute(
+                    "UPDATE posted_items SET echo_id = ? WHERE echo_id = ?",
+                    (c["keep_echo_id"], c["old_echo_id"]),
+                )
+                db.execute("DELETE FROM echoes WHERE id = ?", (c["old_echo_id"],))
+            # Duplicate queued jobs for the same item, pointing at the old
+            # account while a queued job for the survivor already exists.
+            db.execute(
+                "DELETE FROM queued_posts"
+                " WHERE destination_type = 'mastodon' AND destination_id = ?"
+                " AND status = 'queued'"
+                " AND EXISTS (SELECT 1 FROM queued_posts q2 WHERE q2.feed_id = queued_posts.feed_id"
+                " AND q2.item_id = queued_posts.item_id"
+                " AND q2.destination_type = 'mastodon'"
+                " AND q2.destination_id = ? AND q2.status = 'queued')",
+                (old_id, keep_id),
+            )
             db.execute(
                 "UPDATE echoes SET destination_id = ?"
                 " WHERE destination_type = 'mastodon' AND destination_id = ?",
@@ -311,6 +344,38 @@ def _dedupe_feeds_for_unique_index(db) -> None:
         ).fetchall()
         for s in stale:
             old_id = s["id"]
+            # Echoes that would collide after the repoint (the surviving feed
+            # already has an echo to the same destination): preserve their
+            # post history by moving posted_items to the surviving echo, then
+            # drop the duplicate echo. A blind repoint here would leave two
+            # identical echoes on one feed and every item would post twice.
+            collisions = db.execute(
+                "SELECT o.id AS old_echo_id, k.id AS keep_echo_id"
+                " FROM echoes o JOIN echoes k"
+                " ON k.user_id = o.user_id AND k.feed_id = ?"
+                " AND k.destination_type = o.destination_type"
+                " AND k.destination_id = o.destination_id"
+                " AND k.deleted_at IS NULL"
+                " WHERE o.feed_id = ? AND o.deleted_at IS NULL",
+                (keep_id, old_id),
+            ).fetchall()
+            for c in collisions:
+                db.execute(
+                    "UPDATE posted_items SET echo_id = ? WHERE echo_id = ?",
+                    (c["keep_echo_id"], c["old_echo_id"]),
+                )
+                db.execute("DELETE FROM echoes WHERE id = ?", (c["old_echo_id"],))
+            # Duplicate queued jobs for the same item+destination (both feeds
+            # queued the item before the dedupe): keep the survivor's row.
+            db.execute(
+                "DELETE FROM queued_posts WHERE feed_id = ? AND status = 'queued'"
+                " AND EXISTS (SELECT 1 FROM queued_posts q2 WHERE q2.feed_id = ?"
+                " AND q2.item_id = queued_posts.item_id"
+                " AND q2.destination_type = queued_posts.destination_type"
+                " AND q2.destination_id = queued_posts.destination_id"
+                " AND q2.status = 'queued')",
+                (old_id, keep_id),
+            )
             db.execute(
                 "UPDATE echoes SET feed_id = ? WHERE feed_id = ?",
                 (keep_id, old_id),

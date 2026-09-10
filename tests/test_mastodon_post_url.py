@@ -157,6 +157,15 @@ class TestMastodonAuthErrorIsPermanent:
         assert status == "failed"
         assert post_url is None
 
+        # The (MastodonError, httpx.HTTPStatusError) branch must record the
+        # API's own failure text, not the flat generic string the old
+        # `except Exception:` fallback produced.
+        with get_db() as db:
+            row = db.execute(
+                "SELECT error_message FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+        assert row["error_message"] == "Mastodon delivery failed: server error"
+
     def test_upload_media_auth_error_fails_the_post_permanently(self, db_tmp, monkeypatch, setup_echo):
         """A token rejected at IMAGE UPLOAD time must finalize the post as
         permanently failed right there, not fall through to post_status.

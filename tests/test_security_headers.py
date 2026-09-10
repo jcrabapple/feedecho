@@ -37,12 +37,42 @@ def test_security_headers_present_on_html(client):
 
 
 def test_csp_stays_strict_when_billing_disabled(client, monkeypatch):
-    # Self-hosted: no billing seam is mounted, so no form submission ever
-    # needs to leave the origin — form-action stays at exactly 'self'.
+    # Self-hosted: no billing seam is mounted, so no form submission beyond
+    # the Mastodon connect form ever needs to leave the origin. Default
+    # pages keep the strict directive — pinned as an exact token set, not a
+    # substring: "form-action 'self'" is a prefix of the wide
+    # "form-action 'self' https:" and a bare `in` passes vacuously (gate
+    # finding, 2026-09-10).
     monkeypatch.setattr(settings, "BILLING_ENABLED", False)
     csp = client.get("/healthz").headers.get("Content-Security-Policy", "")
-    assert "form-action 'self'" in csp
+    directives = {p.strip() for p in csp.split(";") if p.strip()}
+    assert "form-action 'self'" in directives
+    assert "form-action 'self' https:" not in directives
     assert "stripe.com" not in csp
+
+
+def test_csp_form_action_wide_only_on_connect_form_pages(client):
+    # /accounts renders the connect form whose redirect chain leaves the
+    # origin, so its document needs form-action 'self' https:. Credential
+    # pages (login, register, admin) do NOT — pin the difference: the same
+    # directive on both would mean the scoping silently regressed.
+    def form_action_of(path):
+        csp = client.get(path).headers.get("Content-Security-Policy", "")
+        return next(
+            p.strip() for p in csp.split(";") if p.strip().startswith("form-action")
+        )
+
+    assert form_action_of("/accounts") == "form-action 'self' https:"
+    assert form_action_of("/login") == "form-action 'self'"
+
+
+def test_csp_wide_pages_include_stripe_when_billing_enabled(client, monkeypatch):
+    monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+    csp = client.get("/accounts").headers.get("Content-Security-Policy", "")
+    assert (
+        "form-action 'self' https: https://checkout.stripe.com https://billing.stripe.com"
+        in csp
+    )
 
 
 def test_csp_allows_stripe_redirects_when_billing_enabled(client, monkeypatch):
@@ -53,13 +83,28 @@ def test_csp_allows_stripe_redirects_when_billing_enabled(client, monkeypatch):
     # both origins must be listed or the redirect is silently killed and
     # the customer never reaches the payment page (the v1.42.0 regression,
     # fixed 2026-09-10). Pinned as a full directive: an exact-match here is
-    # what a future CSP edit must consciously update.
+    # what a future CSP edit must consciously update. Non-connect pages
+    # keep Stripe WITHOUT the wide scheme: 'self' https: would make the
+    # pinned assertion vacuous.
     monkeypatch.setattr(settings, "BILLING_ENABLED", True)
     csp = client.get("/healthz").headers.get("Content-Security-Policy", "")
     assert (
         "form-action 'self' https://checkout.stripe.com https://billing.stripe.com"
         in csp
     )
+
+
+def test_csp_form_action_allows_https_redirect_hops(client):
+    # The accounts-page connect form is a form submission (method="get" is
+    # still a form submission for CSP) whose redirect chain lands on the
+    # user-chosen Mastodon instance's /oauth/authorize. form-action is
+    # enforced on EVERY hop, and the instance origin is unbounded, so the
+    # only honest allowance is scheme-level: 'self' plus https:. Without
+    # it, connecting any instance was blocked client-side with only a
+    # console error (reported by a beta user 2026-09-10, same defect class
+    # as the Stripe form-action regression).
+    csp = client.get("/accounts").headers.get("Content-Security-Policy", "")
+    assert "form-action 'self' https:" in csp
 
 
 def test_hsts_emitted_unconditionally(client):

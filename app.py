@@ -21,7 +21,7 @@ import secrets
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlparse
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -649,14 +649,32 @@ _BILLING_FORM_ACTION_ORIGINS = (
 )
 
 
-def _csp_header() -> str:
+# The accounts-page connect form is a form submission (GET forms count)
+# whose redirect chain lands on the user-chosen Mastodon instance's
+# /oauth/authorize. The browser enforces form-action on EVERY hop of a
+# form submission's redirect chain, and that origin is unbounded, so the
+# directive has to allow https: at scheme level. Without it, connecting
+# ANY instance was silently blocked client-side (reported 2026-09-10,
+# same defect class as the Stripe form-action regression below).
+#
+# The wide directive is scoped to the pages that render the connect form
+# (/accounts, and /oauth/connect for its error banner): form-action exists
+# to stop cross-origin form hijacking on credential forms (login, register,
+# admin), and those pages have no business posting anywhere off-origin.
+# Review-gate finding (Gemini 3.8 Flash, 2026-09-10): the first cut applied
+# it to every response.
+_FORM_ACTION_WIDE_PAGES = ("/accounts", "/oauth/connect")
+
+
+def _csp_header(path: str | None = None) -> str:
     """Compose the CSP for a response.
 
     Reads settings.BILLING_ENABLED per response rather than baking it in at
     import: the flag is env-fixed in production, and per-request composition
     keeps tests able to flip it without reimporting the app.
     """
-    form_action = "form-action 'self'"
+    wide = path is not None and path.rstrip("/") in _FORM_ACTION_WIDE_PAGES
+    form_action = "form-action 'self' https:" if wide else "form-action 'self'"
     if settings.BILLING_ENABLED:
         form_action += " " + _BILLING_FORM_ACTION_ORIGINS
     return f"{_CSP_BASE}; {form_action}"
@@ -685,7 +703,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "camera=(), microphone=(), geolocation=(), payment=()"
             )
         if "Content-Security-Policy" not in h:
-            h["Content-Security-Policy"] = _csp_header()
+            # The wide form-action (https:) is needed only on the pages that
+            # render the Mastodon connect form — see _FORM_ACTION_WIDE_PAGES.
+            h["Content-Security-Policy"] = _csp_header(request.url.path)
         # Emit HSTS unconditionally: browsers ignore the header over plain HTTP
         # (RFC 6797), so it is safe on http:// and correct on https://. Gating on
         # request.url.scheme silently fails behind a TLS-terminating reverse
@@ -937,13 +957,22 @@ def validate_url(url: str) -> str:
 
     Combines scheme check with SSRF protection (blocks private IPs,
     internal hostnames, non-http schemes, embedded credentials).
+    Malformed URLs that make urllib.parse.urlsplit itself raise ValueError
+    (unclosed IPv6 brackets like "https://[::1") are re-raised as 400s:
+    previously they escaped as an unhandled 500 (review-gate finding,
+    2026-09-10; the same ValueError path is reachable from the manual
+    add-account form).
     """
     if not re.match(r"^https?://", url):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
     try:
         validate_outbound_url(url)
     except SSRFError as e:
+        # SSRFError subclasses ValueError, so this clause MUST come first:
+        # an SSRF rejection should read as one, not as generic malformedness.
         raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"URL is malformed: {e}") from e
     return url.rstrip("/")
 
 
@@ -5919,13 +5948,66 @@ def preview_template(
 
 # ── API: OAuth ───────────────────────────────────────────────────────────────
 
+def _display_instance(instance: str) -> str:
+    """Sanitize an instance string for display in a user-facing banner.
+
+    The raw input can carry embedded credentials (user:password@host);
+    echoing it verbatim would print the password back into the page.
+    Show the URL without userinfo when it parses, else a fixed label.
+    Review-gate finding (Gemini 3.8 Flash, 2026-09-10).
+    """
+    try:
+        parsed = urlsplit(instance)
+        if parsed.username or parsed.password:
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            return f"{parsed.scheme}://{host}{port}"
+    except ValueError:
+        pass
+    return instance
+
+
 @app.get("/oauth/connect")
 def oauth_connect(request: Request, instance: str = ""):
     """Start a session-bound Mastodon OAuth authorization flow."""
     if not instance:
         raise HTTPException(status_code=400, detail="Instance URL is required")
 
-    instance = validate_url(instance)
+    # Form input ("social.lol") is common; default the scheme to https
+    # instead of bouncing the user to a raw 400 JSON page. Only prefix when
+    # no scheme is present — a URL that already carries one must pass
+    # through validation unchanged.
+    instance = instance.strip().rstrip("/")
+    if "://" not in instance:
+        instance = f"https://{instance}"
+
+    try:
+        instance = validate_url(instance)
+    except HTTPException:
+        return _render_accounts_error(
+            request,
+            f"{_display_instance(instance)} isn't a usable Mastodon instance. "
+            "Check the URL (for example https://dmv.community) and try again.",
+        )
+
+    # OAuth authorization and token endpoints must be TLS (RFC 6749 3.1.3
+    # requires it for the user's credentials to survive the browser trip).
+    # http:// here would also be killed by the page's own CSP form-action
+    # ('self' https:) a hop later — reject it up front with a readable
+    # message instead.
+    if instance.startswith("http://"):
+        return _render_accounts_error(
+            request,
+            f"{_display_instance(instance)} uses http://, but Mastodon "
+            "instances must be reachable over https. Check the address.",
+        )
+
+    # Reduce to scheme + host so the authorize URL is always
+    # {origin}/oauth/authorize and oauth_apps caches on a stable origin —
+    # stray paths (/web, /@user) or query strings would otherwise corrupt
+    # both (review-gate finding, 2026-09-10).
+    parsed = urlparse(instance)
+    instance = f"{parsed.scheme}://{parsed.netloc}"
 
     # This cookie is independent from shared-secret auth. It ties the OAuth
     # callback to the browser session that initiated the flow.

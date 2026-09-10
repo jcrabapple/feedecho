@@ -8,7 +8,7 @@ Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
-A paid hosted version is coming soon at [feedecho.net](https://feedecho.net).
+A hosted version with accounts, plans, and a 14-day free trial is live at [feedecho.net](https://feedecho.net). The self-hosted, single-tenant mode documented here is the complete cross-posting product.
 
 ## Features
 
@@ -19,9 +19,10 @@ A paid hosted version is coming soon at [feedecho.net](https://feedecho.net).
 - **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
 - **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, or anything you run yourself
-- **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
+- **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
 - **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, and webhook endpoints
 - **Per-feed poll intervals** — each feed checked on its own schedule
+- **Built-in feed reader** — read items in place instead of a third-party app: folders with OPML import/export, unread and starred tracking, saved searches, a full-text view, and a compose desk that turns any item into a post without leaving FeedEcho
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
@@ -32,6 +33,7 @@ A paid hosted version is coming soon at [feedecho.net](https://feedecho.net).
 - **Mobile-responsive** — tables convert to cards, forms stack, 44px touch targets
 - **Idempotent posting** — failed posts are retried, duplicates are prevented
 - **Auto-initialization** — feeds set their baseline on first fetch, no manual init needed
+- **Import/export** — back up or move your whole setup (feeds, echoes, and per-destination accounts) as one JSON file; import is idempotent and re-links echoes to the recreated rows
 - **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, Matrix, Discord, and webhooks
 
 ## Tech Stack
@@ -102,7 +104,7 @@ docker run -d --name feedecho \
 | `FEEDECHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. |
 | `FEEDECHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDECHO_BASE_URL`, then to the project repo. |
 | `FEEDECHO_DB_PATH` | no | SQLite path (default `/app/data/feedecho.db` in Docker, `./feedecho.db` otherwise) |
-| `FEEDECHO_STATE_SECRET` | no | OAuth state signing secret (defaults to `FEEDECHO_AUTH_TOKEN`) |
+| `FEEDECHO_STATE_SECRET` | required in multi mode (32+ chars) | OAuth state signing secret. In multi mode the app refuses to start without it. Single mode falls back to `FEEDECHO_AUTH_TOKEN`, then a random per-process value. |
 | `FEEDECHO_ALLOW_BACKDATED_ENTRIES` | no | Set to `1` to deliver feed items that appear positionally older than the cursor but whose publish date is within `FEEDECHO_MAX_BACKDATED_ENTRY_DAYS` of now. Off by default. |
 | `FEEDECHO_MAX_BACKDATED_ENTRY_DAYS` | no | How many days back to accept backdated entries (default `3`). Only consulted when `FEEDECHO_ALLOW_BACKDATED_ENTRIES=1`. |
 
@@ -123,7 +125,7 @@ git clone https://github.com/jcrabapple/feedecho.git
 cd feedecho
 python -m venv .venv
 source .venv/bin/activate
-pip install fastapi "uvicorn[standard]" jinja2 python-multipart feedparser httpx apscheduler
+pip install fastapi "uvicorn[standard]" jinja2 python-multipart feedparser httpx apscheduler cryptography pillow
 FEEDECHO_AUTH_TOKEN=your-token python -m uvicorn app:app --host 0.0.0.0 --port 8453
 ```
 
@@ -167,8 +169,8 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 
 - Accounts connect via **App Passwords**, which are scoped to creating posts (and other app activity) and can be revoked individually without changing your main password.
 - Sessions are cached per account (access + refresh JWTs in SQLite) and refreshed automatically; expired tokens trigger a transparent re-login and one retry.
-- Posts are truncated to **300 graphemes** (Unicode-aware) and URLs in the text get proper link facets, so links are clickable everywhere.
-- Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed; alt text uses your AI vision config when enabled. Images are capped at 1 MB and jpeg/png/webp/gif (Bluesky's limits).
+- Posts are truncated to **300 graphemes** (Unicode-aware) and, separately, to Bluesky's 3000-byte limit on the post text; URLs in the text get proper link facets, so links are clickable everywhere.
+- Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed; alt text uses your AI vision config when enabled. Images are capped at 2 MB and jpeg/png/webp/gif (Bluesky's limits); oversized JPEG/PNG/WebP sources are downscaled or re-encoded to fit automatically.
 - Content warnings and visibility settings are Mastodon-only and are ignored for Bluesky posts.
 
 ### Matrix details
@@ -217,6 +219,7 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ tags }}` | Raw tag list |
 | `{{ hashtags }}` | Feed tags as #hashtags |
 | `{{ image_url }}` | First image URL from the item |
+| `{{ content_link }}` | First outbound link inside the item's content (link-blogs) |
 | `{{ feed_name }}` | Name of the source feed |
 
 Legacy spellings `{{ date:iso }}` and `{{ date:short }}` keep working.
@@ -238,14 +241,15 @@ happens.
 
 ## Architecture
 
-FeedEcho is ~8,000 lines of Python across a dozen small modules — no ORM, no build step. The shape:
+FeedEcho is ~19,000 lines of Python across 27 focused modules — no ORM, no build step. The shape:
 
 - `app.py` — FastAPI routes, auth middleware, OAuth callbacks
 - `database.py` — dual-dialect storage layer (SQLite WAL / Postgres) with idempotent migrations
 - `feed_parser.py` — feed fetching with SSRF validation, size caps, and normalized item shapes
 - `scheduler.py` — the dispatch engine: per-feed polling, atomic post claims, retries, drip/digest queues
-- `mastodon.py` / `bluesky.py` / `microblog.py` — one client module per destination
+- `mastodon.py` / `bluesky.py` / `microblog.py` / `matrix.py` / `discord.py` / `webhook.py` — one client module per destination
 - `oauth.py` — Mastodon OAuth 2.0 flow with signed state
+- `reader` views live in `app.py` + `templates/reader*.html` + `static/js/app.js` (folders, unread/star state, saved searches, compose desk)
 - `plans.py` / `invites.py` — hosted-mode plan limits and registration gating (dormant in self-hosted mode)
 - `template_engine.py` — sandboxed Jinja2 rendering
 - `email_sender.py` — SMTP dispatch
@@ -279,7 +283,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 
 ### Secrets handling
 
-- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, and OAuth client secrets** are stored in the local database, unencrypted at rest. If an attacker gains filesystem access to the server, they can read them. All of these credentials are scoped (app passwords and platform tokens can be revoked individually at the source platform without touching your main passwords).
+- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, and OAuth client secrets** are scoped credentials — revoke any of them at the source platform without touching your main passwords. At rest they are encrypted (Fernet) whenever the app runs in multi-tenant mode with `FEEDECHO_CREDENTIAL_KEY` set; in single-tenant mode they are stored plaintext because you own the database and the encryption key would live beside it.
 - **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
 - The `FEEDECHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
@@ -293,7 +297,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 
 ### Network
 
-- All outbound HTTP uses httpx with a 30-second timeout. FeedEcho makes requests to: the feed URL (user-provided), the Mastodon instance API (user-provided), micro.blog's Micropub endpoints (via your token), your Matrix homeserver (user-provided), and the SMTP server (admin-configured). No telemetry, no phone-home, no analytics.
+- All outbound HTTP uses httpx with bounded timeouts (30 s by default, 60 s for Mastodon media uploads). FeedEcho makes requests to: the feed URL and any images in it (user-provided), the APIs of the destinations you connect — Mastodon instances, Bluesky's AppView/PDS/PLC directory, micro.blog's Micropub endpoints, your Matrix homeserver, Discord and generic webhook URLs (all user-provided) — and the SMTP server (admin-configured). No telemetry, no phone-home, no analytics.
 - Even without `FEEDECHO_AUTH_TOKEN`, FeedEcho is designed to run behind a reverse proxy or tunnel (Cloudflare Tunnel, nginx, etc.) with access control at the network layer. The built-in auth is a lightweight fallback for when a reverse proxy isn't available.
 
 ### Configuration

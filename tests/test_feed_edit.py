@@ -250,12 +250,16 @@ class TestFeedEditInvalidatesSavedSearchCache:
 
         def _saved_search_badge(html: str, search_id: int) -> int:
             m = re.search(
-                r'href="/reader\?saved=%d(?:&amp;fulltext=1)?".*?</a>' % search_id,
+                r'href="/reader\?saved=%d(?:&amp;fulltext=1)?"' % search_id,
                 html,
                 re.S,
             )
             assert m, f"saved search {search_id} link not found in page"
-            badge = re.search(r'reader-feed-unread">(\d+)</span>', m.group(0))
+            anchor = html[m.start(): html.find("</a>", m.end()) + 4]
+            badge = re.search(
+                r'class="reader-search-count"[^>]*>(\d+)</span>',
+                anchor,
+            )
             return int(badge.group(1)) if badge else 0
 
         # Populate the cache: unmuted, "widget" matches the one unread item.

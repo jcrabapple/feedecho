@@ -153,14 +153,22 @@ def _create_saved_search(client, name, query):
 
 
 def _saved_search_badge(html: str, s_id: int) -> int:
-    """Extract the sidebar count badge for one saved search's link."""
+    """Extract the sidebar count badge for one saved search's link.
+
+    Strict to ``reader-search-count`` (the muted total-match styling);
+    scoped to the saved search's own <a> block so a per-feed unread badge
+    with the same digits can never satisfy this check.
+    """
     m = re.search(
-        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?".*?</a>' % s_id,
+        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?"' % s_id,
         html,
         re.S,
     )
     assert m, f"saved search {s_id} link not found in page"
-    badge = re.search(r'reader-feed-unread">(\d+)</span>', m.group(0))
+    anchor = html[m.start(): html.find("</a>", m.end()) + 4]
+    badge = re.search(
+        r'class="reader-search-count"[^>]*>(\d+)</span>', anchor
+    )
     return int(badge.group(1)) if badge else 0
 
 

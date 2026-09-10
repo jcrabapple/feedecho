@@ -149,7 +149,10 @@ class TestFeedCapRoute:
         for i in range(n):
             r = client.post(
                 "/api/feeds",
-                data={"name": f"f{i}", "url": "https://example.com/feed.xml"},
+                # Distinct per-iteration URLs: feeds now have a UNIQUE(user_id,
+                # url) index, so identical URLs would collapse into a single
+                # upserted row instead of counting toward the plan cap.
+                data={"name": f"f{i}", "url": f"https://example.com/feed{i}.xml"},
                 follow_redirects=False,
             )
             assert r.status_code == 303

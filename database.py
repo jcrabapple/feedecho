@@ -132,9 +132,17 @@ def _pg_connect():
             "PostgreSQL mode requires the psycopg package: "
             "pip install 'feedecho[postgres]'"
         ) from exc
-    return psycopg.connect(
+    conn = psycopg.connect(
         settings.DATABASE_URL, row_factory=psycopg.rows.dict_row
     )
+    # Pin the session timezone to UTC. Postgres's CURRENT_TIMESTAMP/NOW()
+    # resolve in the session/server timezone before being cast into our
+    # naive TIMESTAMP columns (unlike sqlite's CURRENT_TIMESTAMP, which is
+    # always UTC) — without this, a non-UTC server timezone silently skews
+    # every stored timestamp relative to as_utc_naive()/timestamp_str()'s
+    # UTC assumption.
+    conn.execute("SET TIME ZONE 'UTC'")
+    return conn
 
 
 @contextmanager
@@ -890,6 +898,29 @@ def init_db_sqlite() -> None:
             ON oauth_states(expires_at)
         """)
 
+        # DB-level dedup backing for import_export.py's check-then-insert
+        # logic: without this, two concurrent requests (e.g. two imports, or
+        # an import racing a manual add) for the same user+url/instance+
+        # username can both pass the SELECT before either INSERT commits,
+        # producing duplicate rows. A unique index (rather than an inline
+        # UNIQUE + table rebuild) applies retroactively to already-deployed
+        # databases without a risky recreate-table migration; run after
+        # user_id/username are guaranteed to exist on both tables above.
+        # Partial (WHERE deleted_at IS NULL): feeds are soft-deleted and
+        # never purged, and import_export.py's own dedup lookup already
+        # ignores deleted_at IS NOT NULL rows (see get_feeds/its INSERT
+        # dedup query) — a non-partial index would otherwise permanently
+        # block re-adding a feed URL after it was deleted.
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
+            ON feeds(user_id, url)
+            WHERE deleted_at IS NULL
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_instance_username
+            ON accounts(user_id, instance, username)
+        """)
+
         # Best-effort cleanup of expired/consumed state rows.
         db.execute("""
             DELETE FROM oauth_states
@@ -1014,6 +1045,28 @@ def init_db_postgres() -> None:
             )
         """)
 
+        # Pre-existing hosted databases created before `username` shipped
+        # need the same backfill-from-`name` treatment as sqlite: fresh
+        # installs get the column from CREATE TABLE above, but that's a
+        # no-op on a table that already exists without it.
+        account_columns = _column_names(db, "accounts")
+        if "username" not in account_columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN username TEXT DEFAULT ''")
+            rows = db.execute("SELECT id, name FROM accounts").fetchall()
+            import re
+
+            for row in rows:
+                match = re.search(r"\(([^)]+)\)$", row["name"] or "")
+                username = (
+                    match.group(1)
+                    if match
+                    else (row["name"] or "unknown")
+                )
+                db.execute(
+                    "UPDATE accounts SET username = ? WHERE id = ?",
+                    (username, row["id"]),
+                )
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS saved_searches (
                 id BIGSERIAL PRIMARY KEY,
@@ -1070,6 +1123,12 @@ def init_db_postgres() -> None:
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
         _add_column_if_missing(db, "feeds", "folder_id", "BIGINT")
+        _add_column_if_missing(db, "feeds", "lease_token", "TEXT")
+        _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
+        _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")
+        # Soft-delete marker: feeds are never hard-deleted by the app so that
+        # echo configuration and posted-item history survive as an audit trail.
+        _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS feed_items (
@@ -1136,6 +1195,21 @@ def init_db_postgres() -> None:
             )
         """)
         _add_column_if_missing(db, "echoes", "one_shot", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "echoes", "filter_keywords", "TEXT DEFAULT ''")
+        _add_column_if_missing(
+            db, "echoes", "filter_mode", "TEXT NOT NULL DEFAULT 'exclude'"
+        )
+        _add_column_if_missing(db, "echoes", "content_warning", "TEXT DEFAULT ''")
+        _add_column_if_missing(
+            db, "echoes", "attach_image", "INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(
+            db, "echoes", "delivery_mode", "TEXT NOT NULL DEFAULT 'instant'"
+        )
+        _add_column_if_missing(
+            db, "echoes", "drip_limit", "INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(db, "echoes", "deleted_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS digest_items (
@@ -1283,6 +1357,16 @@ def init_db_postgres() -> None:
                 FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
             )
         """)
+        _add_column_if_missing(db, "posted_items", "claimed_at", "TIMESTAMP")
+        _add_column_if_missing(db, "posted_items", "claim_token", "TEXT")
+        _add_column_if_missing(db, "posted_items", "post_url", "TEXT")
+        _add_column_if_missing(
+            db,
+            "posted_items",
+            "attempt_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column_if_missing(db, "posted_items", "next_retry_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS queued_posts (
@@ -1394,6 +1478,29 @@ def init_db_postgres() -> None:
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_oauth_states_expiry
             ON oauth_states(expires_at)
+        """)
+
+        # DB-level dedup backing for import_export.py's check-then-insert
+        # logic: without this, two concurrent requests (e.g. two imports, or
+        # an import racing a manual add) for the same user+url/instance+
+        # username can both pass the SELECT before either INSERT commits,
+        # producing duplicate rows. A unique index (rather than an inline
+        # UNIQUE + table rebuild) applies retroactively to already-deployed
+        # databases without a risky recreate-table migration; run after
+        # user_id/username are guaranteed to exist on both tables above.
+        # Partial (WHERE deleted_at IS NULL): feeds are soft-deleted and
+        # never purged, and import_export.py's own dedup lookup already
+        # ignores deleted_at IS NOT NULL rows (see get_feeds/its INSERT
+        # dedup query) — a non-partial index would otherwise permanently
+        # block re-adding a feed URL after it was deleted.
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
+            ON feeds(user_id, url)
+            WHERE deleted_at IS NULL
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_instance_username
+            ON accounts(user_id, instance, username)
         """)
 
         # Best-effort cleanup of expired/consumed state rows.

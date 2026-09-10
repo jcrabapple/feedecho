@@ -3217,8 +3217,13 @@ async def add_account(
         except PlanError as e:
             return _render_accounts_error(request, str(e))
         db.execute(
-            "INSERT INTO accounts (name, username, instance, access_token, user_id)"
-            " VALUES (?, ?, ?, ?, ?)",
+            """
+            INSERT INTO accounts (name, username, instance, access_token, user_id)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, instance, username) DO UPDATE SET
+                name = excluded.name,
+                access_token = excluded.access_token
+            """,
             (name, username or name, instance, security.encrypt_secret(access_token), uid),
         )
     return RedirectResponse(url="/accounts", status_code=303)
@@ -4410,7 +4415,14 @@ async def add_feed(
                 raise HTTPException(status_code=402, detail=str(e))
             poll_interval = plans.clamp_poll_interval(poll_interval, plan)
         db.execute(
-            "INSERT INTO feeds (name, url, poll_interval, user_id, folder_id) VALUES (?, ?, ?, ?, ?)",
+            """
+            INSERT INTO feeds (name, url, poll_interval, user_id, folder_id)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, url) WHERE deleted_at IS NULL DO UPDATE SET
+                name = excluded.name,
+                poll_interval = excluded.poll_interval,
+                folder_id = excluded.folder_id
+            """,
             (name, url, poll_interval, uid, target_folder_id),
         )
     return RedirectResponse(url="/feeds", status_code=303)
@@ -5969,8 +5981,13 @@ def oauth_callback(
         except PlanError as e:
             return _render_oauth_error(request, str(e))
         db.execute(
-            """INSERT INTO accounts (name, username, instance, access_token, user_id)
-               VALUES (?, ?, ?, ?, ?)""",
+            """
+            INSERT INTO accounts (name, username, instance, access_token, user_id)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, instance, username) DO UPDATE SET
+                name = excluded.name,
+                access_token = excluded.access_token
+            """,
             (display_name, username, instance, security.encrypt_secret(access_token), state_user_id or 1),
         )
 

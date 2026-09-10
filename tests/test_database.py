@@ -111,3 +111,116 @@ class TestEchoes:
             )
             row = db.execute("SELECT value FROM settings WHERE key = 'smtp_host'").fetchone()
             assert row["value"] == "smtp.example.com"
+
+
+class TestAccountsUsernameMigration:
+    def test_username_backfilled_on_legacy_table(self, temp_db):
+        # Simulate a database created before `username` shipped on the
+        # accounts table (the same shape a pre-existing hosted Postgres
+        # database would have before finding #1's fix).
+        with get_db() as db:
+            db.execute("DROP TABLE accounts")
+            db.execute(
+                """
+                CREATE TABLE accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    instance TEXT NOT NULL,
+                    access_token TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            db.execute(
+                "INSERT INTO accounts (name, instance, access_token) VALUES (?, ?, ?)",
+                ("Alice (alice)", "https://example.com", "token"),
+            )
+            db.execute(
+                "INSERT INTO accounts (name, instance, access_token) VALUES (?, ?, ?)",
+                ("Bob", "https://other.example.com", "token2"),
+            )
+
+        init_db()
+
+        with get_db() as db:
+            rows = db.execute(
+                "SELECT name, username FROM accounts ORDER BY id"
+            ).fetchall()
+        assert rows[0]["username"] == "alice"
+        assert rows[1]["username"] == "Bob"
+
+
+class TestFeedsUniqueConstraint:
+    def test_duplicate_user_url_rejected(self, temp_db):
+        import sqlite3
+
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                ("Feed", "https://example.com/feed.xml", 1),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            with get_db() as db:
+                db.execute(
+                    "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                    ("Feed dup", "https://example.com/feed.xml", 1),
+                )
+
+    def test_same_url_different_user_allowed(self, temp_db):
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                ("Feed", "https://example.com/feed.xml", 1),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                ("Feed", "https://example.com/feed.xml", 2),
+            )
+            rows = db.execute("SELECT * FROM feeds").fetchall()
+        assert len(rows) == 2
+
+    def test_readd_after_soft_delete_allowed(self, temp_db):
+        """The unique index is partial (WHERE deleted_at IS NULL): feeds are
+        soft-deleted and never purged, and import_export.py's own dedup
+        lookup already ignores soft-deleted rows, so re-adding the same URL
+        after a delete must not be permanently blocked."""
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                ("Feed", "https://example.com/feed.xml", 1),
+            )
+            db.execute(
+                "UPDATE feeds SET deleted_at = CURRENT_TIMESTAMP"
+                " WHERE url = ? AND user_id = ?",
+                ("https://example.com/feed.xml", 1),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES (?, ?, ?)",
+                ("Feed again", "https://example.com/feed.xml", 1),
+            )
+            rows = db.execute(
+                "SELECT * FROM feeds WHERE url = ? AND user_id = ?",
+                ("https://example.com/feed.xml", 1),
+            ).fetchall()
+        assert len(rows) == 2
+
+
+class TestAccountsUniqueConstraint:
+    def test_duplicate_user_instance_username_rejected(self, temp_db):
+        import sqlite3
+
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token, user_id)"
+                " VALUES (?, ?, ?, ?, ?)",
+                ("Alice", "alice", "https://example.com", "token", 1),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            with get_db() as db:
+                db.execute(
+                    "INSERT INTO accounts"
+                    " (name, username, instance, access_token, user_id)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    ("Alice again", "alice", "https://example.com", "token2", 1),
+                )

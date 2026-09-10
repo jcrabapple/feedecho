@@ -108,6 +108,22 @@ class TestPostgresInit:
 
 
 @requires_pg
+class TestPostgresSessionTimezone:
+    def test_connection_pins_session_timezone_to_utc(self, pg_env):
+        """_pg_connect must SET TIME ZONE 'UTC' immediately after connect.
+
+        Without this, CURRENT_TIMESTAMP/NOW() resolve in the server's
+        session timezone rather than UTC, silently skewing every naive
+        TIMESTAMP column against as_utc_naive()/timestamp_str()'s UTC
+        assumption whenever the Postgres server isn't itself running UTC.
+        """
+        database.init_db()
+        with database.get_db() as db:
+            tz = db.execute("SELECT current_setting('TimeZone') AS tz").fetchone()["tz"]
+        assert tz == "UTC"
+
+
+@requires_pg
 class TestPostgresRoundtrip:
     def test_qmark_placeholder_translation(self, pg_env):
         """`?` placeholders must work through the dialect layer on PG."""
@@ -296,6 +312,215 @@ class TestPostgresMigration:
         assert verification.consume_token(token, "verify") == 77
         # Single use on PG too
         assert verification.consume_token(token, "verify") is None
+
+    def test_accounts_username_backfilled_on_legacy_table(self, pg_env):
+        """A pre-existing hosted database created before `username` shipped
+        must get the same backfill-from-`name` treatment as sqlite."""
+        database.init_db()
+        with database.get_db() as db:
+            db.execute("DROP TABLE accounts")
+            db.execute("""
+                CREATE TABLE accounts (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    instance TEXT NOT NULL,
+                    access_token TEXT NOT NULL,
+                    user_id BIGINT NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.execute(
+                "INSERT INTO accounts (name, instance, access_token)"
+                " VALUES ('Alice (alice)', 'https://example.com', 'token')"
+            )
+            db.execute(
+                "INSERT INTO accounts (name, instance, access_token)"
+                " VALUES ('Bob', 'https://other.example.com', 'token2')"
+            )
+
+        database.init_db()
+
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT name, username FROM accounts ORDER BY id"
+            ).fetchall()
+        assert rows[0]["username"] == "alice"
+        assert rows[1]["username"] == "Bob"
+
+    def test_feeds_legacy_columns_backfilled_on_pg(self, pg_env):
+        """Columns sqlite backfills for pre-existing feeds tables must also
+        be backfilled on Postgres, not just present via CREATE TABLE IF NOT
+        EXISTS (which is a no-op on a table that already exists)."""
+        database.init_db()
+        with database.get_db() as db:
+            db.execute("DROP TABLE feeds CASCADE")
+            db.execute("""
+                CREATE TABLE feeds (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    feed_type TEXT DEFAULT 'rss',
+                    poll_interval INTEGER DEFAULT 15,
+                    last_fetched TIMESTAMP,
+                    last_item_id TEXT,
+                    user_id BIGINT NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        database.init_db()
+
+        with database.get_db() as db:
+            columns = {
+                c["column_name"]
+                for c in db.execute(
+                    "SELECT column_name FROM information_schema.columns"
+                    " WHERE table_name = 'feeds'"
+                ).fetchall()
+            }
+        for expected in ("lease_token", "lease_expires_at", "paused", "deleted_at"):
+            assert expected in columns, f"feeds.{expected} not backfilled on PG"
+
+    def test_echoes_legacy_columns_backfilled_on_pg(self, pg_env):
+        database.init_db()
+        with database.get_db() as db:
+            db.execute("DROP TABLE echoes CASCADE")
+            db.execute("""
+                CREATE TABLE echoes (
+                    id BIGSERIAL PRIMARY KEY,
+                    feed_id INTEGER NOT NULL,
+                    destination_type TEXT NOT NULL DEFAULT 'mastodon',
+                    destination_id INTEGER NOT NULL,
+                    template TEXT NOT NULL DEFAULT '{{ title }} {{ link }}',
+                    visibility TEXT DEFAULT 'public',
+                    enabled INTEGER DEFAULT 1,
+                    user_id BIGINT NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        database.init_db()
+
+        with database.get_db() as db:
+            columns = {
+                c["column_name"]
+                for c in db.execute(
+                    "SELECT column_name FROM information_schema.columns"
+                    " WHERE table_name = 'echoes'"
+                ).fetchall()
+            }
+        for expected in (
+            "filter_keywords",
+            "filter_mode",
+            "content_warning",
+            "attach_image",
+            "delivery_mode",
+            "drip_limit",
+            "deleted_at",
+        ):
+            assert expected in columns, f"echoes.{expected} not backfilled on PG"
+
+    def test_posted_items_legacy_columns_backfilled_on_pg(self, pg_env):
+        database.init_db()
+        with database.get_db() as db:
+            db.execute("DROP TABLE posted_items")
+            db.execute("""
+                CREATE TABLE posted_items (
+                    id BIGSERIAL PRIMARY KEY,
+                    echo_id INTEGER NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_title TEXT,
+                    item_url TEXT,
+                    status TEXT NOT NULL,
+                    error_message TEXT,
+                    posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        database.init_db()
+
+        with database.get_db() as db:
+            columns = {
+                c["column_name"]
+                for c in db.execute(
+                    "SELECT column_name FROM information_schema.columns"
+                    " WHERE table_name = 'posted_items'"
+                ).fetchall()
+            }
+        for expected in (
+            "claimed_at",
+            "claim_token",
+            "post_url",
+            "attempt_count",
+            "next_retry_at",
+        ):
+            assert expected in columns, f"posted_items.{expected} not backfilled on PG"
+
+    def test_feeds_unique_index_rejects_duplicate_user_url(self, pg_env):
+        import psycopg
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (1, 'u@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES ('Feed', 'https://x/feed', 1)"
+            )
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with database.get_db() as db:
+                db.execute(
+                    "INSERT INTO feeds (name, url, user_id)"
+                    " VALUES ('Feed dup', 'https://x/feed', 1)"
+                )
+
+    def test_feeds_readd_after_soft_delete_allowed_on_pg(self, pg_env):
+        """The unique index is partial (WHERE deleted_at IS NULL): feeds are
+        soft-deleted and never purged, so re-adding the same URL after a
+        delete must not be permanently blocked."""
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (1, 'u@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id) VALUES ('Feed', 'https://x/feed', 1)"
+            )
+            db.execute(
+                "UPDATE feeds SET deleted_at = CURRENT_TIMESTAMP"
+                " WHERE url = 'https://x/feed' AND user_id = 1"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id)"
+                " VALUES ('Feed again', 'https://x/feed', 1)"
+            )
+            rows = db.execute(
+                "SELECT * FROM feeds WHERE url = 'https://x/feed' AND user_id = 1"
+            ).fetchall()
+        assert len(rows) == 2
+
+    def test_accounts_unique_index_rejects_duplicate_user_instance_username(
+        self, pg_env
+    ):
+        import psycopg
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (1, 'u@example.com', '')"
+            )
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token, user_id)"
+                " VALUES ('Alice', 'alice', 'https://example.com', 'token', 1)"
+            )
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with database.get_db() as db:
+                db.execute(
+                    "INSERT INTO accounts"
+                    " (name, username, instance, access_token, user_id)"
+                    " VALUES ('Alice again', 'alice', 'https://example.com',"
+                    " 'token2', 1)"
+                )
 
 
 @requires_pg
@@ -670,9 +895,18 @@ class TestPostgresTimestampReads:
         """posted_at must be app-generated UTC, comparable with _drip_rate's window.
 
         Postgres CURRENT_TIMESTAMP resolves in the session time zone, so it
-        silently skewed the drip window on any server not running UTC. The
-        database default is flipped here (get_db opens a new connection per
-        call, so a per-connection SET would not reach the code under test).
+        would silently skew the drip window on any server not running UTC.
+        This is now belt-and-suspenders: (1) posted_at is always bound
+        explicitly via _now() rather than left to a CURRENT_TIMESTAMP
+        default, and (2) _pg_connect pins every new connection's session
+        time zone to UTC immediately after connect. The database default is
+        flipped to a hostile non-UTC zone here to prove #2: even a
+        misconfigured server default cannot leak through the per-connection
+        pin (get_db opens a new connection per call, so a stray per-session
+        SET on this test's own connection would not reach the code under
+        test — only the database-level default does, which the pin then
+        overrides on every connection including this test's own follow-up
+        checks).
         """
         import scheduler
 
@@ -700,11 +934,18 @@ class TestPostgresTimestampReads:
         try:
             assert scheduler._update_post(1, "tok", "success") is True
             with database.get_db() as db:
+                # The connection-level pin wins over the hostile database
+                # default: every fresh connection is forced back to UTC, so
+                # this reads 'UTC' rather than the 'America/New_York' just
+                # set above. If this ever reads back "America/New_York",
+                # the connect-time pin (finding #5 / database._pg_connect)
+                # regressed.
                 assert db.execute(
                     "SELECT current_setting('TimeZone') AS tz"
-                ).fetchone()["tz"] == (
-                    "America/New_York"
-                ), "time zone override did not take effect; test would be vacuous"
+                ).fetchone()["tz"] == "UTC", (
+                    "connection-level UTC pin did not override the hostile"
+                    " database default; _pg_connect's SET TIME ZONE regressed"
+                )
                 stored = db.execute(
                     "SELECT posted_at FROM posted_items WHERE id = 1"
                 ).fetchone()["posted_at"]

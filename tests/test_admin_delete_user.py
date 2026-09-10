@@ -37,6 +37,7 @@ OTHER_ADMIN_ID = 12
 def multi_env(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
@@ -305,6 +306,7 @@ def pg_env(monkeypatch):
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", False)
     monkeypatch.setattr(settings, "CREDENTIAL_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     auth._login_attempts.clear()
     auth._register_attempts.clear()
     database.init_db()

@@ -98,6 +98,7 @@ def multi_client(monkeypatch, db_tmp):
     """Signed-in multi-mode TestClient over the temp DB (mirrors test_discord.py)."""
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)

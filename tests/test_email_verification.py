@@ -17,6 +17,7 @@ UID = 5
 def multi_env(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
@@ -74,6 +75,64 @@ class TestTokenLifecycle:
         for _ in range(verification.RESEND_LIMIT):
             verification.issue_token(UID, "verify")
         assert verification.resend_allowed(UID, "verify") is False
+
+    def test_retry_on_conflict_consumes_not_deletes_concurrent_token(
+        self, multi_env, monkeypatch
+    ):
+        """A unique-violation on issuance (another issuer's row committed
+        between our UPDATE and INSERT) must not delete that row outright --
+        only the retry's own UPDATE may touch it, by consuming it. Deleting
+        it would silently invalidate an already-returned, possibly
+        already-emailed token instead of properly superseding it."""
+        import sqlite3
+        from contextlib import contextmanager
+
+        import security
+
+        concurrent = verification.issue_token(UID, "verify")
+
+        state = {"raised": False}
+
+        class _Proxy:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, params=()):
+                if not state["raised"] and "INSERT INTO email_tokens" in sql:
+                    state["raised"] = True
+                    raise sqlite3.IntegrityError(
+                        "UNIQUE constraint failed: simulated concurrent issuer"
+                    )
+                return self._conn.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        real_get_db = database.get_db
+
+        @contextmanager
+        def _wrapped_get_db():
+            with real_get_db() as conn:
+                yield _Proxy(conn)
+
+        monkeypatch.setattr(verification, "get_db", _wrapped_get_db)
+
+        new = verification.issue_token(UID, "verify")
+
+        assert state["raised"] is True
+        assert new != concurrent
+
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT consumed_at FROM email_tokens WHERE token_hash = ?",
+                (security.token_hash(concurrent),),
+            ).fetchone()
+        # Still a real row -- superseded (consumed), not vanished.
+        assert row is not None
+        assert row["consumed_at"] is not None
+
+        # The retried issuance itself is unaffected and fully usable.
+        assert verification.consume_token(new, "verify") == UID
 
 
 class TestVerifyEndpoint:

@@ -38,6 +38,7 @@ def multi_env(monkeypatch, tmp_path):
     """/register is a multi-mode page; render it the way test_nav_gating does."""
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)

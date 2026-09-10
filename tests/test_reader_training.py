@@ -17,6 +17,7 @@ def p4_env(monkeypatch, tmp_path):
     monkeypatch.setattr(database, "DB_PATH", db_file)
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "x" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "x" * 40)
     monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
     database.init_db()
 

@@ -24,6 +24,7 @@ USER_ID = 222
 def _client(monkeypatch, tmp_path, *, billing, trial_ends_at, plan="trial"):
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)

@@ -30,6 +30,7 @@ def multi_client(monkeypatch, db_tmp):
 
     monkeypatch.setattr(settings, "MULTI", True)
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
@@ -580,11 +581,13 @@ class TestOauthStateSecretPrecedence:
         })
         import oauth
 
-        assert oauth._STATE_SECRET == b"state-secret-value"
+        assert oauth._state_secret() == b"state-secret-value"
 
     def test_auth_token_still_fallback_without_state_secret(
         self, monkeypatch, restore_oauth,
     ):
+        # Single mode only: the multi-mode case (no silent AUTH_TOKEN
+        # fallback) is covered by TestStateSecretMultiModeGate below.
         self._reload(monkeypatch, {
             "FEEDECHO_MODE": "single",
             "FEEDECHO_AUTH_TOKEN": "auth-token-value",
@@ -592,4 +595,29 @@ class TestOauthStateSecretPrecedence:
         })
         import oauth
 
-        assert oauth._STATE_SECRET == b"auth-token-value"
+        assert oauth._state_secret() == b"auth-token-value"
+
+
+class TestStateSecretMultiModeGate:
+    """In multi mode, _state_secret() must never silently fall back to
+    AUTH_TOKEN — mirrors security.session_secret()'s gate for exactly the
+    same reason: a carried-over single-mode AUTH_TOKEN has no minimum-length
+    requirement and must not silently key OAuth-state HMACs."""
+
+    def test_raises_without_state_secret_even_with_auth_token(
+        self, monkeypatch,
+    ):
+        import oauth
+
+        monkeypatch.setattr(settings, "MULTI", True)
+        monkeypatch.setattr(settings, "STATE_SECRET", "")
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "auth-token-value")
+        with pytest.raises(RuntimeError, match="FEEDECHO_STATE_SECRET"):
+            oauth._state_secret()
+
+    def test_succeeds_with_state_secret_set(self, monkeypatch):
+        import oauth
+
+        monkeypatch.setattr(settings, "MULTI", True)
+        monkeypatch.setattr(settings, "STATE_SECRET", "state-secret-value")
+        assert oauth._state_secret() == b"state-secret-value"

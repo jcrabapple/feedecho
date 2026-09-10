@@ -652,6 +652,8 @@ class TestAppOnPostgres:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
         database.init_db()
@@ -674,6 +676,8 @@ class TestAppOnPostgres:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
         database.init_db()
@@ -701,6 +705,8 @@ class TestAppOnPostgres:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
         database.init_db()
@@ -751,6 +757,8 @@ class TestAppOnPostgres:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
         database.init_db()
@@ -804,6 +812,8 @@ class TestAppOnPostgres:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
         database.init_db()

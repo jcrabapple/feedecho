@@ -107,6 +107,8 @@ class TestReaderStoragePg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
@@ -161,6 +163,8 @@ class TestReaderPagePg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         # The lifespan starts the scheduler; no-op its feed sweep so the
         # background thread does no DB work that could race monkeypatch
         # teardown (which flips the dialect back to sqlite mid-query).
@@ -198,6 +202,8 @@ class TestReaderTier2Pg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
@@ -241,6 +247,8 @@ class TestReaderTier2Pg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
@@ -298,6 +306,8 @@ class TestReaderTier2Pg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
@@ -344,6 +354,8 @@ class TestReaderTier2Pg:
         from datetime import datetime, timedelta, timezone
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
@@ -403,6 +415,8 @@ class TestReaderTier2Pg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()
@@ -447,6 +461,8 @@ class TestReaderTier2Pg:
         from app import app
 
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+
+        monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(scheduler, "check_all_feeds", lambda: None)
         auth_mod._login_attempts.clear()
         auth_mod._register_attempts.clear()

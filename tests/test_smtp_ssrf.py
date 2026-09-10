@@ -24,6 +24,7 @@ def multi_client(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module.settings, "MULTI", True)
     monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(app_module.settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(app_module.settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr("database.DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setattr(app_module, "_smtp_test_attempts", {})
     init_db()

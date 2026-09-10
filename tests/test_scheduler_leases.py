@@ -19,6 +19,7 @@ requires_pg = pytest.mark.skipif(
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
+    monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
     monkeypatch.setattr(settings, "AUTH_TOKEN", None)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "sched.db")
     database.init_db()

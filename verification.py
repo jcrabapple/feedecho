@@ -32,6 +32,7 @@ def issue_token(user_id: int, purpose: str) -> str:
     expires = (
         datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)
     ).strftime(_TS)
+    last_exc: Exception | None = None
     for _attempt in (1, 2):
         try:
             with get_db() as db:
@@ -52,14 +53,18 @@ def issue_token(user_id: int, purpose: str) -> str:
         except Exception as exc:  # noqa: BLE001
             if exc.__class__.__name__ not in ("IntegrityError", "UniqueViolation"):
                 raise
-            # Concurrent issuer won the race; clear the live row and retry.
-            with get_db() as db:
-                db.execute(
-                    "DELETE FROM email_tokens"
-                    " WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL",
-                    (user_id, purpose),
-                )
-    raise RuntimeError("email token issuance failed after retry")
+            # A concurrent issuer's INSERT landed between our UPDATE and
+            # INSERT above, so ours collided with its still-live row on the
+            # partial unique index (one unconsumed token per user+purpose).
+            # get_db() rolled back both of our statements with this whole
+            # attempt, so there is nothing of ours to clean up — deleting
+            # "whatever row is currently live" here would delete that
+            # concurrent issuer's already-committed (and possibly
+            # already-emailed) token instead of anything we created.
+            # Simply retrying re-runs the UPDATE, which now correctly
+            # consumes that row itself, then our INSERT succeeds.
+            last_exc = exc
+    raise RuntimeError("email token issuance failed after retry") from last_exc
 
 
 def resend_allowed(user_id: int, purpose: str) -> bool:

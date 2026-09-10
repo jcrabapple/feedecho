@@ -1349,7 +1349,7 @@ async def dashboard(request: Request):
             ).fetchone()["n"],
             "failed_posts": db.execute(
                 "SELECT COUNT(*) AS n FROM posted_items pi JOIN echoes e ON pi.echo_id = e.id"
-                " WHERE pi.status = 'failed' AND e.user_id = ?",
+                " WHERE pi.status IN ('failed', 'gave_up') AND e.user_id = ?",
                 (uid,),
             ).fetchone()["n"],
         }
@@ -2503,13 +2503,13 @@ _CURSOR_RE = re.compile(r"^[0-9 :.\-]*\|\d+$")
 
 
 class _SavedSearchCountsCache:
-    """Per-user, 60s TTL cache of saved-search unread counts.
+    """Per-user, 60s TTL cache of saved-search item counts.
 
     Invalidation is keyed by max_item_id (see .get()) rather than pure
     time, so a stale entry never outlives the item that would change it by
     more than the TTL. Every route that mutates saved searches, feeds, or
     read-state must call .invalidate(uid) — wrapped in a class (instead of
-    the previous bare module-level dict) so every one of those 9 call
+    the previous bare module-level dict) so every one of those call
     sites reads as an obvious, greppable method name rather than a
     dict.pop() that looks like ordinary housekeeping and is easy to miss
     in a diff. Design-patterns audit finding 2.8.
@@ -2834,7 +2834,7 @@ async def reader_page(
         ).fetchone()
         max_item_id = max_row["m"] if max_row else 0
 
-        # Compute unread counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
+        # Compute counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
         saved_search_counts: dict[int, int] = {}
         if saved_searches:
             now_time = time.time()
@@ -2851,11 +2851,14 @@ async def reader_page(
 
                 for s in saved_searches:
                     s_filters, s_terms = _parse_reader_query(s["query"])
-                    # Default to unread counts, but is:read or is:starred override the default
-                    has_read_state = any(op == "is" and val in ("read", "starred") for op, val in s_filters)
+                    # Mirror the /reader route's own read-state handling for a
+                    # non-empty query (see the "unread/starred view filter is
+                    # skipped" comment above): no implicit unread-only default,
+                    # only an explicit is:read/is:unread/is:starred filters the
+                    # count. Saved-search queries are never empty (enforced at
+                    # creation), so this always matches what opening the saved
+                    # search actually shows.
                     s_where = ["f.user_id = ?", "f.read_enabled = 1", "f.deleted_at IS NULL"]
-                    if not has_read_state:
-                        s_where.append("i.is_read = 0")
                     s_params: list = [uid]
                     s_text_scope = None
                     for op, val in s_filters:
@@ -2863,7 +2866,7 @@ async def reader_page(
                             if val == "starred":
                                 s_where.append("i.starred = 1")
                             elif val == "unread":
-                                pass
+                                s_where.append("i.is_read = 0")
                             elif val == "read":
                                 s_where.append("i.is_read = 1")
                         elif op == "feed":
@@ -4300,6 +4303,8 @@ def rename_folder(request: Request, folder_id: int, name: str = Form(...)):
             "UPDATE folders SET name = ? WHERE id = ? AND user_id = ?",
             (name, folder_id, uid),
         )
+    # Saved searches can filter on folder:<name>, so a rename changes them
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -4322,6 +4327,8 @@ def delete_folder(request: Request, folder_id: int):
             "DELETE FROM folders WHERE id = ? AND user_id = ?",
             (folder_id, uid),
         )
+    # Saved searches can filter on folder:<name>, so deleting one changes them
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 
@@ -4347,6 +4354,8 @@ def set_feed_folder(request: Request, feed_id: int, folder_id: str = Form("")):
             "UPDATE feeds SET folder_id = ? WHERE id = ? AND user_id = ?",
             (target_folder_id, feed_id, uid),
         )
+    # Saved searches can filter on folder:<name>, so moving a feed changes them
+    _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "folder_id": target_folder_id}
 
 
@@ -4641,6 +4650,8 @@ def import_opml(
                 break
         walk(body_elem if body_elem is not None else root, None, 1)
 
+    # Importing feeds and folders can alter saved-search matches
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(
         url=f"/feeds?imported={imported}&duplicate={duplicate}&invalid={invalid}&capped={capped}",
         status_code=303,
@@ -4713,6 +4724,9 @@ async def edit_feed(
                 "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
                 (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
             )
+    # Saved-search counts apply mute keywords and folder scoping, so editing
+    # either changes them.
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
 
 

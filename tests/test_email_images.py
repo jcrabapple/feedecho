@@ -188,6 +188,85 @@ class TestEmailEchoImages:
         assert len(sent) == 1
         assert len(sent[0]["images"]) == 1
 
+class TestEmailClaimGuardOrdering:
+    """_send_email_echo must re-validate its claim AFTER the slow image-fetch
+    loop, immediately before send_email — not before it.
+
+    All other destination senders (_send_mastodon, _send_bluesky, etc.) call
+    _guard_claim right before the irreversible network send, specifically
+    because the image-fetch/alt-text pipeline is what can let the claim go
+    stale (reclaimed by another worker once PENDING_RECLAIM_SECONDS has
+    elapsed). _send_email_echo used to check the claim BEFORE the image-fetch
+    loop, leaving no re-check for a reclaim that happens during that fetch —
+    which could send a duplicate email.
+    """
+
+    def test_stale_claim_during_image_fetch_aborts_the_send(self, db_tmp, monkeypatch):
+        """A reclaim that happens mid-fetch must still be caught before send."""
+        import scheduler
+
+        echo = _setup_email_echo(db_tmp, {"attach_image": 1})
+
+        with db_tmp.get_db() as db:
+            db.execute(
+                "INSERT INTO posted_items (id, echo_id, item_id, status, claim_token)"
+                " VALUES (1, 1, 'item-1', 'pending', 'our-token')"
+            )
+
+        def flaky_fetch_image(url):
+            # Simulate another worker reclaiming this row while this worker
+            # is still doing the slow image fetch: the lease lapses mid-I/O.
+            with db_tmp.get_db() as db:
+                db.execute(
+                    "UPDATE posted_items SET claim_token = 'someone-elses-token'"
+                    " WHERE id = 1"
+                )
+            return (b"fake-image-bytes", "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", flaky_fetch_image)
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "send_email", lambda **kw: sent.append(kw) or {"success": True}
+        )
+
+        item = _item(image_url="https://example.com/photo.jpg", image_alt="A photo")
+        result = scheduler._send_email_echo(echo, item, "content", 1, 1, "our-token")
+
+        # The point of moving the guard: the lost claim is caught right
+        # before send, so no email goes out at all. (With the guard checked
+        # before the fetch instead, the fetch happens, the guard has
+        # already passed, and send_email fires anyway — a duplicate.)
+        assert result is False
+        assert sent == [], "email was sent despite having lost the claim mid-fetch"
+
+    def test_fresh_claim_survives_image_fetch_and_sends(self, db_tmp, monkeypatch):
+        """Sanity check: an uncontested claim still sends normally."""
+        import scheduler
+
+        echo = _setup_email_echo(db_tmp, {"attach_image": 1})
+
+        with db_tmp.get_db() as db:
+            db.execute(
+                "INSERT INTO posted_items (id, echo_id, item_id, status, claim_token)"
+                " VALUES (1, 1, 'item-1', 'pending', 'our-token')"
+            )
+
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "send_email", lambda **kw: sent.append(kw) or {"success": True}
+        )
+
+        item = _item(image_url="https://example.com/photo.jpg", image_alt="A photo")
+        result = scheduler._send_email_echo(echo, item, "content", 1, 1, "our-token")
+
+        assert result is True
+        assert len(sent) == 1
+
+
 # ── MIME construction in email_sender ────────────────────────────────────────
 
 class _FakeSMTP:

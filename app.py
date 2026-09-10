@@ -3289,10 +3289,18 @@ async def add_account(
     uid = current_user_id(request)
     instance = validate_url(instance)
     with get_db() as db:
-        try:
-            _check_destination_cap(db, uid)
-        except PlanError as e:
-            return _render_accounts_error(request, str(e))
+        # Cap NEW rows only: re-adding an existing account is an upsert that
+        # changes nothing the cap measures.
+        existing = db.execute(
+            "SELECT id FROM accounts"
+            " WHERE user_id = ? AND instance = ? AND username = ?",
+            (uid, instance, username or name),
+        ).fetchone()
+        if existing is None:
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
         db.execute(
             """
             INSERT INTO accounts (name, username, instance, access_token, user_id)
@@ -4490,16 +4498,28 @@ async def add_feed(
             if not folder:
                 target_folder_id = None
         if settings.MULTI:
-            plan = _user_plan(db, uid)
-            count = db.execute(
-                "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
-                (uid,),
-            ).fetchone()["c"]
-            try:
-                plans.check_feed_allowance(count, plan)
-            except PlanError as e:
-                raise HTTPException(status_code=402, detail=str(e))
-            poll_interval = plans.clamp_poll_interval(poll_interval, plan)
+            # Cap NEW rows only: re-adding an existing URL is an upsert that
+            # changes nothing the cap measures.
+            existing_feed = db.execute(
+                "SELECT id FROM feeds"
+                " WHERE user_id = ? AND url = ? AND deleted_at IS NULL",
+                (uid, url),
+            ).fetchone()
+            if existing_feed is None:
+                plan = _user_plan(db, uid)
+                count = db.execute(
+                    "SELECT COUNT(*) AS c FROM feeds WHERE user_id = ? AND deleted_at IS NULL",
+                    (uid,),
+                ).fetchone()["c"]
+                try:
+                    plans.check_feed_allowance(count, plan)
+                except PlanError as e:
+                    raise HTTPException(status_code=402, detail=str(e))
+                poll_interval = plans.clamp_poll_interval(poll_interval, plan)
+            else:
+                poll_interval = plans.clamp_poll_interval(
+                    poll_interval, _user_plan(db, uid)
+                )
         db.execute(
             """
             INSERT INTO feeds (name, url, poll_interval, user_id, folder_id)
@@ -4656,12 +4676,19 @@ def import_opml(
                             capped += 1
                             continue
                     title = (child.get("title") or child.get("text") or "").strip() or valid_url
-                    db.execute(
-                        "INSERT INTO feeds (name, url, read_enabled, user_id, folder_id) VALUES (?, ?, ?, ?, ?)",
+                    row = db.execute(
+                        "INSERT INTO feeds (name, url, read_enabled, user_id, folder_id)"
+                        " VALUES (?, ?, ?, ?, ?)"
+                        " ON CONFLICT(user_id, url) WHERE deleted_at IS NULL DO NOTHING",
                         (title, valid_url, 1 if reader_allowed else 0, uid, current_folder_id),
                     )
-                    existing_urls.add(valid_url)
-                    imported += 1
+                    if row.rowcount == 0:
+                        # Lost a race with a concurrent add/import of the same
+                        # user+url: count it as a duplicate, not a 500.
+                        duplicate += 1
+                    else:
+                        existing_urls.add(valid_url)
+                        imported += 1
                 else:
                     # Folder / container outline
                     folder_name = (child.get("title") or child.get("text") or "").strip()
@@ -6120,10 +6147,18 @@ def oauth_callback(
         username = "unknown"
 
     with get_db() as db:
-        try:
-            _check_destination_cap(db, state_user_id or 1)
-        except PlanError as e:
-            return _render_oauth_error(request, str(e))
+        # Cap NEW rows only: reconnecting an existing account is an upsert
+        # that changes nothing the cap measures.
+        existing = db.execute(
+            "SELECT id FROM accounts"
+            " WHERE user_id = ? AND instance = ? AND username = ?",
+            (state_user_id or 1, instance, username),
+        ).fetchone()
+        if existing is None:
+            try:
+                _check_destination_cap(db, state_user_id or 1)
+            except PlanError as e:
+                return _render_oauth_error(request, str(e))
         db.execute(
             """
             INSERT INTO accounts (name, username, instance, access_token, user_id)

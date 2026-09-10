@@ -4,6 +4,33 @@ import hashlib
 import httpx
 from typing import Optional
 from feed_parser import pinned_request, validate_outbound_url
+from utils import DestinationAuthError, DestinationError
+
+
+class MastodonError(DestinationError):
+    """Base error for Mastodon API interactions."""
+
+
+class MastodonAuthError(MastodonError, DestinationAuthError):
+    """Access token rejected or insufficient permission (HTTP 401/403).
+
+    Permanent: retries cannot help until the user reconnects the account.
+    """
+
+
+def _raise_for_status(response) -> None:
+    """Raise MastodonAuthError on 401/403, otherwise the plain httpx error.
+
+    401/403 mean the stored token was revoked/expired or lacks the required
+    scope — permanent, not worth retrying. Every other 4xx/5xx (rate limits,
+    server errors, etc.) falls through to httpx's generic HTTPStatusError,
+    which callers already treat as transient/retryable.
+    """
+    if response.status_code in (401, 403):
+        raise MastodonAuthError(
+            f"Mastodon rejected the access token (HTTP {response.status_code})."
+        )
+    response.raise_for_status()
 
 
 def idempotency_key(echo_id: int, item_id: str) -> str:
@@ -62,8 +89,14 @@ def upload_media(
         response = pinned_request(
             "POST", url, timeout=60, headers=headers, files=files, data=data
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         return response.json()
+    except MastodonAuthError:
+        # Permanent: the caller (scheduler._send_mastodon) needs to
+        # distinguish this from the transient failures below, so let it
+        # propagate rather than folding it into the "None on failure"
+        # contract used for everything else here.
+        raise
     # ValueError covers a 200 with a non-JSON body (an instance behind an
     # HTML-returning proxy), which otherwise escaped the documented
     # "None on failure" contract and crashed the caller. SSRFError is a
@@ -102,7 +135,9 @@ def post_status(
         Dict with response data including 'id' and 'url' on success.
 
     Raises:
-        httpx.HTTPStatusError on API failure.
+        MastodonAuthError on a rejected/expired token (HTTP 401/403) —
+        permanent, not worth retrying. httpx.HTTPStatusError on any other
+        API failure (rate limits, server errors, etc.) — transient.
     """
     instance = instance.rstrip("/")
     validate_outbound_url(instance)
@@ -124,7 +159,7 @@ def post_status(
     response = pinned_request(
         "POST", url, timeout=30, headers=headers, data=data
     )
-    response.raise_for_status()
+    _raise_for_status(response)
     return response.json()
 
 
@@ -132,6 +167,10 @@ def verify_credentials(instance: str, access_token: str) -> dict:
     """Verify credentials and return account info.
 
     Returns dict with 'username', 'display_name', 'url' on success.
+
+    Raises:
+        MastodonAuthError on a rejected/expired token (HTTP 401/403).
+        httpx.HTTPStatusError on any other API failure.
     """
     instance = instance.rstrip("/")
     validate_outbound_url(instance)
@@ -139,7 +178,7 @@ def verify_credentials(instance: str, access_token: str) -> dict:
     headers = {"Authorization": f"Bearer {access_token}"}
 
     response = pinned_request("GET", url, timeout=30, headers=headers)
-    response.raise_for_status()
+    _raise_for_status(response)
     return response.json()
 
 
@@ -148,6 +187,8 @@ def test_connection(instance: str, access_token: str) -> tuple[bool, str]:
     try:
         result = verify_credentials(instance, access_token)
         return True, f"Connected as @{result.get('username', 'unknown')}"
+    except MastodonAuthError as e:
+        return False, str(e)
     except httpx.HTTPStatusError as e:
         return False, f"HTTP {e.response.status_code}: {e.response.text[:200]}"
     except httpx.RequestError as e:

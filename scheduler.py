@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -27,6 +28,8 @@ from feed_parser import (
 )
 from filters import is_filtered, match_reason
 from mastodon import (
+    MastodonAuthError,
+    MastodonError,
     idempotency_key as mastodon_idempotency_key,
     post_status,
     upload_media,
@@ -34,6 +37,7 @@ from mastodon import (
 from bluesky import (
     BLUESKY_IMAGE_TYPES,
     MAX_BLOB_BYTES,
+    MAX_POST_BYTES,
     MAX_POST_GRAPHEMES,
     BlueskyAuthError,
     BlueskyError,
@@ -1271,13 +1275,38 @@ def _send_mastodon(
             # Feed-provided alt text wins (the author wrote it); AI
             # generation is the fallback when the feed has none.
             description = _resolve_alt_text(echo, item, entry["alt"], img_bytes, img_type)
-            uploaded = upload_media(
-                instance=account["instance"],
-                access_token=decrypt_secret(account["access_token"]),
-                image_bytes=img_bytes,
-                content_type=img_type,
-                description=description,
-            )
+            try:
+                uploaded = upload_media(
+                    instance=account["instance"],
+                    access_token=decrypt_secret(account["access_token"]),
+                    image_bytes=img_bytes,
+                    content_type=img_type,
+                    description=description,
+                )
+            except MastodonAuthError as e:
+                # Permanent (revoked/expired token, or a token that can post
+                # but lacks the media scope): finalize the post as
+                # permanently failed right here. Falling through to
+                # post_status would silently publish text-only whenever the
+                # token can post but not upload media, and would route a
+                # pure 401 into the transient-retry path whenever
+                # post_status hit an unrelated transient failure.
+                # _fail_post fences on the claim token, so a lease lost
+                # during the image I/O no-ops here exactly as it does on
+                # every other failure path.
+                logger.error(
+                    "Echo %s: Mastodon token rejected during image upload for item %s: %s",
+                    echo["id"],
+                    item["id"],
+                    e,
+                )
+                return _fail_post(
+                    posted_id,
+                    claim_token,
+                    echo["id"],
+                    f"Mastodon token rejected: {e}",
+                    permanent=True,
+                )
             if uploaded and uploaded.get("id"):
                 media_ids.append(str(uploaded["id"]))
                 logger.info(
@@ -1321,8 +1350,25 @@ def _send_mastodon(
             # returns the original status instead of creating a duplicate.
             idempotency_key=mastodon_idempotency_key(echo["id"], item["id"]),
         )
-    except Exception:
+    except MastodonAuthError as e:
+        # Token rejected: retries cannot help until the user reconnects.
+        logger.error("Echo %s: Mastodon token rejected: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Mastodon token rejected: {e}",
+            permanent=True,
+        )
+    except (MastodonError, httpx.HTTPStatusError) as e:
+        # _raise_for_status delegates every non-auth HTTP failure to
+        # httpx's HTTPStatusError, so catch it here rather than in the
+        # generic handler — the API's own error text belongs in the row's
+        # error_message, not a flat "delivery failed".
         logger.exception("Echo %s: Mastodon post failed", echo["id"])
+        return _fail_post(posted_id, claim_token, echo["id"], f"Mastodon delivery failed: {e}")
+    except Exception:
+        logger.exception("Echo %s: Mastodon post failed unexpectedly", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], "Mastodon delivery failed")
 
     # The API returns the canonical permalink; persisting it gives the
@@ -1508,7 +1554,9 @@ def _send_bluesky(
     # Content preparation is pure string work, but a bug here must not strand
     # the claimed row — finalize it as failed so the bounded retry owns it.
     try:
-        text = truncate_graphemes(content or "", MAX_POST_GRAPHEMES)
+        text = truncate_graphemes(
+            content or "", MAX_POST_GRAPHEMES, max_bytes=MAX_POST_BYTES
+        )
         facets = build_facets(text)
     except Exception:
         logger.exception("Echo %s: Bluesky content preparation failed", echo["id"])

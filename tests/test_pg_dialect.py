@@ -110,7 +110,7 @@ class TestPostgresInit:
 @requires_pg
 class TestPostgresSessionTimezone:
     def test_connection_pins_session_timezone_to_utc(self, pg_env):
-        """_pg_connect must SET TIME ZONE 'UTC' immediately after connect.
+        """_pg_connect must pin the session timezone to UTC at the handshake.
 
         Without this, CURRENT_TIMESTAMP/NOW() resolve in the server's
         session timezone rather than UTC, silently skewing every naive
@@ -121,6 +121,36 @@ class TestPostgresSessionTimezone:
         with database.get_db() as db:
             tz = db.execute("SELECT current_setting('TimeZone') AS tz").fetchone()["tz"]
         assert tz == "UTC"
+
+    def test_pg_connect_uses_handshake_options_not_post_connect_set(self, pg_env):
+        """The pin must happen at the connection handshake (options=), not
+        via a post-connect SET: psycopg3 wraps SET in an implicit
+        transaction, and a ROLLBACK on that connection reverts the session
+        timezone to the server default (verified: SET->rollback -> server
+        default). options= sets the parameter before any transaction exists
+        and cannot be reverted."""
+        import inspect
+
+        database.init_db()
+        src = inspect.getsource(database._pg_connect)
+        assert 'options="-c timezone=UTC"' in src
+        assert 'SET TIME ZONE' not in src
+        # Behavioral: fresh connection survives a rollback with the pin
+        # intact, against a server whose default timezone is NOT UTC.
+        conn = database._pg_connect()
+        try:
+            assert conn.execute("SHOW timezone").fetchone()[
+                "TimeZone"
+            ] == "UTC"
+            conn.rollback()
+            assert conn.execute("SHOW timezone").fetchone()[
+                "TimeZone"
+            ] == "UTC", (
+                "session timezone reverted after rollback: the pin was"
+                " applied inside a transaction instead of the handshake"
+            )
+        finally:
+            conn.close()
 
 
 @requires_pg
@@ -521,6 +551,91 @@ class TestPostgresMigration:
                     " VALUES ('Alice again', 'alice', 'https://example.com',"
                     " 'token2', 1)"
                 )
+
+    def test_init_db_survives_duplicate_rows_and_dedupes_on_pg(self, pg_env):
+        """Same upgrade-path guarantee as the sqlite suite: a legacy database
+        with duplicate accounts (plain-INSERT oauth_callback) and duplicate
+        active feeds must dedupe BEFORE the unique indexes are built, or the
+        upgrade crashes at boot."""
+        database.init_db()
+        with database.get_db() as db:
+            db.execute("DROP INDEX IF EXISTS idx_feeds_user_url")
+            db.execute("DROP INDEX IF EXISTS idx_accounts_user_instance_username")
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token, user_id)"
+                " VALUES ('Alice', 'alice', 'https://ex.com', 'old-token', 1)"
+            )
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token, user_id)"
+                " VALUES ('Alice new', 'alice', 'https://ex.com', 'new-token', 1)"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id)"
+                " VALUES ('F', 'https://ex.com/rss', 1)"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id)"
+                " VALUES ('F2', 'https://ex.com/rss', 1)"
+            )
+            feed_ids = [
+                r["id"] for r in db.execute(
+                    "SELECT id FROM feeds ORDER BY id"
+                ).fetchall()
+            ]
+            keep_feed_id, old_feed_id = feed_ids[0], feed_ids[1]
+            acct_ids = [
+                r["id"] for r in db.execute(
+                    "SELECT id FROM accounts ORDER BY id"
+                ).fetchall()
+            ]
+            # Accounts keep MAX(id) (freshest reconnect = second insert);
+            # feeds keep MIN(id) (original = first insert).
+            keep_acct_id, old_acct_id = acct_ids[1], acct_ids[0]
+            db.execute(
+                "INSERT INTO echoes (feed_id, destination_type, destination_id,"
+                " template, user_id) VALUES (?, 'mastodon', ?, 't', 1)",
+                (old_feed_id, old_acct_id),
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title)"
+                " VALUES (?, 'i1', 'A')",
+                (keep_feed_id,),
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title)"
+                " VALUES (?, 'i2', 'keep')",
+                (old_feed_id,),
+            )
+
+        # Pre-fix, this raised UniqueViolation from CREATE UNIQUE INDEX.
+        database.init_db()
+
+        with database.get_db() as db:
+            accounts = db.execute(
+                "SELECT id, access_token FROM accounts"
+            ).fetchall()
+            assert len(accounts) == 1
+            # MAX(id) survives: the freshest reconnect wins.
+            assert accounts[0]["access_token"] == "new-token"
+            assert accounts[0]["id"] == keep_acct_id
+            echo = db.execute(
+                "SELECT destination_id FROM echoes"
+            ).fetchone()
+            # The echo must follow the surviving account.
+            assert echo["destination_id"] == keep_acct_id
+            active = db.execute(
+                "SELECT id, deleted_at FROM feeds ORDER BY id"
+            ).fetchall()
+            assert len(active) == 2
+            assert active[0]["deleted_at"] is None
+            assert active[1]["deleted_at"] is not None
+            items = db.execute(
+                "SELECT feed_id, item_id FROM feed_items ORDER BY item_id"
+            ).fetchall()
+            assert [(r["feed_id"], r["item_id"]) for r in items] == [
+                (keep_feed_id, "i1"),
+                (keep_feed_id, "i2"),
+            ]
 
 
 @requires_pg
@@ -934,7 +1049,7 @@ class TestPostgresTimestampReads:
         try:
             assert scheduler._update_post(1, "tok", "success") is True
             with database.get_db() as db:
-                # The connection-level pin wins over the hostile database
+                # The handshake-level pin wins over the hostile database
                 # default: every fresh connection is forced back to UTC, so
                 # this reads 'UTC' rather than the 'America/New_York' just
                 # set above. If this ever reads back "America/New_York",
@@ -944,7 +1059,8 @@ class TestPostgresTimestampReads:
                     "SELECT current_setting('TimeZone') AS tz"
                 ).fetchone()["tz"] == "UTC", (
                     "connection-level UTC pin did not override the hostile"
-                    " database default; _pg_connect's SET TIME ZONE regressed"
+                    " database default; the handshake timezone option"
+                    " regressed"
                 )
                 stored = db.execute(
                     "SELECT posted_at FROM posted_items WHERE id = 1"

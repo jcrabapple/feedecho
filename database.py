@@ -133,15 +133,19 @@ def _pg_connect():
             "pip install 'feedecho[postgres]'"
         ) from exc
     conn = psycopg.connect(
-        settings.DATABASE_URL, row_factory=psycopg.rows.dict_row
+        settings.DATABASE_URL,
+        row_factory=psycopg.rows.dict_row,
+        # Pin the session timezone to UTC at the handshake itself (not via a
+        # post-connect SET, which runs inside psycopg3's implicit transaction
+        # and reverts to the server default on any ROLLBACK, leaving later
+        # statements on the same connection skewed).
+        options="-c timezone=UTC",
     )
-    # Pin the session timezone to UTC. Postgres's CURRENT_TIMESTAMP/NOW()
-    # resolve in the session/server timezone before being cast into our
-    # naive TIMESTAMP columns (unlike sqlite's CURRENT_TIMESTAMP, which is
-    # always UTC) — without this, a non-UTC server timezone silently skews
-    # every stored timestamp relative to as_utc_naive()/timestamp_str()'s
-    # UTC assumption.
-    conn.execute("SET TIME ZONE 'UTC'")
+    # Postgres's CURRENT_TIMESTAMP/NOW() resolve in the session/server
+    # timezone before being cast into our naive TIMESTAMP columns (unlike
+    # sqlite's CURRENT_TIMESTAMP, which is always UTC) — without this, a
+    # non-UTC server timezone silently skews every stored timestamp
+    # relative to as_utc_naive()/timestamp_str()'s UTC assumption.
     return conn
 
 
@@ -240,6 +244,95 @@ def _dedupe_discord_webhook_hashes(db) -> None:
             " WHERE user_id = ? AND webhook_url_hash = ? AND id != ?",
             (d["user_id"], d["webhook_url_hash"], d["keep_id"]),
         )
+
+
+def _dedupe_accounts_for_unique_index(db) -> None:
+    """Collapse duplicate (user_id, instance, username) account rows before
+    the unique index is built.
+
+    Pre-upgrade ``oauth_callback`` and ``add_account`` were plain INSERTs on
+    every reconnect, so long-lived installs can already hold multiple rows
+    for the same logical account; CREATE UNIQUE INDEX over them would crash
+    init_db at boot (the v1.39.0 Discord-hash failure class). Keep the
+    highest id per group — the most recent reconnect carries the freshest
+    token and display name — repoint the references that make rows distinct
+    accounts (echoes + queued_posts by destination), then delete the older
+    rows. Runs best-effort: the index creation below is the hard gate.
+    """
+    dupes = db.execute(
+        "SELECT user_id, instance, username, MAX(id) AS keep_id"
+        " FROM accounts"
+        " GROUP BY user_id, instance, username HAVING COUNT(*) > 1"
+    ).fetchall()
+    for d in dupes:
+        keep_id = d["keep_id"]
+        stale = db.execute(
+            "SELECT id FROM accounts"
+            " WHERE user_id = ? AND instance = ? AND username = ? AND id != ?",
+            (d["user_id"], d["instance"], d["username"], keep_id),
+        ).fetchall()
+        for s in stale:
+            old_id = s["id"]
+            db.execute(
+                "UPDATE echoes SET destination_id = ?"
+                " WHERE destination_type = 'mastodon' AND destination_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "UPDATE queued_posts SET destination_id = ?"
+                " WHERE destination_type = 'mastodon' AND destination_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute("DELETE FROM accounts WHERE id = ?", (old_id,))
+
+
+def _dedupe_feeds_for_unique_index(db) -> None:
+    """Collapse duplicate active (user_id, url) feed rows before the unique
+    index is built.
+
+    Same pre-upgrade plain-INSERT exposure as accounts. Keep the lowest id
+    per group — the original feed, with its poll state and item history —
+    repoint echoes/queued_posts, merge feed_items (delete items that would
+    collide on the destination feed's (feed_id, item_id) unique index, then
+    repoint the rest), and soft-delete the duplicate rows so the partial
+    index accepts them while posted_items history stays intact.
+    """
+    dupes = db.execute(
+        "SELECT user_id, url, MIN(id) AS keep_id"
+        " FROM feeds WHERE deleted_at IS NULL"
+        " GROUP BY user_id, url HAVING COUNT(*) > 1"
+    ).fetchall()
+    for d in dupes:
+        keep_id = d["keep_id"]
+        stale = db.execute(
+            "SELECT id FROM feeds"
+            " WHERE user_id = ? AND url = ? AND deleted_at IS NULL AND id != ?",
+            (d["user_id"], d["url"], keep_id),
+        ).fetchall()
+        for s in stale:
+            old_id = s["id"]
+            db.execute(
+                "UPDATE echoes SET feed_id = ? WHERE feed_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "UPDATE queued_posts SET feed_id = ? WHERE feed_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "DELETE FROM feed_items"
+                " WHERE feed_id = ? AND item_id IN"
+                " (SELECT item_id FROM feed_items WHERE feed_id = ?)",
+                (old_id, keep_id),
+            )
+            db.execute(
+                "UPDATE feed_items SET feed_id = ? WHERE feed_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "UPDATE feeds SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (old_id,),
+            )
 
 
 def prune_feed_items(db, feed_id: int, limit: int | None = None) -> None:
@@ -911,6 +1004,12 @@ def init_db_sqlite() -> None:
         # ignores deleted_at IS NOT NULL rows (see get_feeds/its INSERT
         # dedup query) — a non-partial index would otherwise permanently
         # block re-adding a feed URL after it was deleted.
+        # Pre-upgrade inserts were unguarded (oauth_callback re-connected
+        # via plain INSERT), so already-deployed databases can hold exact
+        # duplicate rows; dedupe them first or CREATE UNIQUE INDEX fails at
+        # boot (the v1.39.0 Discord-hash failure class).
+        _dedupe_feeds_for_unique_index(db)
+        _dedupe_accounts_for_unique_index(db)
         db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
             ON feeds(user_id, url)
@@ -1493,6 +1592,12 @@ def init_db_postgres() -> None:
         # ignores deleted_at IS NOT NULL rows (see get_feeds/its INSERT
         # dedup query) — a non-partial index would otherwise permanently
         # block re-adding a feed URL after it was deleted.
+        # Pre-upgrade inserts were unguarded (oauth_callback re-connected
+        # via plain INSERT), so already-deployed databases can hold exact
+        # duplicate rows; dedupe them first or CREATE UNIQUE INDEX fails at
+        # boot (the v1.39.0 Discord-hash failure class).
+        _dedupe_feeds_for_unique_index(db)
+        _dedupe_accounts_for_unique_index(db)
         db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
             ON feeds(user_id, url)

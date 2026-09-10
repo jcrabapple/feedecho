@@ -182,9 +182,8 @@ class TestOAuthCallbackErrorPages:
 
         monkeypatch.setattr(app_module.settings, "MULTI", True)
         monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
-        monkeypatch.setattr(
-            app_module.settings, "SESSION_SECRET", "x" * 40
-        )
+        monkeypatch.setattr(app_module.settings, "SESSION_SECRET", "x" * 40)
+        monkeypatch.setattr(app_module.settings, "STATE_SECRET", "x" * 40)
         return TestClient(app_module.app)
 
     def test_denied_authorization_renders_an_error_page(self, multi_client):
@@ -395,6 +394,7 @@ class TestAltTextTenantScopingAndSsrf:
         monkeypatch.setattr(app_module.settings, "MULTI", True)
         monkeypatch.setattr(app_module.settings, "AUTH_TOKEN", None)
         monkeypatch.setattr(app_module.settings, "SESSION_SECRET", "y" * 40)
+        monkeypatch.setattr(app_module.settings, "STATE_SECRET", "y" * 40)
         return app_module, TestClient(app_module.app)
 
     def _configure_alt_text(self, user_id: int, base_url: str) -> None:

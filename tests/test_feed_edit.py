@@ -257,7 +257,7 @@ class TestFeedEditInvalidatesSavedSearchCache:
             assert m, f"saved search {search_id} link not found in page"
             anchor = html[m.start(): html.find("</a>", m.end()) + 4]
             badge = re.search(
-                r'class="(?:reader-search-count|reader-feed-unread)"[^>]*>(\d+)</span>',
+                r'class="reader-search-count"[^>]*>(\d+)</span>',
                 anchor,
             )
             return int(badge.group(1)) if badge else 0

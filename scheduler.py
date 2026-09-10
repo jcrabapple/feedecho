@@ -2176,6 +2176,7 @@ def _requeue_drip_release_error(
     item_json: str,
     attempts: int,
     posted_id: int,
+    claim_token: str,
     exc: Exception,
 ) -> None:
     """Requeue a drip release whose dispatch raised an unexpected exception.
@@ -2190,10 +2191,16 @@ def _requeue_drip_release_error(
     would sit unclaimable for the reclaim window while the queue row is
     dead (the queue join only matches status 'queued').
 
+    The UPDATE fences on THIS worker's claim_token, not just 'pending':
+    if the reclaim sweep re-claimed the row while the dispatch was stuck,
+    the token has changed and the new owner's claim must not be clobbered
+    (the queue row was never deleted on this path, so there is nothing to
+    restore either).
+
     'attempts' is deliberately NOT incremented here. This path is an
-    infrastructure fault, not a delivery failure; the flush's per-row
-    isolation logs the traceback, so a persistently faulting release shows
-    up loudly in the logs instead of silently exhausting the retry cap.
+    infrastructure fault, not a delivery failure; record_failure still
+    fires so a persistently faulting release reaches the notify threshold
+    instead of retrying silently every flush.
     """
     with get_db() as db:
         result = db.execute(
@@ -2203,12 +2210,12 @@ def _requeue_drip_release_error(
                       claim_token = NULL,
                       next_retry_at = NULL,
                       posted_at = ?
-                WHERE id = ? AND status = 'pending' AND claim_token IS NOT NULL""",
-            (_now(), posted_id),
+                WHERE id = ? AND status = 'pending' AND claim_token = ?""",
+            (_now(), posted_id, claim_token),
         )
         if result.rowcount != 1:
-            # Someone else finalized the row (e.g. the ten minute reclaim
-            # sweep or a concurrent worker); their outcome owns it now.
+            # The claim was lost (another worker or the reclaim sweep owns
+            # the row now); their outcome wins and the queue row survives.
             return
         db.execute(
             """INSERT INTO drip_items (echo_id, item_id, item_json, attempts)
@@ -2216,6 +2223,7 @@ def _requeue_drip_release_error(
                ON CONFLICT(echo_id, item_id) DO UPDATE SET attempts = excluded.attempts""",
             (echo_id, item_id, item_json, attempts),
         )
+    record_failure(echo_id)
     logger.error(
         "Echo %s: drip release raised %s: %s; item %s requeued (attempt count held at %d)",
         echo_id,
@@ -2704,6 +2712,7 @@ def _flush_one_drip(row, discarded: set[int], released: dict[int, int]) -> None:
                 row["item_json"],
                 row["attempts"],
                 posted_id,
+                claim_token,
                 exc,
             )
             return
@@ -2806,8 +2815,13 @@ def flush_digests() -> None:
 
 def _flush_digests() -> None:
     # Sweep first: stranded items are invisible to the query below, so nothing
-    # would ever clear them.
-    _discard_orphaned_digest_items()
+    # would ever clear them. The sweep itself is per-row isolated; wrapping
+    # the invocation too keeps an unexpected fault there from aborting the
+    # whole tick before any live tenant's digest is queried.
+    try:
+        _discard_orphaned_digest_items()
+    except Exception:
+        logger.exception("Digest orphan sweep: unhandled error before flush")
 
     with get_db() as db:
         # Find all echoes that have pending digest items

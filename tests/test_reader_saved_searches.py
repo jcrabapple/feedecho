@@ -13,21 +13,22 @@ import scheduler
 
 
 def _saved_search_badge(html: str, s_id: int) -> int:
-    """Extract the sidebar unread-count badge for one saved search's link.
+    """Extract the sidebar count badge for one saved search's link.
 
-    Both the per-feed unread badge and the saved-search badge share the
-    ``reader-feed-unread`` class, so a plain substring/regex search over
-    the whole page can accidentally match the wrong badge when the two
-    counts collide. Scope the search to the saved search's own <a> block.
+    Strict to ``reader-search-count`` (the muted total-match styling): a
+    regression back to the unread pill renders 0 here instead of a number,
+    so count assertions pin the restyle too. Scoped to the saved search's
+    own <a> block so a per-feed badge with the same digits can't satisfy it.
     """
     m = re.search(
-        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?".*?</a>' % s_id,
+        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?"' % s_id,
         html,
         re.S,
     )
     assert m, f"saved search {s_id} link not found in page"
+    anchor = html[m.start(): html.find("</a>", m.end()) + 4]
     badge = re.search(
-        r'class="(?:reader-search-count|reader-feed-unread)"[^>]*>(\d+)</span>', m.group(0)
+        r'class="reader-search-count"[^>]*>(\d+)</span>', anchor
     )
     return int(badge.group(1)) if badge else 0
 

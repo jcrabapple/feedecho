@@ -2458,13 +2458,13 @@ _CURSOR_RE = re.compile(r"^[0-9 :.\-]*\|\d+$")
 
 
 class _SavedSearchCountsCache:
-    """Per-user, 60s TTL cache of saved-search unread counts.
+    """Per-user, 60s TTL cache of saved-search item counts.
 
     Invalidation is keyed by max_item_id (see .get()) rather than pure
     time, so a stale entry never outlives the item that would change it by
     more than the TTL. Every route that mutates saved searches, feeds, or
     read-state must call .invalidate(uid) — wrapped in a class (instead of
-    the previous bare module-level dict) so every one of those 9 call
+    the previous bare module-level dict) so every one of those call
     sites reads as an obvious, greppable method name rather than a
     dict.pop() that looks like ordinary housekeeping and is easy to miss
     in a diff. Design-patterns audit finding 2.8.
@@ -2789,7 +2789,7 @@ async def reader_page(
         ).fetchone()
         max_item_id = max_row["m"] if max_row else 0
 
-        # Compute unread counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
+        # Compute counts for saved searches (with in-process 60s cache keyed by (uid, max_item_id))
         saved_search_counts: dict[int, int] = {}
         if saved_searches:
             now_time = time.time()
@@ -4602,6 +4602,8 @@ def import_opml(
                 break
         walk(body_elem if body_elem is not None else root, None, 1)
 
+    # Importing feeds and folders can alter saved-search matches
+    _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(
         url=f"/feeds?imported={imported}&duplicate={duplicate}&invalid={invalid}&capped={capped}",
         status_code=303,

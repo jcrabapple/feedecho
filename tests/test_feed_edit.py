@@ -5,6 +5,7 @@ IDs from the old feed are meaningless against the new one. Renames and
 interval-only edits must preserve the cursor.
 """
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -247,9 +248,19 @@ class TestFeedEditInvalidatesSavedSearchCache:
             headers={"Accept": "application/json"},
         ).json()["id"]
 
+        def _saved_search_badge(html: str, search_id: int) -> int:
+            m = re.search(
+                r'href="/reader\?saved=%d(?:&amp;fulltext=1)?".*?</a>' % search_id,
+                html,
+                re.S,
+            )
+            assert m, f"saved search {search_id} link not found in page"
+            badge = re.search(r'reader-feed-unread">(\d+)</span>', m.group(0))
+            return int(badge.group(1)) if badge else 0
+
         # Populate the cache: unmuted, "widget" matches the one unread item.
         r1 = client.get(f"/reader?saved={s_id}")
-        assert '<span class="reader-feed-unread">1</span>' in r1.text
+        assert _saved_search_badge(r1.text, s_id) == 1
         assert 1 in app_module._saved_search_counts_cache._store
 
         # Mute "widget" on this feed via edit_feed.
@@ -266,4 +277,5 @@ class TestFeedEditInvalidatesSavedSearchCache:
         # Cache must be invalidated immediately, not stale until TTL expiry.
         assert 1 not in app_module._saved_search_counts_cache._store
         r2 = client.get(f"/reader?saved={s_id}")
+        assert _saved_search_badge(r2.text, s_id) == 0
         assert app_module._saved_search_counts_cache._store[1][2][s_id] == 0

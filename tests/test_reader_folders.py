@@ -1,5 +1,6 @@
 """Tests for reader folders (Phase 1.1)."""
 
+import re
 import pytest
 from fastapi.testclient import TestClient
 
@@ -151,6 +152,18 @@ def _create_saved_search(client, name, query):
     return r.json()["id"]
 
 
+def _saved_search_badge(html: str, s_id: int) -> int:
+    """Extract the sidebar count badge for one saved search's link."""
+    m = re.search(
+        r'href="/reader\?saved=%d(?:&amp;fulltext=1)?".*?</a>' % s_id,
+        html,
+        re.S,
+    )
+    assert m, f"saved search {s_id} link not found in page"
+    badge = re.search(r'reader-feed-unread">(\d+)</span>', m.group(0))
+    return int(badge.group(1)) if badge else 0
+
+
 def test_rename_folder_invalidates_saved_search_counts_cache(folder_env):
     """Bug review 2026-09-09 finding #14: renaming a folder that a saved
     search filters on (folder:<name>) must invalidate the cached counts
@@ -165,7 +178,7 @@ def test_rename_folder_invalidates_saved_search_counts_cache(folder_env):
 
     # Populate the cache: "folder:computing" matches Tech Post 1 (feed 1).
     r1 = client.get(f"/reader?saved={s_id}")
-    assert '<span class="reader-feed-unread">1</span>' in r1.text
+    assert _saved_search_badge(r1.text, s_id) == 1
     assert 1 in app_module._saved_search_counts_cache._store
 
     # Rename the folder so "folder:computing" no longer matches anything.
@@ -175,10 +188,10 @@ def test_rename_folder_invalidates_saved_search_counts_cache(folder_env):
     # The cache entry must be gone so the next read recomputes...
     assert 1 not in app_module._saved_search_counts_cache._store
     # ...and the recomputed count must reflect the rename immediately (0
-    # matches now; a 0 count renders no badge span at all, so read the
-    # cache directly rather than parsing the page for an absent element).
+    # matches now; a 0 count renders no badge span at all).
     r2 = client.get(f"/reader?saved={s_id}")
     assert r2.status_code == 200
+    assert _saved_search_badge(r2.text, s_id) == 0
     cached = app_module._saved_search_counts_cache._store[1]
     assert cached[2][s_id] == 0
 
@@ -196,6 +209,7 @@ def test_set_feed_folder_invalidates_saved_search_counts_cache(folder_env):
     # No feed is in the folder yet.
     r1 = client.get(f"/reader?saved={s_id}")
     assert r1.status_code == 200
+    assert _saved_search_badge(r1.text, s_id) == 0
     assert app_module._saved_search_counts_cache._store[1][2][s_id] == 0
 
     # Move feed 1 (Tech Post 1, unread) into the folder.
@@ -204,7 +218,7 @@ def test_set_feed_folder_invalidates_saved_search_counts_cache(folder_env):
 
     assert 1 not in app_module._saved_search_counts_cache._store
     r2 = client.get(f"/reader?saved={s_id}")
-    assert '<span class="reader-feed-unread">1</span>' in r2.text
+    assert _saved_search_badge(r2.text, s_id) == 1
 
 
 def test_delete_folder_invalidates_saved_search_counts_cache(folder_env):
@@ -219,7 +233,7 @@ def test_delete_folder_invalidates_saved_search_counts_cache(folder_env):
     s_id = _create_saved_search(client, "Computing Folder", "folder:computing")
 
     r1 = client.get(f"/reader?saved={s_id}")
-    assert '<span class="reader-feed-unread">1</span>' in r1.text
+    assert _saved_search_badge(r1.text, s_id) == 1
     assert 1 in app_module._saved_search_counts_cache._store
 
     r_del = client.post(f"/api/folders/{fid}/delete", follow_redirects=False)
@@ -228,4 +242,28 @@ def test_delete_folder_invalidates_saved_search_counts_cache(folder_env):
     assert 1 not in app_module._saved_search_counts_cache._store
     r2 = client.get(f"/reader?saved={s_id}")
     assert r2.status_code == 200
+    assert _saved_search_badge(r2.text, s_id) == 0
     assert app_module._saved_search_counts_cache._store[1][2][s_id] == 0
+
+
+def test_import_opml_invalidates_saved_search_counts_cache(folder_env):
+    """OPML import can create folders and feeds that saved searches filter on,
+    so it must invalidate the counts cache."""
+    client = TestClient(app)
+    s_id = _create_saved_search(client, "Imported Folder", "folder:imported")
+
+    r1 = client.get(f"/reader?saved={s_id}")
+    assert r1.status_code == 200
+    assert 1 in app_module._saved_search_counts_cache._store
+    assert app_module._saved_search_counts_cache._store[1][2][s_id] == 0
+
+    opml = (
+        '<?xml version="1.0"?><opml version="2.0"><body>'
+        '<outline text="Imported">'
+        '  <outline text="New Feed" xmlUrl="https://example.com/new.xml"/>'
+        '</outline>'
+        '</body></opml>'
+    )
+    r_import = client.post("/api/feeds/opml", data={"opml": opml}, follow_redirects=False)
+    assert r_import.status_code == 303
+    assert 1 not in app_module._saved_search_counts_cache._store

@@ -101,6 +101,7 @@ class TestEncryptDecrypt:
         monkeypatch.setattr(s, "DATABASE_URL", "")
         monkeypatch.setattr(s, "ALLOW_SQLITE_FALLBACK", True)
         monkeypatch.setattr(s, "SESSION_SECRET", "s" * 40)
+        monkeypatch.setattr(s, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(s, "CREDENTIAL_KEY", "not-a-valid-fernet-key")
         with pytest.raises(RuntimeError, match="not a valid Fernet key"):
             s.validate_config()

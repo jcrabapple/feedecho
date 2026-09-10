@@ -292,6 +292,19 @@ def validate_config() -> None:
         raise RuntimeError(
             "FEEDECHO_SESSION_SECRET must be at least 32 characters in multi mode"
         )
+    if not STATE_SECRET:
+        # Without this, oauth._state_secret() would otherwise need to fall
+        # back to FEEDECHO_AUTH_TOKEN (a carried-over single-mode value with
+        # no minimum-length requirement) to key OAuth-state HMACs — that
+        # fallback is itself gated to raise, but only at first OAuth use;
+        # catching it here fails loudly at startup instead.
+        raise RuntimeError(
+            "FEEDECHO_STATE_SECRET must be set when FEEDECHO_MODE=multi"
+        )
+    if len(STATE_SECRET) < 32:
+        raise RuntimeError(
+            "FEEDECHO_STATE_SECRET must be at least 32 characters in multi mode"
+        )
     if not BASE_URL:
         # Deliberately a warning, not a raise: unlike DATABASE_URL and
         # SESSION_SECRET, an unset BASE_URL degrades one feature (the links in

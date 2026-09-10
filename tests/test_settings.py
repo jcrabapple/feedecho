@@ -100,6 +100,13 @@ class TestValidateConfig:
         monkeypatch.setattr(
             settings, "SESSION_SECRET", kwargs.get("secret", "")
         )
+        # Defaults to a valid value: tests targeting a later check (e.g.
+        # CREDENTIAL_KEY) shouldn't also have to think about this one.
+        # Tests that specifically target the STATE_SECRET check pass
+        # state="" (or a short value) explicitly.
+        monkeypatch.setattr(
+            settings, "STATE_SECRET", kwargs.get("state", "s" * 32)
+        )
         monkeypatch.setattr(
             settings, "CREDENTIAL_KEY", kwargs.get("key", "")
         )
@@ -129,6 +136,26 @@ class TestValidateConfig:
     def test_multi_with_short_session_secret_raises(self, monkeypatch):
         self._set_multi(
             monkeypatch, url="postgresql://x/x", secret="short", key=_VALID_KEY
+        )
+        import pytest
+
+        with pytest.raises(RuntimeError, match="at least 32"):
+            settings.validate_config()
+
+    def test_multi_without_state_secret_raises(self, monkeypatch):
+        self._set_multi(
+            monkeypatch, url="postgresql://x/x", secret="s" * 32, state="",
+            key=_VALID_KEY,
+        )
+        import pytest
+
+        with pytest.raises(RuntimeError, match="FEEDECHO_STATE_SECRET"):
+            settings.validate_config()
+
+    def test_multi_with_short_state_secret_raises(self, monkeypatch):
+        self._set_multi(
+            monkeypatch, url="postgresql://x/x", secret="s" * 32,
+            state="short", key=_VALID_KEY,
         )
         import pytest
 

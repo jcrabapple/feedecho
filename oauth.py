@@ -14,7 +14,6 @@ import settings
 from database import get_db
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
 from security import decrypt_secret, encrypt_secret
-from settings import AUTH_TOKEN, STATE_SECRET
 
 SCOPES = "read write"
 STATE_TTL_SECONDS = 10 * 60
@@ -24,10 +23,28 @@ STATE_TTL_SECONDS = 10 * 60
 # silently shipping two different links.
 FALLBACK_WEBSITE = "https://github.com/jcrabapple/feedecho"
 
-# STATE_SECRET wins: in multi mode a carried-over single-mode AUTH_TOKEN must
-# never silently key OAuth-state HMACs (mirrors security.session_secret()'s
-# gate, which exists for exactly this scenario).
-_STATE_SECRET = (STATE_SECRET or AUTH_TOKEN or secrets.token_urlsafe(32)).encode("utf-8")
+# A random-per-process fallback used only in single mode (OAuth state is a
+# same-process CSRF token there; nothing depends on it surviving a restart).
+_RANDOM_FALLBACK_SECRET = secrets.token_urlsafe(32).encode("utf-8")
+
+
+def _state_secret() -> bytes:
+    """The HMAC key for OAuth state signatures.
+
+    Multi mode requires FEEDECHO_STATE_SECRET explicitly — mirrors
+    security.session_secret()'s gate, which exists for exactly this
+    scenario: a carried-over single-mode FEEDECHO_AUTH_TOKEN must never
+    silently key OAuth-state HMACs (it has no minimum-length requirement,
+    unlike FEEDECHO_SESSION_SECRET). Single mode falls back to AUTH_TOKEN,
+    then a random per-process value (OAuth state there is a same-process
+    CSRF token, not shared across restarts).
+    """
+    if settings.MULTI and not settings.STATE_SECRET:
+        raise RuntimeError(
+            "FEEDECHO_STATE_SECRET must be set when FEEDECHO_MODE=multi"
+        )
+    key = settings.STATE_SECRET or settings.AUTH_TOKEN
+    return key.encode("utf-8") if key else _RANDOM_FALLBACK_SECRET
 
 
 def _now() -> datetime:
@@ -45,7 +62,7 @@ def _hash_session_binding(session_binding: str) -> str:
 
 def _state_signature(nonce: str, instance: str) -> str:
     payload = f"{nonce}|{instance}".encode("utf-8")
-    return hmac.new(_STATE_SECRET, payload, hashlib.sha256).hexdigest()
+    return hmac.new(_state_secret(), payload, hashlib.sha256).hexdigest()
 
 
 def _sign_state(

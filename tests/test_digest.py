@@ -398,6 +398,81 @@ class TestDigestFlush:
         assert "1. First" in body
         assert "2. Second" in body
 
+    def test_flush_isolates_failing_echo_from_others(self, db_tmp, monkeypatch):
+        """One echo raising mid-processing must not skip the rest of the batch.
+
+        Regression test for a missing per-row try/except in _flush_digests:
+        previously an uncaught exception anywhere in an echo's processing
+        body (not just the narrow send_email guard) propagated out of
+        _flush_digests entirely, leaving every echo scheduled after the
+        offending one in iteration order unflushed for that whole tick.
+        """
+        import scheduler
+
+        sent_emails = []
+        monkeypatch.setattr(
+            scheduler, "send_email", lambda **kw: sent_emails.append(kw) or {"success": True}
+        )
+
+        # Echo 1: will blow up during finalize (record_success), a step that
+        # was never wrapped in the old narrow try/except.
+        echo1 = _setup_email_echo(db_tmp)
+
+        # Echo 2: a second, unrelated echo that must still be flushed.
+        with db_tmp.get_db() as db:
+            db.execute(
+                "INSERT INTO email_accounts (name, email) VALUES (?, ?)",
+                ("User 2", "user2@example.com"),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES (?, ?)",
+                ("f2", "https://example.com/feed2"),
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, filter_keywords, filter_mode,
+                                       content_warning, attach_image, delivery_mode, enabled)
+                   VALUES (2, 'email', 2, '{{ title }}', 'public', '', 'exclude', '', 0, 'digest', 1)""",
+            )
+            echo2 = db.execute("SELECT * FROM echoes WHERE id = 2").fetchone()
+
+        scheduler.process_echo(echo1, _item(id="a1", title="From Feed 1"))
+        scheduler.process_echo(echo2, _item(id="b1", title="From Feed 2"))
+
+        orig_record_success = scheduler.record_success
+
+        def flaky_record_success(echo_id):
+            if echo_id == 1:
+                raise RuntimeError("transient DB error")
+            return orig_record_success(echo_id)
+
+        monkeypatch.setattr(scheduler, "record_success", flaky_record_success)
+
+        scheduler.flush_digests()
+
+        # Echo 2's digest still went out despite echo 1 (processed first)
+        # raising during its finalize step.
+        bodies = [e["body"] for e in sent_emails]
+        assert any("From Feed 2" in b for b in bodies)
+
+        with db_tmp.get_db() as db:
+            echo2_items = db.execute("SELECT * FROM digest_items WHERE echo_id = 2").fetchall()
+        assert echo2_items == []
+
+        # Echo 1's email still went out and its posted_items/digest_items
+        # finalize writes (which happen before record_success) still landed;
+        # only the record_success call itself failed, and that failure was
+        # contained to echo 1's iteration instead of aborting the whole
+        # flush before echo 2 was ever reached.
+        assert any("From Feed 1" in b for b in bodies)
+        with db_tmp.get_db() as db:
+            echo1_items = db.execute("SELECT * FROM digest_items WHERE echo_id = 1").fetchall()
+            echo1_status = db.execute(
+                "SELECT status FROM posted_items WHERE echo_id = 1 AND item_id = 'a1'"
+            ).fetchone()["status"]
+        assert echo1_items == []
+        assert echo1_status == "success"
+
     def test_flush_after_failed_then_succeeded(self, db_tmp, monkeypatch):
         """If first flush fails, items should remain and succeed on second flush."""
         import scheduler

@@ -561,3 +561,79 @@ class TestReaderImportExport:
             ).fetchone()
         assert row["read_enabled"] == 0
 
+
+class TestConcurrentInsertRaces:
+    """The unique indexes turn a lost check-then-insert race into an
+    IntegrityError. Every insert path under an import must handle that
+    (ON CONFLICT DO NOTHING + survivor lookup), not 500."""
+
+    def test_feed_race_maps_onto_survivor(self, temp_db, monkeypatch):
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 7, "name": "F", "url": "https://e.com/raced"}],
+            "accounts": {section: [] for section in import_export.ACCOUNT_TYPES},
+            "echoes": [],
+        }
+        real_clamp = import_export._clamp_poll
+
+        def clamp_and_race(db, uid, poll_interval):
+            # Runs after the import's dedup SELECT and before its INSERT:
+            # simulate a concurrent manual add winning the race.
+            with get_db() as db2:
+                db2.execute(
+                    "INSERT INTO feeds (name, url, user_id)"
+                    " VALUES ('Racer', 'https://e.com/raced', 1)"
+                )
+            return real_clamp(db, uid, poll_interval)
+
+        monkeypatch.setattr(import_export, "_clamp_poll", clamp_and_race)
+        with get_db() as db:
+            summary = import_export.import_data(db, 1, payload)
+            rows = db.execute(
+                "SELECT id, name FROM feeds WHERE url = 'https://e.com/raced'"
+            ).fetchall()
+        assert len(rows) == 1  # only the concurrent row survives
+        assert rows[0]["name"] == "Racer"
+        assert summary["added_feeds"] == 1  # mapped, not crashed
+
+    def test_account_race_maps_onto_survivor(self, temp_db, monkeypatch):
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [],
+            "accounts": {
+                "mastodon": [{
+                    "id": 9, "name": "A", "username": "alice",
+                    "instance": "https://m.example", "access_token": "tok",
+                }]
+            },
+            "echoes": [],
+        }
+        real_existing = import_export._existing_account_id
+
+        def existing_and_race(db, uid, section, account):
+            found = real_existing(db, uid, section, account)
+            if found is None and section == "mastodon":
+                # Runs after the import's dedup SELECT and before its
+                # INSERT: simulate a concurrent connect winning the race.
+                with get_db() as db2:
+                    db2.execute(
+                        "INSERT INTO accounts (name, username, instance,"
+                        " access_token, user_id)"
+                        " VALUES ('Racer', 'alice', 'https://m.example',"
+                        " 'racer-token', 1)"
+                    )
+            return found
+
+        monkeypatch.setattr(import_export, "_existing_account_id", existing_and_race)
+        with get_db() as db:
+            summary = import_export.import_data(db, 1, payload)
+            rows = db.execute(
+                "SELECT id, name, access_token FROM accounts"
+                " WHERE username = 'alice'"
+            ).fetchall()
+        assert len(rows) == 1  # only the concurrent row survives
+        assert rows[0]["name"] == "Racer"
+        assert summary["added_accounts"] == 1  # mapped, not crashed
+

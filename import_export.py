@@ -393,6 +393,18 @@ def _clamp_drip(db, uid: int, drip_limit) -> int:
     return drip
 
 
+def _existing_feed_id(db, uid: int, url: str):
+    """The id of the user's existing active feed for ``url``, if any.
+
+    Mirrors ``_existing_account_id``: shared by the dedup pre-check and the
+    race fallback after an ``ON CONFLICT DO NOTHING`` insert.
+    """
+    return db.execute(
+        "SELECT id FROM feeds WHERE user_id = ? AND url = ? AND deleted_at IS NULL",
+        (uid, url),
+    ).fetchone()
+
+
 def import_data(db, uid: int, payload: dict) -> dict:
     """Import an export document for one user, returning a summary.
 
@@ -414,10 +426,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
         url = str(feed.get("url") or "").strip()
         if not url:
             raise ExportError("Feed is missing a URL.")
-        existing = db.execute(
-            "SELECT id FROM feeds WHERE user_id = ? AND url = ? AND deleted_at IS NULL",
-            (uid, url),
-        ).fetchone()
+        existing = _existing_feed_id(db, uid, url)
         if existing:
             feed_map[old_id] = existing["id"]
             continue
@@ -466,7 +475,10 @@ def import_data(db, uid: int, payload: dict) -> dict:
         poll = _clamp_poll(db, uid, feed.get("poll_interval"))
         row = db.execute(
             "INSERT INTO feeds (name, url, feed_type, poll_interval, last_item_id,"
-            " paused, read_enabled, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            " paused, read_enabled, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(user_id, url) WHERE deleted_at IS NULL DO NOTHING"
+            " RETURNING id",
             (
                 str(feed.get("name") or "").strip(),
                 url,
@@ -478,6 +490,12 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 uid,
             ),
         ).fetchone()
+        if row is None:
+            # A concurrent request (another import, or a manual add) inserted
+            # the same user+url between our SELECT above and this INSERT: the
+            # unique index rejected the duplicate, so map onto the survivor
+            # instead of raising a bare IntegrityError.
+            row = _existing_feed_id(db, uid, url)
         for old_id in feed_oldids[url]:
             feed_map[old_id] = row["id"]
 
@@ -496,11 +514,24 @@ def import_data(db, uid: int, payload: dict) -> dict:
             ]
             placeholders = ", ".join("?" for _ in cols)
             column_list = ", ".join(cols)
+            key_cols = _KEY_COLS[section]
+            conflict_target = ", ".join(key_cols)
             row = db.execute(
                 f"INSERT INTO {table} ({column_list}, user_id)"
-                f" VALUES ({placeholders}, ?) RETURNING id",
+                f" VALUES ({placeholders}, ?)"
+                f" ON CONFLICT(user_id, {conflict_target}) DO NOTHING"
+                f" RETURNING id",
                 (*values, uid),
             ).fetchone()
+            if row is None:
+                # A concurrent request inserted the same natural key between
+                # our SELECT above and this INSERT: map onto the survivor
+                # instead of raising a bare IntegrityError.
+                clause = " AND ".join(f"{c} = ?" for c in key_cols)
+                row = db.execute(
+                    f"SELECT id FROM {table} WHERE user_id = ? AND {clause}",
+                    (uid, *key),
+                ).fetchone()
             for old_id in account_oldids[section][key]:
                 account_maps[section][old_id] = row["id"]
 

@@ -103,6 +103,47 @@ class TestOpml:
         assert '<outline text="Tech">' in text
         assert 'xmlUrl="https://example.com/ars.xml"' in text
 
+    def test_import_concurrent_duplicate_url_counts_as_duplicate_not_500(
+        self, env, monkeypatch
+    ):
+        """A duplicate that appears BETWEEN the route's existence snapshot
+        and its INSERT (import racing a manual add, or a second import) must
+        be counted via the unique index as 'duplicate', not raise a bare
+        IntegrityError (500). The index only exists because this import used
+        to dedupe with check-then-insert alone."""
+        import app as app_module
+
+        real_validate = app_module.validate_url
+
+        def validate_and_race(url):
+            validated = real_validate(url)
+            if validated == "https://example.com/raced.xml":
+                # Simulate the concurrent insert: we are inside the import's
+                # outline loop, after its SELECT-snapshot of existing urls.
+                with database.get_db() as db2:
+                    db2.execute(
+                        "INSERT INTO feeds (name, url, user_id)"
+                        " VALUES ('Racer', 'https://example.com/raced.xml', 1)"
+                    )
+            return validated
+
+        monkeypatch.setattr(app_module, "validate_url", validate_and_race)
+        opml = (
+            '<?xml version="1.0"?><opml version="2.0"><body>'
+            '<outline text="Raced" xmlUrl="https://example.com/raced.xml"/>'
+            "</body></opml>"
+        )
+        with TestClient(app) as c:
+            r = c.post("/api/feeds/opml", data={"opml": opml}, follow_redirects=False)
+        assert r.status_code == 303
+        assert "duplicate=1" in r.headers["location"]
+        assert "imported=0" in r.headers["location"]
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT id FROM feeds WHERE url = 'https://example.com/raced.xml'"
+            ).fetchall()
+        assert len(rows) == 1  # only the concurrent row survives
+
     def test_import_oversize_upload_rejected(self, env):
         oversize = b"a" * (2_000_001)
         with TestClient(app) as c:

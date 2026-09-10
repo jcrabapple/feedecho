@@ -35,11 +35,12 @@ def _seed_feed(name="Example Feed", url="https://example.com/feed.xml"):
         return cursor.lastrowid
 
 
-def _seed_account():
+def _seed_account(username="test"):
     with get_db() as db:
         cursor = db.execute(
             "INSERT INTO accounts (name, username, instance, access_token)"
-            " VALUES ('Test', 'test', 'https://example.com', 'tok')"
+            " VALUES ('Test', ?, 'https://example.com', 'tok')",
+            (username,),
         )
         return cursor.lastrowid
 
@@ -232,7 +233,7 @@ class TestEchoFormValidation:
     def test_edit_echo_rejects_bad_template(self, client):
         feed_id = _seed_feed()
         echo_id = _seed_echo(feed_id)
-        account_id = _seed_account()
+        account_id = _seed_account(username="test2")
         form = self._mastodon_form(feed_id, account_id, "{% if summary %}broken")
         form["echo_id"] = str(echo_id)
         resp = client.post(

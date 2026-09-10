@@ -149,7 +149,10 @@ class TestFeedCapRoute:
         for i in range(n):
             r = client.post(
                 "/api/feeds",
-                data={"name": f"f{i}", "url": "https://example.com/feed.xml"},
+                # Distinct per-iteration URLs: feeds now have a UNIQUE(user_id,
+                # url) index, so identical URLs would collapse into a single
+                # upserted row instead of counting toward the plan cap.
+                data={"name": f"f{i}", "url": f"https://example.com/feed{i}.xml"},
                 follow_redirects=False,
             )
             assert r.status_code == 303
@@ -225,6 +228,54 @@ class TestFeedCapRoute:
             row = db.execute("SELECT poll_interval FROM feeds").fetchone()
         assert row["poll_interval"] == 1  # no plan clamp in single mode
 
+    def test_readd_existing_url_at_cap_updates_instead_of_402(self, multi_client):
+        """The feed INSERT is an upsert: re-adding an existing URL adds zero
+        rows, so the plan cap must not block it (it previously 402'd)."""
+        self._fill_feeds(multi_client, 5)
+        r = multi_client.post(
+            "/api/feeds",
+            data={"name": "renamed", "url": "https://example.com/feed0.xml"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT name FROM feeds WHERE url = 'https://example.com/feed0.xml'"
+                " AND user_id = ?",
+                (UID,),
+            ).fetchall()
+        assert len(rows) == 1  # upserted, not duplicated
+        assert rows[0]["name"] == "renamed"
+
+    def test_readd_soft_deleted_url_creates_new_row_and_hits_cap_check(
+        self, multi_client
+    ):
+        """A soft-deleted URL sits outside the partial unique index, so
+        re-adding it creates a NEW active row: it must go through the cap
+        check as a new feed (here it succeeds because the delete freed a
+        slot), and the result is two rows for one URL, one deleted."""
+        self._fill_feeds(multi_client, 5)
+        with database.get_db() as db:
+            db.execute(
+                "UPDATE feeds SET deleted_at = '2026-01-01 00:00:00'"
+                " WHERE user_id = ? AND url = 'https://example.com/feed0.xml'",
+                (UID,),
+            )
+        r = multi_client.post(
+            "/api/feeds",
+            data={"name": "resurrected", "url": "https://example.com/feed0.xml"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT deleted_at FROM feeds"
+                " WHERE url = 'https://example.com/feed0.xml' AND user_id = ?",
+                (UID,),
+            ).fetchall()
+        assert len(rows) == 2
+        assert sum(1 for x in rows if x["deleted_at"] is None) == 1
+
 class TestDestinationCapRoute:
     def test_add_destination_blocked_at_cap(self, multi_client):
         for i in range(5):
@@ -242,6 +293,68 @@ class TestDestinationCapRoute:
         )
         assert r.status_code == 200
         assert "5 connected" in r.text
+
+    def test_readd_existing_mastodon_account_at_cap_updates_instead_of_402(
+        self, multi_client, monkeypatch
+    ):
+        """The accounts INSERT is an upsert: re-adding an existing
+        (user, instance, username) account adds zero rows, so the
+        destination cap must not block a reconnect (it previously 402'd)."""
+        monkeypatch.setattr("app.validate_url", lambda u: u)
+        r = multi_client.post(
+            "/api/accounts",
+            data={"name": "A", "username": "alice",
+                  "instance": "https://m.example", "access_token": "tok1"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        # Fill the rest of the cap: 1 account + 4 emails = 5 total.
+        for i in range(4):
+            multi_client.post(
+                "/api/email-accounts",
+                data={"name": f"a{i}", "email": f"user{i}@example.com"},
+                follow_redirects=False,
+            )
+        # Reconnect the SAME account: must succeed and update, not 402.
+        r = multi_client.post(
+            "/api/accounts",
+            data={"name": "A2", "username": "alice",
+                  "instance": "https://m.example", "access_token": "tok2"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT id, name, access_token FROM accounts"
+                " WHERE user_id = ? AND username = 'alice'",
+                (UID,),
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "A2"
+        assert rows[0]["access_token"] == "tok2"
+
+    def test_new_mastodon_account_at_cap_still_402s(self, multi_client, monkeypatch):
+        """The cap gate must still fire for genuinely new accounts."""
+        monkeypatch.setattr("app.validate_url", lambda u: u)
+        for i in range(5):
+            multi_client.post(
+                "/api/email-accounts",
+                data={"name": f"a{i}", "email": f"user{i}@example.com"},
+                follow_redirects=False,
+            )
+        r = multi_client.post(
+            "/api/accounts",
+            data={"name": "B", "username": "bob",
+                  "instance": "https://m.example", "access_token": "tok"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 200
+        assert "5 connected" in r.text
+        with database.get_db() as db:
+            count = db.execute(
+                "SELECT COUNT(*) AS c FROM accounts WHERE username = 'bob'"
+            ).fetchone()["c"]
+        assert count == 0
 
     def test_cap_counts_across_destination_types(self, multi_client):
         # 4 email + 1 microblog = 5 total → next email is blocked

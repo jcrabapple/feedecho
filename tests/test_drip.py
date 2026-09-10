@@ -363,6 +363,62 @@ class TestFlushDrips:
         assert _state(database, 1, "item-1") == "success"
         assert _drip_row_count(database, 1) == 0
 
+    def test_flush_isolates_failing_echo_from_others(self, env, monkeypatch):
+        """One echo raising mid-processing must not skip the rest of the batch.
+
+        Regression test for a missing per-row try/except in _flush_drips:
+        previously an uncaught exception anywhere in a row's processing body
+        (not just the narrow json.loads/post-status guards) propagated out of
+        _flush_drips entirely, leaving every echo scheduled after the
+        offending row in iteration order unprocessed for that whole tick.
+        """
+        database, scheduler, _ = env
+        echo1 = _seed(env, drip_limit=2)
+
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token)"
+                " VALUES ('main2', 'user2', 'https://mastodon.social', 'tok2')"
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES ('f2', 'https://example.com/feed2')"
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, filter_keywords, filter_mode, enabled,
+                                       delivery_mode, drip_limit, content_warning, attach_image)
+                   VALUES (2, 'mastodon', 2, '{{ title }}', 'public', '', 'exclude', 1,
+                           'instant', 2, '', 0)"""
+            )
+
+        _queue_item(database, 1, "item-1", _item(id="item-1"))
+        _queue_item(database, 2, "item-2", _item(id="item-2"))
+
+        orig_drip_rate = scheduler._drip_rate
+
+        def flaky_drip_rate(echo_id):
+            if echo_id == 1:
+                raise RuntimeError("transient DB error")
+            return orig_drip_rate(echo_id)
+
+        monkeypatch.setattr(scheduler, "_drip_rate", flaky_drip_rate)
+
+        posted = []
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: posted.append(kw) or {"id": "x"})
+
+        scheduler.flush_drips()
+
+        # Echo 2's item is still delivered, even though echo 1 (processed
+        # first) raised.
+        assert len(posted) == 1
+        assert _state(database, 2, "item-2") == "success"
+        assert _drip_row_count(database, 2) == 0
+
+        # Echo 1's item is left untouched (not silently dropped) so a later
+        # flush retries it once the transient error clears.
+        assert _state(database, 1, "item-1") == "queued"
+        assert _drip_row_count(database, 1) == 1
+
     def test_release_gives_up_after_attempt_cap(self, env, monkeypatch):
         database, scheduler, _ = env
         _seed(env, drip_limit=5)
@@ -422,3 +478,65 @@ class TestDripAPI:
         with database.get_db() as db:
             row = db.execute("SELECT drip_limit FROM echoes WHERE id = 1").fetchone()
         assert row["drip_limit"] == 7
+
+
+def _set_state(database, echo_id, item_id, status):
+    with database.get_db() as db:
+        db.execute(
+            "UPDATE posted_items SET status = ? WHERE echo_id = ? AND item_id = ?",
+            (status, echo_id, item_id),
+        )
+
+
+class TestDripReleaseErrorRecovery:
+    """An unexpected exception escaping _render_and_dispatch must not lose
+    the drip item. Regression for the old ordering, which deleted the
+    drip_items row BEFORE dispatch: an escaped exception (infrastructure
+    fault, not a sender failure) left the posted row stranded 'pending'
+    forever and the queue entry gone — the item silently vanished."""
+
+    def test_dispatch_exception_requeues_instead_of_dropping(self, env, monkeypatch):
+        database, scheduler, _ = env
+        echo = _seed(env, drip_limit=2)
+        _queue_item(database, 1, "item-1", _item(id="item-1"))
+
+        attempts_seen = []
+        real_dispatch = scheduler._render_and_dispatch
+
+        def flaky_dispatch(echo, item, feed_name, posted_id, claim_token, **kw):
+            attempts_seen.append(posted_id)
+            raise RuntimeError("connection reset during dispatch")
+
+        monkeypatch.setattr(scheduler, "_render_and_dispatch", flaky_dispatch)
+
+        scheduler.flush_drips()
+
+        # First flush: dispatch blew up, so the item must be back in the
+        # queue and the posted row back to 'queued' with the claim cleared.
+        assert _drip_row_count(database, 1) == 1
+        assert _state(database, 1, "item-1") == "queued"
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, claim_token, attempt_count FROM posted_items"
+                " WHERE echo_id = 1 AND item_id = 'item-1'"
+            ).fetchone()
+            queue_row = db.execute(
+                "SELECT attempts FROM drip_items WHERE echo_id = 1"
+            ).fetchone()
+        assert row["claim_token"] is None
+        assert row["attempt_count"] == 0  # infrastructure fault, not a send failure
+        assert queue_row["attempts"] == 0
+
+        # Second flush with dispatch healthy: the same item releases
+        # normally, proving the requeue kept it deliverable. Restore the
+        # real dispatch and stub the sender so the full machinery runs
+        # and records success like a live release would.
+        monkeypatch.setattr(scheduler, "_render_and_dispatch", real_dispatch)
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: {"id": "x", "url": "https://x/1"}
+        )
+        scheduler.flush_drips()
+
+        assert _state(database, 1, "item-1") == "success"
+        assert _drip_row_count(database, 1) == 0
+        assert len(attempts_seen) == 1

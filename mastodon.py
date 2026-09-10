@@ -1,5 +1,6 @@
 """Mastodon API client — post statuses via the Mastodon REST API."""
 
+import hashlib
 import httpx
 from typing import Optional
 from feed_parser import pinned_request, validate_outbound_url
@@ -30,6 +31,20 @@ def _raise_for_status(response) -> None:
             f"Mastodon rejected the access token (HTTP {response.status_code})."
         )
     response.raise_for_status()
+
+
+def idempotency_key(echo_id: int, item_id: str) -> str:
+    """A deterministic Idempotency-Key for one echo+item post.
+
+    Mastodon's POST /api/v1/statuses honors a client-supplied
+    Idempotency-Key header: submitting the same key twice within its
+    retention window returns the original status instead of creating a
+    duplicate. Deriving the key from the item ID (not random) means a
+    crash-then-reclaim retry of the same logical post reuses the same key
+    and is deduplicated server-side, mirroring Matrix's transaction_id.
+    """
+    digest = hashlib.sha256(str(item_id).encode("utf-8", "replace")).hexdigest()[:32]
+    return f"feedecho-{echo_id}-{digest}"
 
 
 def upload_media(
@@ -98,6 +113,7 @@ def post_status(
     sensitive: bool = False,
     spoiler_text: str = "",
     media_ids: list[str] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Post a status to a Mastodon instance.
 
@@ -109,6 +125,11 @@ def post_status(
         sensitive: Mark as sensitive content
         spoiler_text: Content warning text (shown above the post body)
         media_ids: List of media attachment IDs to attach
+        idempotency_key: Optional client-supplied key sent as the
+            Idempotency-Key header. Mastodon deduplicates a repeated POST
+            with the same key (within its retention window), returning the
+            original status instead of creating a second one — protects
+            against a crash-then-reclaim retry double-posting.
 
     Returns:
         Dict with response data including 'id' and 'url' on success.
@@ -122,6 +143,8 @@ def post_status(
     validate_outbound_url(instance)
     url = f"{instance}/api/v1/statuses"
     headers = {"Authorization": f"Bearer {access_token}"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     data = {
         "status": content,
         "visibility": visibility,

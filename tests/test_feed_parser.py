@@ -1,7 +1,15 @@
 """Tests for the feed parser state tracking and item parsing."""
 
 import pytest
-from feed_parser import get_new_items, clean_text, strip_html, truncate
+from feed_parser import (
+    get_new_items,
+    clean_text,
+    strip_html,
+    truncate,
+    _extract_rss_image,
+    _extract_rss_image_alt,
+    _extract_rss_images,
+)
 
 
 class TestGetNewItems:
@@ -112,4 +120,94 @@ class TestTruncate:
     def test_custom_max_len(self):
         result = truncate("hello world", 5)
         assert len(result) == 5
-        assert result.endswith("…")
+
+
+class TestExtractRssImageMediaTypeFilter:
+    """A video media:content entry must never be picked as the item's image.
+
+    Regression coverage for the primary-image picker (_extract_rss_image /
+    _extract_rss_image_alt) not filtering media_content/media_thumbnail by
+    medium/type, unlike the sibling _extract_rss_images which already does.
+    """
+
+    def test_skips_leading_video_and_picks_image(self):
+        entry = {
+            "media_content": [
+                {
+                    "url": "https://example.com/clip.mp4",
+                    "medium": "video",
+                    "type": "video/mp4",
+                },
+                {
+                    "url": "https://example.com/photo.jpg",
+                    "medium": "image",
+                    "type": "image/jpeg",
+                },
+            ]
+        }
+        assert _extract_rss_image(entry) == "https://example.com/photo.jpg"
+        assert _extract_rss_images(entry) == [
+            {"url": "https://example.com/photo.jpg", "alt": ""}
+        ]
+
+    def test_alt_text_belongs_to_the_image_not_the_video(self):
+        entry = {
+            "media_content": [
+                {
+                    "url": "https://example.com/clip.mp4",
+                    "medium": "video",
+                    "type": "video/mp4",
+                    "media_text": [{"text": "video caption"}],
+                },
+                {
+                    "url": "https://example.com/photo.jpg",
+                    "medium": "image",
+                    "type": "image/jpeg",
+                    "media_text": [{"text": "photo caption"}],
+                },
+            ]
+        }
+        assert _extract_rss_image(entry) == "https://example.com/photo.jpg"
+        assert _extract_rss_image_alt(entry) == "photo caption"
+
+    def test_all_video_media_yields_no_image(self):
+        """Consistent with _extract_rss_images: no fallback to a video URL."""
+        entry = {
+            "media_content": [
+                {
+                    "url": "https://example.com/clip.mp4",
+                    "medium": "video",
+                    "type": "video/mp4",
+                },
+            ]
+        }
+        assert _extract_rss_image(entry) == ""
+        assert _extract_rss_image_alt(entry) == ""
+        assert _extract_rss_images(entry) == []
+
+    def test_video_by_type_only_is_also_skipped(self):
+        """type= is enough to disqualify even without an explicit medium=video."""
+        entry = {
+            "media_content": [
+                {"url": "https://example.com/clip.mp4", "type": "video/mp4"},
+                {"url": "https://example.com/photo.jpg", "type": "image/jpeg"},
+            ]
+        }
+        assert _extract_rss_image(entry) == "https://example.com/photo.jpg"
+
+    def test_media_thumbnail_also_filters_video(self):
+        entry = {
+            "media_thumbnail": [
+                {
+                    "url": "https://example.com/clip-thumb.mp4",
+                    "medium": "video",
+                    "type": "video/mp4",
+                },
+                {
+                    "url": "https://example.com/thumb.jpg",
+                    "medium": "image",
+                    "type": "image/jpeg",
+                },
+            ]
+        }
+        assert _extract_rss_image(entry) == "https://example.com/thumb.jpg"

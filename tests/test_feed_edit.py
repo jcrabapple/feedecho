@@ -5,6 +5,7 @@ IDs from the old feed are meaningless against the new one. Renames and
 interval-only edits must preserve the cursor.
 """
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -221,3 +222,64 @@ class TestFeedEdit:
         page = client.get("/feeds").text
         assert "<script>alert(1)</script>" not in page
         assert "&lt;script&gt;" in page
+
+
+class TestFeedEditInvalidatesSavedSearchCache:
+    """Bug review 2026-09-09 finding #14: mute_keywords (and folder_id) are
+    direct inputs to the saved-search unread-counts query, so edit_feed
+    must invalidate the cache, same as reader_mute/delete_feed do."""
+
+    def test_editing_mute_keywords_invalidates_cache(self, client, temp_db):
+        import app as app_module
+
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url, poll_interval, read_enabled, user_id) "
+                "VALUES (1, 'Test Feed', 'https://example.com/feed.xml', 15, 1, 1)"
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, content, is_read) "
+                "VALUES (1, 'it-1', 'Breaking widget news', 'widget content', 0)"
+            )
+
+        s_id = client.post(
+            "/api/saved-searches",
+            data={"name": "Widgets", "query": "widget"},
+            headers={"Accept": "application/json"},
+        ).json()["id"]
+
+        def _saved_search_badge(html: str, search_id: int) -> int:
+            m = re.search(
+                r'href="/reader\?saved=%d(?:&amp;fulltext=1)?"' % search_id,
+                html,
+                re.S,
+            )
+            assert m, f"saved search {search_id} link not found in page"
+            anchor = html[m.start(): html.find("</a>", m.end()) + 4]
+            badge = re.search(
+                r'class="reader-search-count"[^>]*>(\d+)</span>',
+                anchor,
+            )
+            return int(badge.group(1)) if badge else 0
+
+        # Populate the cache: unmuted, "widget" matches the one unread item.
+        r1 = client.get(f"/reader?saved={s_id}")
+        assert _saved_search_badge(r1.text, s_id) == 1
+        assert 1 in app_module._saved_search_counts_cache._store
+
+        # Mute "widget" on this feed via edit_feed.
+        client.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Test Feed",
+                "url": "https://example.com/feed.xml",
+                "poll_interval": "15",
+                "mute_keywords": "widget",
+            },
+        )
+
+        # Cache must be invalidated immediately, not stale until TTL expiry.
+        assert 1 not in app_module._saved_search_counts_cache._store
+        r2 = client.get(f"/reader?saved={s_id}")
+        assert _saved_search_badge(r2.text, s_id) == 0
+        assert app_module._saved_search_counts_cache._store[1][2][s_id] == 0

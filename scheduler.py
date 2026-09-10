@@ -26,7 +26,13 @@ from feed_parser import (
     truncate,
 )
 from filters import is_filtered, match_reason
-from mastodon import MastodonAuthError, MastodonError, post_status, upload_media
+from mastodon import (
+    MastodonAuthError,
+    MastodonError,
+    idempotency_key as mastodon_idempotency_key,
+    post_status,
+    upload_media,
+)
 from bluesky import (
     BLUESKY_IMAGE_TYPES,
     MAX_BLOB_BYTES,
@@ -1326,6 +1332,10 @@ def _send_mastodon(
             sensitive=sensitive,
             spoiler_text=cw_text,
             media_ids=media_ids or None,
+            # Deterministic key from (echo_id, item_id): a crash-then-reclaim
+            # retry of this same logical post reuses the key, so Mastodon
+            # returns the original status instead of creating a duplicate.
+            idempotency_key=mastodon_idempotency_key(echo["id"], item["id"]),
         )
     except MastodonAuthError as e:
         # Token rejected: retries cannot help until the user reconnects.
@@ -1380,11 +1390,6 @@ def _send_email_echo(
     if account is None:
         return fail_result
 
-    # Email is a one-way send too, so the same claim re-check applies: SMTP
-    # connect and delivery can outlast the lease.
-    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "email"):
-        return False
-
     # Image embedding: mirroring the Mastodon path, attach_image fetches the
     # item's images (SSRF-validated, fallback-proxy aware) and embeds them
     # inline in the message. A failed fetch skips that image — the email
@@ -1413,6 +1418,15 @@ def _send_email_echo(
             images.append(
                 {"data": img_bytes, "content_type": img_type, "alt": entry["alt"]}
             )
+
+    # Re-validate claim ownership immediately before the send: email is a
+    # one-way send too, and the image-fetch loop above is slow network I/O
+    # that can outlast the lease, so the lease can lapse and another worker
+    # reclaim the row. Checking here (right before send, not before the
+    # fetch loop) matches the other senders and closes the window where a
+    # slow fetch let both workers send.
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "email"):
+        return False
 
     try:
         send_email(
@@ -2187,6 +2201,70 @@ def _queue_for_digest(
     return ok
 
 
+def _requeue_drip_release_error(
+    echo_id: int,
+    item_id: str,
+    item_json: str,
+    attempts: int,
+    posted_id: int,
+    claim_token: str,
+    exc: Exception,
+) -> None:
+    """Requeue a drip release whose dispatch raised an unexpected exception.
+
+    Unlike _requeue_drip_failure, which runs after a completed dispatch and
+    can rely on the row being 'failed', an escaped exception leaves the
+    posted row 'pending' under this worker's claim. Requeueing must
+    therefore clear that claim, and it must clear it in one transaction
+    with the drip_items insert: if the row were requeued but the insert
+    failed, the next flush would re-release the item and double-insert the
+    queue row; if the insert landed but the row stayed pending, the item
+    would sit unclaimable for the reclaim window while the queue row is
+    dead (the queue join only matches status 'queued').
+
+    The UPDATE fences on THIS worker's claim_token, not just 'pending':
+    if the reclaim sweep re-claimed the row while the dispatch was stuck,
+    the token has changed and the new owner's claim must not be clobbered
+    (the queue row was never deleted on this path, so there is nothing to
+    restore either).
+
+    'attempts' is deliberately NOT incremented here. This path is an
+    infrastructure fault, not a delivery failure; record_failure still
+    fires so a persistently faulting release reaches the notify threshold
+    instead of retrying silently every flush.
+    """
+    with get_db() as db:
+        result = db.execute(
+            """UPDATE posted_items
+                  SET status = 'queued',
+                      claimed_at = NULL,
+                      claim_token = NULL,
+                      next_retry_at = NULL,
+                      posted_at = ?
+                WHERE id = ? AND status = 'pending' AND claim_token = ?""",
+            (_now(), posted_id, claim_token),
+        )
+        if result.rowcount != 1:
+            # The claim was lost (another worker or the reclaim sweep owns
+            # the row now); their outcome wins and the queue row survives.
+            return
+        db.execute(
+            """INSERT INTO drip_items (echo_id, item_id, item_json, attempts)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(echo_id, item_id) DO UPDATE SET attempts = excluded.attempts""",
+            (echo_id, item_id, item_json, attempts),
+        )
+    record_failure(echo_id)
+    logger.error(
+        "Echo %s: drip release raised %s: %s; item %s requeued (attempt count held at %d)",
+        echo_id,
+        type(exc).__name__,
+        exc,
+        item_id,
+        attempts,
+    )
+
+
 def _requeue_drip_failure(
     echo_id: int,
     item_id: str,
@@ -2579,68 +2657,110 @@ def _flush_drips() -> None:
         if echo_id in discarded:
             continue
 
-        if row["deleted_at"] or row["feed_deleted_at"]:
-            _discard_drip_backlog(echo_id, "Echo deleted; drip backlog discarded")
-            discarded.add(echo_id)
-            continue
-        if not row["enabled"]:
-            _discard_drip_backlog(echo_id, "Echo disabled; drip backlog discarded")
-            discarded.add(echo_id)
-            continue
-
-        # Serialize with process_echo so concurrent workers cannot both
-        # see an open window and exceed the hourly cap.
-        with _drip_lock(echo_id):
-            limit = _drip_limit(row)
-            if limit > 0 and _drip_rate(echo_id) >= limit:
-                continue
-            if limit <= 0 and released.get(echo_id, 0) >= DRIP_DOWNGRADE_BATCH:
-                # Limit removed: drain the stale backlog in batches
-                # instead of one burst.
-                continue
-
-            try:
-                item = json.loads(row["item_json"])
-            except (json.JSONDecodeError, TypeError):
-                logger.warning(
-                    "Drip queue: unreadable payload %s for echo %s; dropping",
-                    row["drip_id"],
-                    echo_id,
-                )
-                with get_db() as db:
-                    db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
-                continue
-
-            claimed = _reclaim_queued(echo_id, row["item_id"])
-            if claimed is None:
-                # The posted row is no longer queued; remove the orphaned
-                # queue entry so it is not reconsidered forever.
-                with get_db() as db:
-                    db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
-                continue
-
-            posted_id, claim_token = claimed
-            with get_db() as db:
-                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
-
-            logger.info(
-                "Echo %s: releasing dripped item %s (%d in window)",
+        try:
+            _flush_one_drip(row, discarded, released)
+        except Exception:
+            # Isolate one row's failure from the rest of the batch: an
+            # uncaught exception here (a transient DB error, an unexpected
+            # data shape) must not skip every other echo's pending drip
+            # item for the whole tick. Mirrors _flush_queue's per-row
+            # isolation.
+            logger.exception(
+                "Drip flush: unhandled error for echo %s item %s",
                 echo_id,
                 row["item_id"],
-                _drip_rate(echo_id),
             )
-            _render_and_dispatch(dict(row), item, row["feed_name"] or "", posted_id, claim_token)
+            continue
 
-            if _row_state(echo_id, row["item_id"]) == "failed":
-                _requeue_drip_failure(
-                    echo_id,
-                    row["item_id"],
-                    row["item_json"],
-                    row["attempts"],
-                    posted_id,
-                )
-            else:
-                released[echo_id] = released.get(echo_id, 0) + 1
+
+def _flush_one_drip(row, discarded: set[int], released: dict[int, int]) -> None:
+    echo_id = row["id"]
+
+    if row["deleted_at"] or row["feed_deleted_at"]:
+        _discard_drip_backlog(echo_id, "Echo deleted; drip backlog discarded")
+        discarded.add(echo_id)
+        return
+    if not row["enabled"]:
+        _discard_drip_backlog(echo_id, "Echo disabled; drip backlog discarded")
+        discarded.add(echo_id)
+        return
+
+    # Serialize with process_echo so concurrent workers cannot both
+    # see an open window and exceed the hourly cap.
+    with _drip_lock(echo_id):
+        limit = _drip_limit(row)
+        if limit > 0 and _drip_rate(echo_id) >= limit:
+            return
+        if limit <= 0 and released.get(echo_id, 0) >= DRIP_DOWNGRADE_BATCH:
+            # Limit removed: drain the stale backlog in batches
+            # instead of one burst.
+            return
+
+        try:
+            item = json.loads(row["item_json"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Drip queue: unreadable payload %s for echo %s; dropping",
+                row["drip_id"],
+                echo_id,
+            )
+            with get_db() as db:
+                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+            return
+
+        claimed = _reclaim_queued(echo_id, row["item_id"])
+        if claimed is None:
+            # The posted row is no longer queued; remove the orphaned
+            # queue entry so it is not reconsidered forever.
+            with get_db() as db:
+                db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+            return
+
+        posted_id, claim_token = claimed
+        logger.info(
+            "Echo %s: releasing dripped item %s (%d in window)",
+            echo_id,
+            row["item_id"],
+            _drip_rate(echo_id),
+        )
+        try:
+            _render_and_dispatch(dict(row), item, row["feed_name"] or "", posted_id, claim_token)
+        except Exception as exc:
+            # _render_and_dispatch converts its own and the senders'
+            # failures into posted_items status changes; an exception
+            # escaping it is an infrastructure fault (DB error, a bug).
+            # The drip_items row has not been deleted yet at this point,
+            # so the item must be requeued explicitly — leaving it
+            # 'pending' after the claim would strand it until the ten
+            # minute reclaim sweep, which does not restore the queue row
+            # and would burn attempt_count. Retrying is the safe
+            # direction for an item queued for delivery: the send may
+            # not have been attempted, and the drip cap bounds how much
+            # a persistently faulting release can dump per window.
+            _requeue_drip_release_error(
+                echo_id,
+                row["item_id"],
+                row["item_json"],
+                row["attempts"],
+                posted_id,
+                claim_token,
+                exc,
+            )
+            return
+
+        with get_db() as db:
+            db.execute("DELETE FROM drip_items WHERE id = ?", (row["drip_id"],))
+
+        if _row_state(echo_id, row["item_id"]) == "failed":
+            _requeue_drip_failure(
+                echo_id,
+                row["item_id"],
+                row["item_json"],
+                row["attempts"],
+                posted_id,
+            )
+        else:
+            released[echo_id] = released.get(echo_id, 0) + 1
 
 
 def _discard_orphaned_digest_items() -> None:
@@ -2681,20 +2801,31 @@ def _discard_orphaned_digest_items() -> None:
 
     for row in orphans:
         echo_id = row["echo_id"]
-        reason = "Digest discarded: echo or destination is no longer active"
-        with get_db() as db:
-            db.execute(
-                """UPDATE posted_items
-                      SET status = 'gave_up',
-                          error_message = ?,
-                          claimed_at = NULL,
-                          claim_token = NULL,
-                          posted_at = ?
-                    WHERE echo_id = ? AND status = 'queued'""",
-                (reason, _now(), echo_id),
+        try:
+            reason = "Digest discarded: echo or destination is no longer active"
+            with get_db() as db:
+                db.execute(
+                    """UPDATE posted_items
+                          SET status = 'gave_up',
+                              error_message = ?,
+                              claimed_at = NULL,
+                              claim_token = NULL,
+                              posted_at = ?
+                        WHERE echo_id = ? AND status = 'queued'""",
+                    (reason, _now(), echo_id),
+                )
+                db.execute("DELETE FROM digest_items WHERE echo_id = ?", (echo_id,))
+            logger.info("Echo %s: %s", echo_id, reason)
+        except Exception:
+            # Isolate one orphan row's failure from the rest: this sweep
+            # runs before the per-echo loop in _flush_digests, so an
+            # unhandled exception here would abort the whole digest tick
+            # before any live tenant's digest was even queried — the same
+            # bug class the per-row isolation elsewhere guards against.
+            logger.exception(
+                "Digest orphan sweep: unhandled error for echo %s", echo_id
             )
-            db.execute("DELETE FROM digest_items WHERE echo_id = ?", (echo_id,))
-        logger.info("Echo %s: %s", echo_id, reason)
+            continue
 
 
 def flush_digests() -> None:
@@ -2715,8 +2846,13 @@ def flush_digests() -> None:
 
 def _flush_digests() -> None:
     # Sweep first: stranded items are invisible to the query below, so nothing
-    # would ever clear them.
-    _discard_orphaned_digest_items()
+    # would ever clear them. The sweep itself is per-row isolated; wrapping
+    # the invocation too keeps an unexpected fault there from aborting the
+    # whole tick before any live tenant's digest is queried.
+    try:
+        _discard_orphaned_digest_items()
+    except Exception:
+        logger.exception("Digest orphan sweep: unhandled error before flush")
 
     with get_db() as db:
         # Find all echoes that have pending digest items
@@ -2743,143 +2879,174 @@ def _flush_digests() -> None:
 
     for echo_row in pending_echoes:
         echo_id = echo_row["echo_id"]
-        with get_db() as db:
-            items = db.execute(
-                "SELECT * FROM digest_items WHERE echo_id = ? ORDER BY created_at ASC",
-                (echo_id,),
-            ).fetchall()
-
-        if not items:
-            continue
-
-        # Build digest body incrementally so overflow can be detected
-        # per-item: everything that fits goes out now, the rest stays
-        # queued for the next flush. Silently truncating here reported
-        # dropped content as delivered.
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        subject = f"FeedEcho Digest — {echo_row['feed_name']} — {date_str}"
-
-        header = [f"FeedEcho Digest for {echo_row['feed_name']}", f"Date: {date_str}", ""]
-
-        body_parts = list(header)
-        used = sum(len(p) + 1 for p in body_parts)
-        sent_items, held_items = [], []
-        for i, item in enumerate(items, 1):
-            title = item["item_title"] or item["item_url"] or f"Item {i}"
-            lines = (
-                f"{i}. {title}",
-                f"   {item['rendered_content']}",
-                "",
-            )
-            added = sum(len(ln) + 1 for ln in lines)
-            if used + added > DIGEST_MAX_CHARS - DIGEST_NOTICE_RESERVE:
-                held_items.append(item)
-                continue
-            body_parts.extend(lines)
-            used += added
-            sent_items.append(item)
-
-        if held_items and not sent_items:
-            # A single item larger than the whole cap: normally send it
-            # truncated so one giant item cannot wedge the queue forever.
-            # Degenerate case (a pathological title/URL that leaves no room
-            # for any content): keep everything held instead of sending a
-            # content-less title.
-            first = held_items.pop(0)
-            body_parts.append(f"1. {first['item_title'] or first['item_url'] or 'Item 1'}")
-            budget = DIGEST_MAX_CHARS - DIGEST_NOTICE_RESERVE - used - len(body_parts[-1]) - 8
-            if budget <= 0:
-                held_items.insert(0, first)
-            else:
-                body_parts.append(f"   {first['rendered_content'][:budget]}…")
-                sent_items.append(first)
-
-        if not sent_items:
-            # Nothing fit this round (pathological content only): leave the
-            # queue untouched rather than send an empty digest or drop the
-            # item. Logged loudly so a wedged queue is discoverable.
-            logger.warning(
-                "Digest for echo %s held: an item exceeds the %d char cap",
-                echo_id,
-                DIGEST_MAX_CHARS,
-            )
-            continue
-
-        body = "\n".join(body_parts)
-        if held_items:
-            body += (
-                f"\n\n[{len(held_items)} newer item{'s' if len(held_items) != 1 else ''}"
-                " held for the next digest to stay under the size cap.]"
-            )
-
         try:
-            send_email(
-                to_email=echo_row["to_email"],
-                subject=subject,
-                body=body,
-                user_id=echo_row["user_id"],
-            )
-        except Exception as exc:
-            logger.exception(
-                "Digest flush failed for echo %s (%s, %d items)",
-                echo_id,
-                echo_row["feed_name"],
-                len(items),
-            )
-            # Surface digest send failures to the user: mark the ATTEMPTED
-            # rows (the ones in the body) 'failed' — without a retry time,
-            # so the retry sweep never grabs them; only flush_digests owns
-            # digest delivery — so the failure counter in
-            # notify.record_failure can reach its threshold and alert on a
-            # permanently broken SMTP config. Held items were never
-            # attempted this round and stay 'queued'.
-            with get_db() as db:
-                for item in sent_items:
-                    db.execute(
-                        """UPDATE posted_items
-                              SET status = 'failed',
-                                  error_message = ?,
-                                  next_retry_at = NULL,
-                                  attempt_count = attempt_count + 1
-                            WHERE echo_id = ? AND item_id = ?
-                              AND status IN ('queued', 'failed')""",
-                        (f"Digest send failed: {exc}", echo_id, item["item_id"]),
-                    )
+            _flush_one_digest(echo_id, echo_row)
+        except Exception:
+            # Isolate one echo's failure from the rest of the batch: an
+            # uncaught exception here (a transient DB error, an unexpected
+            # data shape) must not skip every other tenant's pending digest
+            # for the whole tick. Mirrors _flush_queue's per-row isolation.
+            logger.exception("Digest flush: unhandled error for echo %s", echo_id)
+            # record_failure feeds the notify threshold, so a permanently
+            # broken echo (corrupt payload, persistent DB error) surfaces
+            # to the user instead of failing silently every tick. The
+            # send_email failure path in _flush_one_digest calls it too;
+            # only exceptions OUTSIDE that guard were silent before.
             record_failure(echo_id)
-            # Leave digest_items intact — the next successful flush sends them.
             continue
 
-        # Success — delete only the sent items and update posted_items to
-        # 'success'; held items stay queued for the next flush.
-        sent_item_ids = [item["item_id"] for item in sent_items]
-        with get_db() as db:
-            for item in sent_items:
-                # Update posted_items to 'success'. 'failed' is included:
-                # a prior flush may have marked the row failed on a send
-                # error; a successful send now must still finalize it,
-                # else the queue row below is deleted with the posted_item
-                # stuck on 'failed'.
-                db.execute(
-                    """UPDATE posted_items SET status = 'success', posted_at = ?
-                       WHERE echo_id = ? AND item_id = ?
-                         AND status IN ('queued', 'failed')""",
-                    (_now(), echo_id, item["item_id"]),
-                )
-            # Delete only the sent items, not any that may have arrived concurrently
-            placeholders = ",".join("?" for _ in sent_item_ids)
-            db.execute(
-                f"DELETE FROM digest_items WHERE echo_id = ? AND item_id IN ({placeholders})",
-                (echo_id, *sent_item_ids),
-            )
 
-        record_success(echo_id)
-        logger.info(
-            "Digest flushed for echo %s (%s): %d items sent, %d held",
+def _build_digest_body(echo_row, items) -> tuple[str, str, list, list]:
+    """Assemble a digest email's subject/body from queued rows.
+
+    Returns (subject, body, sent_items, held_items). Items that fit the
+    char cap go in the body; the rest are returned as held for the next
+    flush. Malformed rows raise, which the caller's per-echo isolation
+    contains. Extracted so tests can fault-inject body assembly (the step
+    the narrow send_email try/except never covered).
+    """
+    # Build digest body incrementally so overflow can be detected
+    # per-item: everything that fits goes out now, the rest stays
+    # queued for the next flush. Silently truncating here reported
+    # dropped content as delivered.
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    subject = f"FeedEcho Digest — {echo_row['feed_name']} — {date_str}"
+
+    header = [f"FeedEcho Digest for {echo_row['feed_name']}", f"Date: {date_str}", ""]
+
+    body_parts = list(header)
+    used = sum(len(p) + 1 for p in body_parts)
+    sent_items, held_items = [], []
+    for i, item in enumerate(items, 1):
+        title = item["item_title"] or item["item_url"] or f"Item {i}"
+        lines = (
+            f"{i}. {title}",
+            f"   {item['rendered_content']}",
+            "",
+        )
+        added = sum(len(ln) + 1 for ln in lines)
+        if used + added > DIGEST_MAX_CHARS - DIGEST_NOTICE_RESERVE:
+            held_items.append(item)
+            continue
+        body_parts.extend(lines)
+        used += added
+        sent_items.append(item)
+
+    if held_items and not sent_items:
+        # A single item larger than the whole cap: normally send it
+        # truncated so one giant item cannot wedge the queue forever.
+        # Degenerate case (a pathological title/URL that leaves no room
+        # for any content): keep everything held instead of sending a
+        # content-less title.
+        first = held_items.pop(0)
+        body_parts.append(f"1. {first['item_title'] or first['item_url'] or 'Item 1'}")
+        budget = DIGEST_MAX_CHARS - DIGEST_NOTICE_RESERVE - used - len(body_parts[-1]) - 8
+        if budget <= 0:
+            held_items.insert(0, first)
+        else:
+            body_parts.append(f"   {first['rendered_content'][:budget]}…")
+            sent_items.append(first)
+
+    body = "\n".join(body_parts)
+    if held_items:
+        body += (
+            f"\n\n[{len(held_items)} newer item{'s' if len(held_items) != 1 else ''}"
+            " held for the next digest to stay under the size cap.]"
+        )
+    return subject, body, sent_items, held_items
+
+
+def _flush_one_digest(echo_id: int, echo_row) -> None:
+    with get_db() as db:
+        items = db.execute(
+            "SELECT * FROM digest_items WHERE echo_id = ? ORDER BY created_at ASC",
+            (echo_id,),
+        ).fetchall()
+
+    if not items:
+        return
+
+    subject, body, sent_items, held_items = _build_digest_body(echo_row, items)
+
+    if not sent_items:
+        # Nothing fit this round (pathological content only): leave the
+        # queue untouched rather than send an empty digest or drop the
+        # item. Logged loudly so a wedged queue is discoverable.
+        logger.warning(
+            "Digest for echo %s held: an item exceeds the %d char cap",
+            echo_id,
+            DIGEST_MAX_CHARS,
+        )
+        return
+
+    try:
+        send_email(
+            to_email=echo_row["to_email"],
+            subject=subject,
+            body=body,
+            user_id=echo_row["user_id"],
+        )
+    except Exception as exc:
+        logger.exception(
+            "Digest flush failed for echo %s (%s, %d items)",
             echo_id,
             echo_row["feed_name"],
-            len(sent_items),
-            len(held_items),
+            len(items),
         )
+        # Surface digest send failures to the user: mark the ATTEMPTED
+        # rows (the ones in the body) 'failed' — without a retry time,
+        # so the retry sweep never grabs them; only flush_digests owns
+        # digest delivery — so the failure counter in
+        # notify.record_failure can reach its threshold and alert on a
+        # permanently broken SMTP config. Held items were never
+        # attempted this round and stay 'queued'.
+        with get_db() as db:
+            for item in sent_items:
+                db.execute(
+                    """UPDATE posted_items
+                          SET status = 'failed',
+                              error_message = ?,
+                              next_retry_at = NULL,
+                              attempt_count = attempt_count + 1
+                        WHERE echo_id = ? AND item_id = ?
+                          AND status IN ('queued', 'failed')""",
+                    (f"Digest send failed: {exc}", echo_id, item["item_id"]),
+                )
+        record_failure(echo_id)
+        # Leave digest_items intact — the next successful flush sends them.
+        return
+
+    # Success — delete only the sent items and update posted_items to
+    # 'success'; held items stay queued for the next flush.
+    sent_item_ids = [item["item_id"] for item in sent_items]
+    with get_db() as db:
+        for item in sent_items:
+            # Update posted_items to 'success'. 'failed' is included:
+            # a prior flush may have marked the row failed on a send
+            # error; a successful send now must still finalize it,
+            # else the queue row below is deleted with the posted_item
+            # stuck on 'failed'.
+            db.execute(
+                """UPDATE posted_items SET status = 'success', posted_at = ?
+                   WHERE echo_id = ? AND item_id = ?
+                     AND status IN ('queued', 'failed')""",
+                (_now(), echo_id, item["item_id"]),
+            )
+        # Delete only the sent items, not any that may have arrived concurrently
+        placeholders = ",".join("?" for _ in sent_item_ids)
+        db.execute(
+            f"DELETE FROM digest_items WHERE echo_id = ? AND item_id IN ({placeholders})",
+            (echo_id, *sent_item_ids),
+        )
+
+    record_success(echo_id)
+    logger.info(
+        "Digest flushed for echo %s (%s): %d items sent, %d held",
+        echo_id,
+        echo_row["feed_name"],
+        len(sent_items),
+        len(held_items),
+    )
 
 
 def check_all_feeds() -> None:

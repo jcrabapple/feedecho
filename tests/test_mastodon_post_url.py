@@ -261,3 +261,108 @@ class TestHistoryRendersPostLink:
             )
             page = c.get("/").text
         assert 'href="https://mastodon.social/@user/111"' in page
+
+# ── Idempotency key (crash-then-reclaim duplicate protection) ────────────────
+
+class _FakeResponse:
+    def __init__(self, status_code=200, body=None):
+        self.status_code = status_code
+        self._body = body if body is not None else {"id": "1", "url": "https://mastodon.social/@user/1"}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._body
+
+class TestMastodonIdempotencyKey:
+    """Matrix derives a deterministic transaction ID from (echo_id, item_id)
+    so a homeserver-side retry after a crash-then-reclaim is deduplicated.
+    Mastodon's POST /api/v1/statuses supports the same thing via a
+    client-supplied Idempotency-Key header — these tests pin that a
+    deterministic key is sent and threaded through from the scheduler.
+    """
+
+    def test_idempotency_key_is_deterministic_for_same_echo_and_item(self):
+        import mastodon
+
+        key1 = mastodon.idempotency_key(42, "item-1")
+        key2 = mastodon.idempotency_key(42, "item-1")
+        assert key1 == key2
+
+    def test_idempotency_key_differs_across_items_and_echoes(self):
+        import mastodon
+
+        base = mastodon.idempotency_key(42, "item-1")
+        assert mastodon.idempotency_key(42, "item-2") != base
+        assert mastodon.idempotency_key(7, "item-1") != base
+
+    def test_post_status_sends_idempotency_key_header(self, monkeypatch):
+        import mastodon
+
+        captured = {}
+
+        def fake_pinned_request(method, url, **kw):
+            captured.update(kw)
+            return _FakeResponse()
+
+        monkeypatch.setattr(mastodon, "pinned_request", fake_pinned_request)
+
+        key = mastodon.idempotency_key(1, "item-1")
+        mastodon.post_status(
+            instance="https://mastodon.social",
+            access_token="tok",
+            content="hello",
+            idempotency_key=key,
+        )
+
+        assert captured["headers"]["Idempotency-Key"] == key
+
+    def test_post_status_omits_header_when_no_key_given(self, monkeypatch):
+        import mastodon
+
+        captured = {}
+
+        def fake_pinned_request(method, url, **kw):
+            captured.update(kw)
+            return _FakeResponse()
+
+        monkeypatch.setattr(mastodon, "pinned_request", fake_pinned_request)
+
+        mastodon.post_status(
+            instance="https://mastodon.social",
+            access_token="tok",
+            content="hello",
+        )
+
+        assert "Idempotency-Key" not in captured["headers"]
+
+    def test_send_mastodon_passes_a_deterministic_key_across_calls(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        """Two dispatch attempts for the same echo+item (e.g. a crash-then-
+        reclaim retry) must send the same Idempotency-Key both times, so
+        Mastodon's server-side dedup can recognize the retry."""
+        import scheduler
+
+        keys_seen = []
+
+        def fake_post_status(**kw):
+            keys_seen.append(kw.get("idempotency_key"))
+            return {"id": "1", "url": "https://mastodon.social/@user/1"}
+
+        monkeypatch.setattr(scheduler, "post_status", fake_post_status)
+
+        echo = setup_echo(attach_image=0)
+        item = _item()
+        assert scheduler.process_echo(echo, item) is True
+
+        # Re-claim and dispatch the same item again (simulating a retry).
+        with get_db() as db:
+            db.execute("DELETE FROM posted_items WHERE echo_id = 1 AND item_id = ?", (item["id"],))
+        assert scheduler.process_echo(echo, item) is True
+
+        assert len(keys_seen) == 2
+        assert keys_seen[0] == keys_seen[1]
+        assert keys_seen[0] is not None

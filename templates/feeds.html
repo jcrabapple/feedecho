@@ -34,11 +34,15 @@
             <li style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.4rem 0.6rem; background: var(--surface-light); border-radius: 6px;">
                 <span style="font-weight: 600;">📁 {{ folder.name }}</span>
                 <span style="display: inline-flex; gap: 0.4rem;">
-                    <form method="post" action="/api/folders/{{ folder.id }}/rename" class="inline" onsubmit="var n = prompt('Rename folder:', '{{ folder.name | e }}'); if (!n) return false; this.name.value = n;">
+                    <form method="post" action="/api/folders/{{ folder.id }}/rename" class="inline"
+                          data-folder-name="{{ folder.name }}"
+                          onsubmit="return folderConfirmRename(this)">
                         <input type="hidden" name="name" value="">
                         <button type="submit" class="btn-sm">Rename</button>
                     </form>
-                    <form method="post" action="/api/folders/{{ folder.id }}/delete" class="inline" onsubmit="return confirm('Delete folder \'{{ folder.name | e }}\'? Feeds inside will become uncategorized.');">
+                    <form method="post" action="/api/folders/{{ folder.id }}/delete" class="inline"
+                          data-folder-name="{{ folder.name }}"
+                          onsubmit="return folderConfirmDelete(this)">
                         <button type="submit" class="btn-sm btn-danger">Delete</button>
                     </form>
                 </span>

@@ -132,9 +132,21 @@ def _pg_connect():
             "PostgreSQL mode requires the psycopg package: "
             "pip install 'feedecho[postgres]'"
         ) from exc
-    return psycopg.connect(
-        settings.DATABASE_URL, row_factory=psycopg.rows.dict_row
+    conn = psycopg.connect(
+        settings.DATABASE_URL,
+        row_factory=psycopg.rows.dict_row,
+        # Pin the session timezone to UTC at the handshake itself (not via a
+        # post-connect SET, which runs inside psycopg3's implicit transaction
+        # and reverts to the server default on any ROLLBACK, leaving later
+        # statements on the same connection skewed).
+        options="-c timezone=UTC",
     )
+    # Postgres's CURRENT_TIMESTAMP/NOW() resolve in the session/server
+    # timezone before being cast into our naive TIMESTAMP columns (unlike
+    # sqlite's CURRENT_TIMESTAMP, which is always UTC) — without this, a
+    # non-UTC server timezone silently skews every stored timestamp
+    # relative to as_utc_naive()/timestamp_str()'s UTC assumption.
+    return conn
 
 
 @contextmanager
@@ -232,6 +244,160 @@ def _dedupe_discord_webhook_hashes(db) -> None:
             " WHERE user_id = ? AND webhook_url_hash = ? AND id != ?",
             (d["user_id"], d["webhook_url_hash"], d["keep_id"]),
         )
+
+
+def _dedupe_accounts_for_unique_index(db) -> None:
+    """Collapse duplicate (user_id, instance, username) account rows before
+    the unique index is built.
+
+    Pre-upgrade ``oauth_callback`` and ``add_account`` were plain INSERTs on
+    every reconnect, so long-lived installs can already hold multiple rows
+    for the same logical account; CREATE UNIQUE INDEX over them would crash
+    init_db at boot (the v1.39.0 Discord-hash failure class). Keep the
+    highest id per group — the most recent reconnect carries the freshest
+    token and display name — repoint the references that make rows distinct
+    accounts (echoes + queued_posts by destination), then delete the older
+    rows. Runs best-effort: the index creation below is the hard gate.
+    """
+    dupes = db.execute(
+        "SELECT user_id, instance, username, MAX(id) AS keep_id"
+        " FROM accounts"
+        " GROUP BY user_id, instance, username HAVING COUNT(*) > 1"
+    ).fetchall()
+    for d in dupes:
+        keep_id = d["keep_id"]
+        stale = db.execute(
+            "SELECT id FROM accounts"
+            " WHERE user_id = ? AND instance = ? AND username = ? AND id != ?",
+            (d["user_id"], d["instance"], d["username"], keep_id),
+        ).fetchall()
+        for s in stale:
+            old_id = s["id"]
+            # Echoes that would collide after the repoint (an echo already
+            # points at the surviving account from the same feed): merge post
+            # history into the surviving echo, then drop the duplicate — a
+            # blind repoint would double-post every item to the destination.
+            collisions = db.execute(
+                "SELECT o.id AS old_echo_id, k.id AS keep_echo_id"
+                " FROM echoes o JOIN echoes k"
+                " ON k.user_id = o.user_id AND k.feed_id = o.feed_id"
+                " AND k.destination_type = o.destination_type"
+                " AND k.destination_id = ?"
+                " AND k.deleted_at IS NULL"
+                " WHERE o.destination_type = 'mastodon' AND o.destination_id = ?"
+                " AND o.deleted_at IS NULL",
+                (keep_id, old_id),
+            ).fetchall()
+            for c in collisions:
+                db.execute(
+                    "UPDATE posted_items SET echo_id = ? WHERE echo_id = ?",
+                    (c["keep_echo_id"], c["old_echo_id"]),
+                )
+                db.execute("DELETE FROM echoes WHERE id = ?", (c["old_echo_id"],))
+            # Duplicate queued jobs for the same item, pointing at the old
+            # account while a queued job for the survivor already exists.
+            db.execute(
+                "DELETE FROM queued_posts"
+                " WHERE destination_type = 'mastodon' AND destination_id = ?"
+                " AND status = 'queued'"
+                " AND EXISTS (SELECT 1 FROM queued_posts q2 WHERE q2.feed_id = queued_posts.feed_id"
+                " AND q2.item_id = queued_posts.item_id"
+                " AND q2.destination_type = 'mastodon'"
+                " AND q2.destination_id = ? AND q2.status = 'queued')",
+                (old_id, keep_id),
+            )
+            db.execute(
+                "UPDATE echoes SET destination_id = ?"
+                " WHERE destination_type = 'mastodon' AND destination_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "UPDATE queued_posts SET destination_id = ?"
+                " WHERE destination_type = 'mastodon' AND destination_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute("DELETE FROM accounts WHERE id = ?", (old_id,))
+
+
+def _dedupe_feeds_for_unique_index(db) -> None:
+    """Collapse duplicate active (user_id, url) feed rows before the unique
+    index is built.
+
+    Same pre-upgrade plain-INSERT exposure as accounts. Keep the lowest id
+    per group — the original feed, with its poll state and item history —
+    repoint echoes/queued_posts, merge feed_items (delete items that would
+    collide on the destination feed's (feed_id, item_id) unique index, then
+    repoint the rest), and soft-delete the duplicate rows so the partial
+    index accepts them while posted_items history stays intact.
+    """
+    dupes = db.execute(
+        "SELECT user_id, url, MIN(id) AS keep_id"
+        " FROM feeds WHERE deleted_at IS NULL"
+        " GROUP BY user_id, url HAVING COUNT(*) > 1"
+    ).fetchall()
+    for d in dupes:
+        keep_id = d["keep_id"]
+        stale = db.execute(
+            "SELECT id FROM feeds"
+            " WHERE user_id = ? AND url = ? AND deleted_at IS NULL AND id != ?",
+            (d["user_id"], d["url"], keep_id),
+        ).fetchall()
+        for s in stale:
+            old_id = s["id"]
+            # Echoes that would collide after the repoint (the surviving feed
+            # already has an echo to the same destination): preserve their
+            # post history by moving posted_items to the surviving echo, then
+            # drop the duplicate echo. A blind repoint here would leave two
+            # identical echoes on one feed and every item would post twice.
+            collisions = db.execute(
+                "SELECT o.id AS old_echo_id, k.id AS keep_echo_id"
+                " FROM echoes o JOIN echoes k"
+                " ON k.user_id = o.user_id AND k.feed_id = ?"
+                " AND k.destination_type = o.destination_type"
+                " AND k.destination_id = o.destination_id"
+                " AND k.deleted_at IS NULL"
+                " WHERE o.feed_id = ? AND o.deleted_at IS NULL",
+                (keep_id, old_id),
+            ).fetchall()
+            for c in collisions:
+                db.execute(
+                    "UPDATE posted_items SET echo_id = ? WHERE echo_id = ?",
+                    (c["keep_echo_id"], c["old_echo_id"]),
+                )
+                db.execute("DELETE FROM echoes WHERE id = ?", (c["old_echo_id"],))
+            # Duplicate queued jobs for the same item+destination (both feeds
+            # queued the item before the dedupe): keep the survivor's row.
+            db.execute(
+                "DELETE FROM queued_posts WHERE feed_id = ? AND status = 'queued'"
+                " AND EXISTS (SELECT 1 FROM queued_posts q2 WHERE q2.feed_id = ?"
+                " AND q2.item_id = queued_posts.item_id"
+                " AND q2.destination_type = queued_posts.destination_type"
+                " AND q2.destination_id = queued_posts.destination_id"
+                " AND q2.status = 'queued')",
+                (old_id, keep_id),
+            )
+            db.execute(
+                "UPDATE echoes SET feed_id = ? WHERE feed_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "UPDATE queued_posts SET feed_id = ? WHERE feed_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "DELETE FROM feed_items"
+                " WHERE feed_id = ? AND item_id IN"
+                " (SELECT item_id FROM feed_items WHERE feed_id = ?)",
+                (old_id, keep_id),
+            )
+            db.execute(
+                "UPDATE feed_items SET feed_id = ? WHERE feed_id = ?",
+                (keep_id, old_id),
+            )
+            db.execute(
+                "UPDATE feeds SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (old_id,),
+            )
 
 
 def prune_feed_items(db, feed_id: int, limit: int | None = None) -> None:
@@ -890,6 +1056,35 @@ def init_db_sqlite() -> None:
             ON oauth_states(expires_at)
         """)
 
+        # DB-level dedup backing for import_export.py's check-then-insert
+        # logic: without this, two concurrent requests (e.g. two imports, or
+        # an import racing a manual add) for the same user+url/instance+
+        # username can both pass the SELECT before either INSERT commits,
+        # producing duplicate rows. A unique index (rather than an inline
+        # UNIQUE + table rebuild) applies retroactively to already-deployed
+        # databases without a risky recreate-table migration; run after
+        # user_id/username are guaranteed to exist on both tables above.
+        # Partial (WHERE deleted_at IS NULL): feeds are soft-deleted and
+        # never purged, and import_export.py's own dedup lookup already
+        # ignores deleted_at IS NOT NULL rows (see get_feeds/its INSERT
+        # dedup query) — a non-partial index would otherwise permanently
+        # block re-adding a feed URL after it was deleted.
+        # Pre-upgrade inserts were unguarded (oauth_callback re-connected
+        # via plain INSERT), so already-deployed databases can hold exact
+        # duplicate rows; dedupe them first or CREATE UNIQUE INDEX fails at
+        # boot (the v1.39.0 Discord-hash failure class).
+        _dedupe_feeds_for_unique_index(db)
+        _dedupe_accounts_for_unique_index(db)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
+            ON feeds(user_id, url)
+            WHERE deleted_at IS NULL
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_instance_username
+            ON accounts(user_id, instance, username)
+        """)
+
         # Best-effort cleanup of expired/consumed state rows.
         db.execute("""
             DELETE FROM oauth_states
@@ -1014,6 +1209,28 @@ def init_db_postgres() -> None:
             )
         """)
 
+        # Pre-existing hosted databases created before `username` shipped
+        # need the same backfill-from-`name` treatment as sqlite: fresh
+        # installs get the column from CREATE TABLE above, but that's a
+        # no-op on a table that already exists without it.
+        account_columns = _column_names(db, "accounts")
+        if "username" not in account_columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN username TEXT DEFAULT ''")
+            rows = db.execute("SELECT id, name FROM accounts").fetchall()
+            import re
+
+            for row in rows:
+                match = re.search(r"\(([^)]+)\)$", row["name"] or "")
+                username = (
+                    match.group(1)
+                    if match
+                    else (row["name"] or "unknown")
+                )
+                db.execute(
+                    "UPDATE accounts SET username = ? WHERE id = ?",
+                    (username, row["id"]),
+                )
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS saved_searches (
                 id BIGSERIAL PRIMARY KEY,
@@ -1070,6 +1287,12 @@ def init_db_postgres() -> None:
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
         _add_column_if_missing(db, "feeds", "folder_id", "BIGINT")
+        _add_column_if_missing(db, "feeds", "lease_token", "TEXT")
+        _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
+        _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")
+        # Soft-delete marker: feeds are never hard-deleted by the app so that
+        # echo configuration and posted-item history survive as an audit trail.
+        _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS feed_items (
@@ -1136,6 +1359,21 @@ def init_db_postgres() -> None:
             )
         """)
         _add_column_if_missing(db, "echoes", "one_shot", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "echoes", "filter_keywords", "TEXT DEFAULT ''")
+        _add_column_if_missing(
+            db, "echoes", "filter_mode", "TEXT NOT NULL DEFAULT 'exclude'"
+        )
+        _add_column_if_missing(db, "echoes", "content_warning", "TEXT DEFAULT ''")
+        _add_column_if_missing(
+            db, "echoes", "attach_image", "INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(
+            db, "echoes", "delivery_mode", "TEXT NOT NULL DEFAULT 'instant'"
+        )
+        _add_column_if_missing(
+            db, "echoes", "drip_limit", "INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(db, "echoes", "deleted_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS digest_items (
@@ -1283,6 +1521,16 @@ def init_db_postgres() -> None:
                 FOREIGN KEY (echo_id) REFERENCES echoes(id) ON DELETE CASCADE
             )
         """)
+        _add_column_if_missing(db, "posted_items", "claimed_at", "TIMESTAMP")
+        _add_column_if_missing(db, "posted_items", "claim_token", "TEXT")
+        _add_column_if_missing(db, "posted_items", "post_url", "TEXT")
+        _add_column_if_missing(
+            db,
+            "posted_items",
+            "attempt_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column_if_missing(db, "posted_items", "next_retry_at", "TIMESTAMP")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS queued_posts (
@@ -1394,6 +1642,35 @@ def init_db_postgres() -> None:
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_oauth_states_expiry
             ON oauth_states(expires_at)
+        """)
+
+        # DB-level dedup backing for import_export.py's check-then-insert
+        # logic: without this, two concurrent requests (e.g. two imports, or
+        # an import racing a manual add) for the same user+url/instance+
+        # username can both pass the SELECT before either INSERT commits,
+        # producing duplicate rows. A unique index (rather than an inline
+        # UNIQUE + table rebuild) applies retroactively to already-deployed
+        # databases without a risky recreate-table migration; run after
+        # user_id/username are guaranteed to exist on both tables above.
+        # Partial (WHERE deleted_at IS NULL): feeds are soft-deleted and
+        # never purged, and import_export.py's own dedup lookup already
+        # ignores deleted_at IS NOT NULL rows (see get_feeds/its INSERT
+        # dedup query) — a non-partial index would otherwise permanently
+        # block re-adding a feed URL after it was deleted.
+        # Pre-upgrade inserts were unguarded (oauth_callback re-connected
+        # via plain INSERT), so already-deployed databases can hold exact
+        # duplicate rows; dedupe them first or CREATE UNIQUE INDEX fails at
+        # boot (the v1.39.0 Discord-hash failure class).
+        _dedupe_feeds_for_unique_index(db)
+        _dedupe_accounts_for_unique_index(db)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
+            ON feeds(user_id, url)
+            WHERE deleted_at IS NULL
+        """)
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_instance_username
+            ON accounts(user_id, instance, username)
         """)
 
         # Best-effort cleanup of expired/consumed state rows.

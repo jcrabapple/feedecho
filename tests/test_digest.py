@@ -398,6 +398,81 @@ class TestDigestFlush:
         assert "1. First" in body
         assert "2. Second" in body
 
+    def test_flush_isolates_failing_echo_from_others(self, db_tmp, monkeypatch):
+        """One echo raising mid-processing must not skip the rest of the batch.
+
+        Regression test for a missing per-row try/except in _flush_digests:
+        previously an uncaught exception anywhere in an echo's processing
+        body (not just the narrow send_email guard) propagated out of
+        _flush_digests entirely, leaving every echo scheduled after the
+        offending one in iteration order unflushed for that whole tick.
+        """
+        import scheduler
+
+        sent_emails = []
+        monkeypatch.setattr(
+            scheduler, "send_email", lambda **kw: sent_emails.append(kw) or {"success": True}
+        )
+
+        # Echo 1: will blow up during finalize (record_success), a step that
+        # was never wrapped in the old narrow try/except.
+        echo1 = _setup_email_echo(db_tmp)
+
+        # Echo 2: a second, unrelated echo that must still be flushed.
+        with db_tmp.get_db() as db:
+            db.execute(
+                "INSERT INTO email_accounts (name, email) VALUES (?, ?)",
+                ("User 2", "user2@example.com"),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES (?, ?)",
+                ("f2", "https://example.com/feed2"),
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, filter_keywords, filter_mode,
+                                       content_warning, attach_image, delivery_mode, enabled)
+                   VALUES (2, 'email', 2, '{{ title }}', 'public', '', 'exclude', '', 0, 'digest', 1)""",
+            )
+            echo2 = db.execute("SELECT * FROM echoes WHERE id = 2").fetchone()
+
+        scheduler.process_echo(echo1, _item(id="a1", title="From Feed 1"))
+        scheduler.process_echo(echo2, _item(id="b1", title="From Feed 2"))
+
+        orig_record_success = scheduler.record_success
+
+        def flaky_record_success(echo_id):
+            if echo_id == 1:
+                raise RuntimeError("transient DB error")
+            return orig_record_success(echo_id)
+
+        monkeypatch.setattr(scheduler, "record_success", flaky_record_success)
+
+        scheduler.flush_digests()
+
+        # Echo 2's digest still went out despite echo 1 (processed first)
+        # raising during its finalize step.
+        bodies = [e["body"] for e in sent_emails]
+        assert any("From Feed 2" in b for b in bodies)
+
+        with db_tmp.get_db() as db:
+            echo2_items = db.execute("SELECT * FROM digest_items WHERE echo_id = 2").fetchall()
+        assert echo2_items == []
+
+        # Echo 1's email still went out and its posted_items/digest_items
+        # finalize writes (which happen before record_success) still landed;
+        # only the record_success call itself failed, and that failure was
+        # contained to echo 1's iteration instead of aborting the whole
+        # flush before echo 2 was ever reached.
+        assert any("From Feed 1" in b for b in bodies)
+        with db_tmp.get_db() as db:
+            echo1_items = db.execute("SELECT * FROM digest_items WHERE echo_id = 1").fetchall()
+            echo1_status = db.execute(
+                "SELECT status FROM posted_items WHERE echo_id = 1 AND item_id = 'a1'"
+            ).fetchone()["status"]
+        assert echo1_items == []
+        assert echo1_status == "success"
+
     def test_flush_after_failed_then_succeeded(self, db_tmp, monkeypatch):
         """If first flush fails, items should remain and succeed on second flush."""
         import scheduler
@@ -429,3 +504,111 @@ class TestDigestFlush:
         with db_tmp.get_db() as db:
             rows = db.execute("SELECT * FROM digest_items WHERE echo_id = 1").fetchall()
         assert len(rows) == 0
+
+
+class TestDigestUnhandledErrorAlerting:
+    """Unhandled exceptions in _flush_one_digest (outside the send_email
+    guard) must feed record_failure so a permanently broken echo surfaces
+    through the notify threshold instead of failing silently every tick."""
+
+    def test_unhandled_digest_exception_calls_record_failure(self, db_tmp, monkeypatch):
+        import scheduler
+
+        sent_emails = []
+        monkeypatch.setattr(
+            scheduler, "send_email", lambda **kw: sent_emails.append(kw) or {"success": True}
+        )
+        echo = _setup_email_echo(db_tmp)
+        scheduler.process_echo(echo, _item(id="a1", title="From Feed 1"))
+
+        failures = []
+        monkeypatch.setattr(scheduler, "record_failure", failures.append)
+
+        def flaky_build(*, echo_row, **_):
+            raise RuntimeError("corrupt digest payload")
+
+        # Break body assembly inside _flush_one_digest, outside every
+        # existing guard.
+        monkeypatch.setattr(scheduler, "_build_digest_body", flaky_build, raising=False)
+
+        scheduler.flush_digests()
+
+        # The exception was contained to this echo and surfaced as a
+        # recorded failure; nothing was sent.
+        assert failures == [1]
+        assert sent_emails == []
+        with db_tmp.get_db() as db:
+            rows = db.execute(
+                "SELECT * FROM digest_items WHERE echo_id = 1"
+            ).fetchall()
+        assert len(rows) == 1  # untouched, retried next tick
+
+
+class TestDigestOrphanSweepIsolation:
+    """The orphan sweep runs BEFORE the per-echo digest loop, so one
+    orphan row's failure must not abort the whole sweep (or the tick) —
+    same bug class as the per-echo isolation below it."""
+
+    def test_one_bad_orphan_does_not_block_the_others(self, db_tmp, monkeypatch):
+        import scheduler
+
+        with db_tmp.get_db() as db:
+            # Three echoes whose feeds are deleted: all three are orphans
+            # the sweep must finalize. Deleting the echo itself would
+            # cascade its digest_items away, so orphan via feed deletion.
+            for n in (1, 2, 3):
+                db.execute(
+                    "INSERT INTO feeds (id, name, url, deleted_at)"
+                    " VALUES (?, ?, ?, '2026-09-01 00:00:00')",
+                    (n, f"f{n}", f"https://example.com/{n}"),
+                )
+                db.execute(
+                    """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                           visibility, filter_keywords, filter_mode,
+                                           content_warning, attach_image, delivery_mode, enabled)
+                       VALUES (?, 'email', 1, '{{ title }}', 'public', '', 'exclude', '', 0, 'digest', 1)""",
+                    (n,),
+                )
+                db.execute(
+                    """INSERT INTO posted_items (echo_id, item_id, status)
+                       VALUES (?, 'orphan-item', 'queued')""",
+                    (n,),
+                )
+                db.execute(
+                    """INSERT INTO digest_items (echo_id, item_id, rendered_content)
+                       VALUES (?, 'orphan-item', 'body')""",
+                    (n,),
+                )
+
+        real_now = scheduler._now
+        calls = {"n": 0}
+
+        def flaky_now():
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("transient DB error mid-sweep")
+            return real_now()
+
+        monkeypatch.setattr(scheduler, "_now", flaky_now)
+
+        # Must not raise even though one orphan row's update blew up.
+        scheduler.flush_digests()
+
+        with db_tmp.get_db() as db:
+            rows = db.execute(
+                "SELECT echo_id, status FROM posted_items WHERE item_id = 'orphan-item'"
+            ).fetchall()
+            leftover = db.execute(
+                "SELECT echo_id FROM digest_items"
+            ).fetchall()
+
+        by_status: dict[str, list[int]] = {}
+        for r in rows:
+            by_status.setdefault(r["status"], []).append(r["echo_id"])
+
+        # Exactly the row that raised stays queued (retried next tick);
+        # every other orphan was finalized as gave_up and cleared.
+        assert len(by_status.get("queued", [])) == 1
+        assert len(by_status.get("gave_up", [])) == 2
+        assert len(leftover) == 1
+        assert by_status["queued"][0] == leftover[0]["echo_id"]

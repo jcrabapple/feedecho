@@ -1582,6 +1582,120 @@ def _bsky_reauth(account, session: dict) -> dict:
     }
 
 
+def _bsky_call_with_reauth(
+    account,
+    session: dict,
+    echo,
+    posted_id: int,
+    claim_token: str,
+    context: str,
+    op,
+    item=None,
+) -> tuple[bool, dict, object]:
+    """Run `op(session)`; on BlueskyAuthError, re-auth once and retry once.
+
+    Shared by the image-upload loop and the create_post call so a fix to
+    the recovery semantics (how many attempts, what counts as permanent)
+    lands once instead of drifting between two hand-rolled copies. `op`
+    performs the actual PDS call against the session it's given and
+    returns its result, or raises BlueskyAuthError if that session was
+    rejected; `context` is a short label ("post", "image upload") used in
+    log messages.
+
+    Returns (True, session, result) on success — result is whatever `op`
+    returned (or mutated into shared state; the image-upload loop uses
+    `op` for its side effects and ignores this slot). Returns (False,
+    session, fail_result) when recovery could not complete: fail_result is
+    already-persisted (via _fail_post) and the caller must `return
+    fail_result` immediately. `item` (optional) adds the item id to the
+    permanent-failure log lines, matching the neighboring image-loop logs.
+    """
+
+    def _give_up(reason: str) -> tuple[bool, dict, object]:
+        return False, session, _fail_post(
+            posted_id, claim_token, echo["id"], reason, permanent=True
+        )
+
+    try:
+        return True, session, op(session)
+    except BlueskyAuthError:
+        logger.warning(
+            "Echo %s: Bluesky session rejected during %s, re-authenticating",
+            echo["id"],
+            context,
+        )
+    except Exception:
+        logger.exception("Echo %s: Bluesky %s failed", echo["id"], context)
+        return False, session, _fail_post(
+            posted_id, claim_token, echo["id"], "Bluesky delivery failed"
+        )
+
+    try:
+        session = _bsky_reauth(account, session)
+    except BlueskyAccountGoneError:
+        if item is not None:
+            logger.error(
+                "Echo %s: Bluesky account deleted during %s for item %s; giving up",
+                echo["id"],
+                context,
+                item["id"],
+            )
+        else:
+            logger.error(
+                "Echo %s: Bluesky account deleted during %s; giving up",
+                echo["id"],
+                context,
+            )
+        return _give_up("Bluesky account deleted")
+    except BlueskyAuthError:
+        if item is not None:
+            logger.error(
+                "Echo %s: Bluesky credentials rejected after re-auth during %s for item %s; giving up",
+                echo["id"],
+                context,
+                item["id"],
+            )
+        else:
+            logger.error(
+                "Echo %s: Bluesky credentials rejected after re-auth during %s; giving up",
+                echo["id"],
+                context,
+            )
+        return _give_up("Bluesky credentials rejected")
+    except Exception:
+        logger.exception(
+            "Echo %s: Bluesky re-auth failed during %s", echo["id"], context
+        )
+        return False, session, _fail_post(
+            posted_id, claim_token, echo["id"], "Bluesky delivery failed"
+        )
+
+    try:
+        return True, session, op(session)
+    except BlueskyAuthError:
+        if item is not None:
+            logger.error(
+                "Echo %s: Bluesky credentials rejected after re-auth during %s for item %s; giving up",
+                echo["id"],
+                context,
+                item["id"],
+            )
+        else:
+            logger.error(
+                "Echo %s: Bluesky credentials rejected after re-auth during %s; giving up",
+                echo["id"],
+                context,
+            )
+        return _give_up("Bluesky credentials rejected")
+    except Exception:
+        logger.exception(
+            "Echo %s: Bluesky %s failed after re-auth", echo["id"], context
+        )
+        return False, session, _fail_post(
+            posted_id, claim_token, echo["id"], "Bluesky delivery failed"
+        )
+
+
 def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> dict | None:
     """Fetch, downscale, and upload one image for a Bluesky post.
 
@@ -1718,77 +1832,31 @@ def _send_bluesky(
         # slicing by output count would re-upload an already-uploaded image
         # as a duplicate after a re-auth.
         start_idx = 0
-        for attempt in (1, 2):
-            try:
-                for idx in range(start_idx, len(image_entries)):
-                    entry = image_entries[idx]
-                    uploaded = _upload_bluesky_image(session, echo, item, entry)
-                    if uploaded:
-                        image_entries_out.append(uploaded)
-                    # Advance only after the entry has been handled (uploaded
-                    # or deliberately skipped); a BlueskyAuthError leaves the
-                    # index on the failed entry so the retry resumes there.
-                    start_idx = idx + 1
-                break
-            except BlueskyAuthError:
-                # The session was rejected mid-dispatch. Re-login once with
-                # the stored app password and retry the remaining images —
-                # the same recovery the create_post path below uses. If the
-                # fresh login is rejected too, the credentials are dead and
-                # no retry can help.
-                if attempt == 2:
-                    logger.error(
-                        "Echo %s: Bluesky credentials rejected during image upload for item %s; giving up",
-                        echo["id"],
-                        item["id"],
-                    )
-                    return _fail_post(
-                        posted_id,
-                        claim_token,
-                        echo["id"],
-                        "Bluesky credentials rejected",
-                        permanent=True,
-                    )
-                logger.warning(
-                    "Echo %s: Bluesky session rejected during image upload for item %s, re-authenticating",
-                    echo["id"],
-                    item["id"],
-                )
-                try:
-                    session = _bsky_reauth(account, session)
-                except BlueskyAccountGoneError:
-                    logger.error(
-                        "Echo %s: Bluesky account deleted during image upload for item %s; giving up",
-                        echo["id"],
-                        item["id"],
-                    )
-                    return _fail_post(
-                        posted_id,
-                        claim_token,
-                        echo["id"],
-                        "Bluesky account deleted",
-                        permanent=True,
-                    )
-                except BlueskyAuthError:
-                    logger.error(
-                        "Echo %s: Bluesky credentials rejected after re-auth during image upload; giving up",
-                        echo["id"],
-                    )
-                    return _fail_post(
-                        posted_id,
-                        claim_token,
-                        echo["id"],
-                        "Bluesky credentials rejected",
-                        permanent=True,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Echo %s: Bluesky re-auth failed during image upload",
-                        echo["id"],
-                    )
-                    return _fail_post(
-                        posted_id, claim_token, echo["id"], "Bluesky delivery failed"
-                    )
+
+        def _upload_remaining(s: dict) -> None:
+            nonlocal start_idx
+            for idx in range(start_idx, len(image_entries)):
+                entry = image_entries[idx]
+                uploaded = _upload_bluesky_image(s, echo, item, entry)
+                if uploaded:
+                    image_entries_out.append(uploaded)
+                # Advance only after the entry has been handled (uploaded or
+                # deliberately skipped); a BlueskyAuthError leaves the index
+                # on the failed entry so the retry resumes there.
+                start_idx = idx + 1
+
+        ok, session, fail_result = _bsky_call_with_reauth(
+            account,
+            session,
+            echo,
+            posted_id,
+            claim_token,
+            "image upload",
+            _upload_remaining,
+            item=item,
+        )
+        if not ok:
+            return fail_result
         if image_entries and not image_entries_out:
             logger.warning(
                 "Echo %s: no images uploaded for item %s, posting text-only",
@@ -1803,65 +1871,23 @@ def _send_bluesky(
     if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Bluesky"):
         return False
 
-    def _do_post(access_jwt: str, repo: str) -> dict:
+    def _do_post(s: dict) -> dict:
+        # Rebinding session also updates the DID post_url builds from below
+        # (a re-login may have resolved it for the first time).
         return create_post(
-            pds=session["pds"],
-            access_jwt=access_jwt,
-            repo=repo,
+            pds=s["pds"],
+            access_jwt=s["access_jwt"],
+            repo=s["did"],
             text=text,
             facets=facets or None,
             embed=embed,
         )
 
-    try:
-        result = _do_post(session["access_jwt"], session["did"])
-    except BlueskyAuthError:
-        # Token was rejected (expired or revoked mid-flight). Re-authenticate
-        # once with the app password and retry the same payload.
-        logger.warning(
-            "Echo %s: Bluesky auth rejected for account %s, re-authenticating",
-            echo["id"],
-            account["handle"],
-        )
-        try:
-            # Rebinding session also updates the DID post_url builds from
-            # (the re-login may have resolved it for the first time).
-            session = _bsky_reauth(account, session)
-            result = _do_post(session["access_jwt"], session["did"])
-        except BlueskyAccountGoneError:
-            # Account row is gone — retries cannot help.
-            logger.error(
-                "Echo %s: Bluesky account deleted during dispatch; giving up",
-                echo["id"],
-            )
-            return _fail_post(
-                posted_id,
-                claim_token,
-                echo["id"],
-                "Bluesky account deleted",
-                permanent=True,
-            )
-        except BlueskyAuthError:
-            # Credentials themselves are bad/revoked — retries cannot help.
-            logger.error(
-                "Echo %s: Bluesky credentials rejected after re-auth; giving up",
-                echo["id"],
-            )
-            return _fail_post(
-                posted_id,
-                claim_token,
-                echo["id"],
-                "Bluesky credentials rejected",
-                permanent=True,
-            )
-        except Exception:
-            logger.exception("Echo %s: Bluesky post failed after re-auth", echo["id"])
-            return _fail_post(
-                posted_id, claim_token, echo["id"], "Bluesky delivery failed"
-            )
-    except Exception:
-        logger.exception("Echo %s: Bluesky post failed", echo["id"])
-        return _fail_post(posted_id, claim_token, echo["id"], "Bluesky delivery failed")
+    ok, session, result = _bsky_call_with_reauth(
+        account, session, echo, posted_id, claim_token, "post", _do_post
+    )
+    if not ok:
+        return result
 
     # Persist the post URL for auditing/duplicate detection.
     post_url = ""

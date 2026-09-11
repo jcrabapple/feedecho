@@ -27,7 +27,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
-- **Image attachments** — automatically attach the feed item's first image (Mastodon, Bluesky, and Matrix upload as media; micro.blog and Discord fetch it by URL)
+- **Image attachments** — automatically attach the feed item's images: up to 4 per post on Mastodon and Bluesky, up to 4 inline on email, and the first image on Matrix, micro.blog, and Discord
 - **AI alt text** — optionally generate image descriptions via an OpenAI-compatible vision API
 - **Digest mode** — batch email deliveries into hourly digests instead of one email per item
 - **Mobile-responsive** — tables convert to cards, forms stack, 44px touch targets
@@ -170,7 +170,7 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - Accounts connect via **App Passwords**, which are scoped to creating posts (and other app activity) and can be revoked individually without changing your main password.
 - Sessions are cached per account (access + refresh JWTs in SQLite) and refreshed automatically; expired tokens trigger a transparent re-login and one retry.
 - Posts are truncated to **300 graphemes** (Unicode-aware) and, separately, to Bluesky's 3000-byte limit on the post text; URLs in the text get proper link facets, so links are clickable everywhere.
-- Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed; alt text uses your AI vision config when enabled. Images are capped at 2 MB and jpeg/png/webp/gif (Bluesky's limits); oversized JPEG/PNG/WebP sources are downscaled or re-encoded to fit automatically.
+- Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed carrying **up to 4 images** per post; each image's alt text uses the feed's own description when it provides one, otherwise your AI vision config when enabled. Images are capped at 2 MB each and jpeg/png/webp/gif (Bluesky's limits); oversized JPEG/PNG/WebP sources are downscaled or re-encoded to fit automatically, and one image that fails to fetch or upload is skipped without dropping the rest of the post.
 - Content warnings and visibility settings are Mastodon-only and are ignored for Bluesky posts.
 
 ### Matrix details

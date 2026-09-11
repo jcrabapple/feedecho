@@ -40,6 +40,7 @@ from bluesky import (
     MAX_IMAGES as BLUESKY_MAX_IMAGES,
     MAX_POST_BYTES,
     MAX_POST_GRAPHEMES,
+    BlueskyAccountGoneError,
     BlueskyAuthError,
     BlueskyError,
     build_facets,
@@ -1543,9 +1544,10 @@ def _bsky_reauth(account, session: dict) -> dict:
 
     Shared by the image-upload loop and the create_post retry so both heal
     the same way. Returns the fresh session dict with the new tokens
-    persisted; raises BlueskyError when the account row is gone and
-    BlueskyAuthError when the credentials themselves are dead (callers map
-    that to a permanent failure).
+    persisted; raises BlueskyAccountGoneError when the account row is gone
+    and BlueskyAuthError when the credentials themselves are dead (callers
+    map both to a permanent failure — a plain BlueskyError from create_session,
+    e.g. a PDS outage, stays a transient failure).
     """
     with get_db() as db:
         fresh = db.execute(
@@ -1553,7 +1555,7 @@ def _bsky_reauth(account, session: dict) -> dict:
             (account["id"],),
         ).fetchone()
     if not fresh:
-        raise BlueskyError("Bluesky account was deleted during dispatch")
+        raise BlueskyAccountGoneError("Bluesky account was deleted during dispatch")
     refreshed = create_session(
         session["pds"], fresh["handle"], decrypt_secret(fresh["app_password"])
     )
@@ -1754,6 +1756,19 @@ def _send_bluesky(
                 )
                 try:
                     session = _bsky_reauth(account, session)
+                except BlueskyAccountGoneError:
+                    logger.error(
+                        "Echo %s: Bluesky account deleted during image upload for item %s; giving up",
+                        echo["id"],
+                        item["id"],
+                    )
+                    return _fail_post(
+                        posted_id,
+                        claim_token,
+                        echo["id"],
+                        "Bluesky account deleted",
+                        permanent=True,
+                    )
                 except BlueskyAuthError:
                     logger.error(
                         "Echo %s: Bluesky credentials rejected after re-auth during image upload; giving up",
@@ -1813,6 +1828,19 @@ def _send_bluesky(
             # (the re-login may have resolved it for the first time).
             session = _bsky_reauth(account, session)
             result = _do_post(session["access_jwt"], session["did"])
+        except BlueskyAccountGoneError:
+            # Account row is gone — retries cannot help.
+            logger.error(
+                "Echo %s: Bluesky account deleted during dispatch; giving up",
+                echo["id"],
+            )
+            return _fail_post(
+                posted_id,
+                claim_token,
+                echo["id"],
+                "Bluesky account deleted",
+                permanent=True,
+            )
         except BlueskyAuthError:
             # Credentials themselves are bad/revoked — retries cannot help.
             logger.error(

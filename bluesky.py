@@ -299,18 +299,65 @@ def session_expiry(access_jwt: str) -> str:
 
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
+# Hashtag detection mirrors Bluesky's own richtext rules (atproto:
+# packages/api/src/rich-text/util.ts TAG_REGEX): a tag starts at the
+# beginning of the text or after whitespace, uses an ASCII or fullwidth
+# hash, and runs to the next whitespace or zero-width character. The
+# candidate's trailing punctuation is stripped, it must keep at least one
+# character that is neither a digit nor punctuation (so "#123" is not a
+# tag), and it caps at 64 characters -- the limits the official client
+# applies. Cashtags ($TICKER) and mentions (@handle) are deliberately not
+# detected: feeds carry foreign @user@instance handles that cannot resolve
+# to Bluesky DIDs, and $TICKER content is rare in feeds.
+_TAG_RE = re.compile(
+    r"(^|\s)([#＃](?!\ufe0f)[^\s\u00AD\u2060\u200A\u200B\u200C\u200D\u20e2]*)"
+)
+_TAG_ZERO_WIDTH = "\u00AD\u2060\u200A\u200B\u200C\u200D\u20e2"
+_TAG_MAX_CHARS = 64
 _FACET_LINK_TYPE = "app.bsky.richtext.facet#link"
+_FACET_TAG_TYPE = "app.bsky.richtext.facet#tag"
+
+
+def _strip_trailing_punctuation(value: str) -> str:
+    """Drop trailing Unicode punctuation (atproto trim + TRAILING_PUNCTUATION)."""
+    while value and unicodedata.category(value[-1]).startswith("P"):
+        value = value[:-1]
+    return value
+
+
+def _has_tag_body_char(tag: str) -> bool:
+    """Whether the tag keeps a character that is neither digit nor punctuation.
+
+    atproto's TAG_REGEX requires one such character inside the body; it is
+    what makes "#123" render as plain text rather than a tag.
+    """
+    for ch in tag:
+        if ch in _TAG_ZERO_WIDTH or ch.isspace():
+            continue
+        if ch.isdigit():
+            continue
+        if unicodedata.category(ch).startswith("P"):
+            continue
+        return True
+    return False
 
 
 def build_facets(text: str) -> list[dict]:
-    """Find URLs in post text and build link facets with UTF-8 byte offsets.
+    """Find URLs and hashtags in post text and build richtext facets.
 
     Byte offsets are relative to the UTF-8 encoding of the text, as required
-    by app.bsky.richtext.facet. Trailing punctuation is trimmed from each URL
-    so it is not swallowed into the link.
+    by app.bsky.richtext.facet. Link and tag detection follow Bluesky's own
+    richtext rules: trailing punctuation is trimmed from each URL; a tag must
+    start the text or follow whitespace, and keeps at least one non-digit,
+    non-punctuation character. Truncation artifacts are dropped ("…" inside a
+    match), and a tag candidate overlapping a URL range is skipped so facets
+    never overlap.
     """
     encoded = text.encode("utf-8")
-    facets: list[dict] = []
+
+    # (char_start, char_end, facet) — overlap checks run in character space;
+    # byte offsets are derived from character positions per final match.
+    found: list[tuple[int, int, dict]] = []
 
     for match in _URL_RE.finditer(text):
         uri = match.group(0)
@@ -334,16 +381,56 @@ def build_facets(text: str) -> list[dict]:
         if byte_end > len(encoded) or encoded[byte_start:byte_end].decode("utf-8") != uri:
             continue
 
-        facets.append(
-            {
-                "index": {"byteStart": byte_start, "byteEnd": byte_end},
-                "features": [
-                    {"$type": _FACET_LINK_TYPE, "uri": uri},
-                ],
-            }
+        found.append(
+            (
+                char_start,
+                char_start + len(uri),
+                {
+                    "index": {"byteStart": byte_start, "byteEnd": byte_end},
+                    "features": [
+                        {"$type": _FACET_LINK_TYPE, "uri": uri},
+                    ],
+                },
+            )
         )
 
-    return facets
+    link_spans = [(start, end) for start, end, _ in found]
+
+    for match in _TAG_RE.finditer(text):
+        leading = match.group(1)
+        candidate = match.group(2)
+        # Same truncation guard as URLs: an ellipsis inside the candidate
+        # means the tag was sliced mid-word.
+        if "…" in candidate:
+            continue
+        tag = _strip_trailing_punctuation(candidate[1:])
+        if not tag or len(tag) > _TAG_MAX_CHARS:
+            continue
+        if not _has_tag_body_char(tag):
+            continue
+
+        char_start = match.start() + len(leading)  # position of the hash
+        char_end = char_start + 1 + len(tag)
+        if any(char_start < end and start < char_end for start, end in link_spans):
+            continue
+
+        byte_start = len(text[:char_start].encode("utf-8"))
+        byte_end = len(text[:char_end].encode("utf-8"))
+        found.append(
+            (
+                char_start,
+                char_end,
+                {
+                    "index": {"byteStart": byte_start, "byteEnd": byte_end},
+                    "features": [
+                        {"$type": _FACET_TAG_TYPE, "tag": tag},
+                    ],
+                },
+            )
+        )
+
+    found.sort(key=lambda entry: entry[0])
+    return [facet for _, _, facet in found]
 
 
 # ── Grapheme-aware truncation ────────────────────────────────────────────────

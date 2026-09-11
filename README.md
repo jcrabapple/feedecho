@@ -380,3 +380,5 @@ CI additionally runs a multi-mode suite and a live Postgres dialect suite on eve
 ## License
 
 MIT
+
+Built with the assistance of open source/open weight LLMs and reviewed by Claude.

@@ -329,7 +329,7 @@ def _strip_trailing_punctuation(value: str) -> str:
 
 
 def _has_tag_body_char(tag: str) -> bool:
-    """Whether the tag keeps a character that is neither digit nor punctuation.
+    r"""Whether the tag keeps a character that is neither digit nor punctuation.
 
     atproto's TAG_REGEX requires one such character inside the body; it is
     what makes "#123" render as plain text rather than a tag. Only ASCII
@@ -411,10 +411,12 @@ def build_facets(text: str) -> list[dict]:
         tag = _strip_trailing_punctuation(candidate[1:])
         if not tag:
             continue
-        # Client parity: atproto drops a tag only when BOTH its code-point
-        # count and its grapheme count exceed 64. The tag lexicon separately
-        # caps the property at 640 UTF-8 bytes; an oversized tag facet would
-        # fail record validation and kill the whole post, so guard that too.
+        # Tag cap: 64 graphemes (the lexicon limit). len(tag) is the cheap
+        # pre-check the client also uses -- code points are always >=
+        # graphemes, so cluster counting only runs for over-cap raw lengths.
+        # The lexicon separately caps the property at 640 UTF-8 bytes; an
+        # oversized tag facet would fail record validation and kill the
+        # whole post, so guard that too.
         if (
             len(tag) > _TAG_MAX_CHARS
             and len(_grapheme_clusters(tag)) > _TAG_MAX_CHARS

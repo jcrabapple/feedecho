@@ -1544,10 +1544,11 @@ def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> d
     Returns {"blob", "alt"} on success. A per-image failure (dead link,
     unsupported type, still over the blob cap after a downscale attempt,
     upload rejection) logs and returns None so the caller skips just this
-    image — one bad attachment never drops the whole post. Oversized images
-    are downscaled/re-encoded first (the 2026-09-09 glass.photo report:
-    ~2.9 MB source JPEGs degraded every glass post to text-only under the
-    old 1 MB cap).
+    image — one bad attachment never drops the whole post. BlueskyAuthError
+    propagates instead: a dead session is a post-level problem, not an image
+    one. Oversized images are downscaled/re-encoded first (the 2026-09-09
+    glass.photo report: ~2.9 MB source JPEGs degraded every glass post to
+    text-only under the old 1 MB cap).
     """
     try:
         image_result = fetch_image(entry["url"])
@@ -1611,6 +1612,11 @@ def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> d
             item["id"],
         )
         return {"blob": blob, "alt": alt_description}
+    except BlueskyAuthError:
+        # A dead session is post-level, not image-level: propagate so the
+        # caller fails the dispatch (fresh session on retry) instead of
+        # silently publishing a degraded text-only post.
+        raise
     except Exception:
         logger.warning(
             "Echo %s: Bluesky image pipeline failed for one image of item %s, skipping that image",
@@ -1662,10 +1668,36 @@ def _send_bluesky(
 
     image_entries_out: list[dict] = []
     if attach_image:
-        for entry in _item_image_entries(item, limit=BLUESKY_MAX_IMAGES):
-            uploaded = _upload_bluesky_image(session, echo, item, entry)
-            if uploaded:
-                image_entries_out.append(uploaded)
+        image_entries = _item_image_entries(item, limit=BLUESKY_MAX_IMAGES)
+        try:
+            for entry in image_entries:
+                uploaded = _upload_bluesky_image(session, echo, item, entry)
+                if uploaded:
+                    image_entries_out.append(uploaded)
+        except BlueskyAuthError as e:
+            # The session died mid-dispatch. Unlike Mastodon (whose tokens
+            # need the user to reconnect), Bluesky re-logins with the stored
+            # app password, so fail transiently: the bounded retry sets up a
+            # fresh session and delivers the post WITH its images instead of
+            # publishing a degraded text-only post as a success.
+            logger.error(
+                "Echo %s: Bluesky session rejected during image upload for item %s: %s",
+                echo["id"],
+                item["id"],
+                e,
+            )
+            return _fail_post(
+                posted_id,
+                claim_token,
+                echo["id"],
+                "Bluesky session rejected during image upload",
+            )
+        if image_entries and not image_entries_out:
+            logger.warning(
+                "Echo %s: no images uploaded for item %s, posting text-only",
+                echo["id"],
+                item["id"],
+            )
 
     embed = build_image_embed(image_entries_out) if image_entries_out else None
 
@@ -1721,6 +1753,10 @@ def _send_bluesky(
                         account["id"],
                     ),
                 )
+            # post_url below builds from session["did"]; point it at the DID
+            # that actually published (the re-login may have resolved it for
+            # the first time).
+            session["did"] = refreshed["did"]
             result = _do_post(refreshed["access_jwt"], refreshed["did"])
         except BlueskyAuthError:
             # Credentials themselves are bad/revoked — retries cannot help.

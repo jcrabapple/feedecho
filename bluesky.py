@@ -612,8 +612,12 @@ def build_image_embed(image_entries: list[dict]) -> dict:
 
     Takes a list of {"blob", "alt"} entries (scheduler._send_bluesky builds
     them) and drops anything beyond MAX_IMAGES defensively — the per-post
-    cap belongs to this transport, not the caller.
+    cap belongs to this transport, not the caller. The lexicon requires at
+    least one image, so an empty list raises ValueError instead of
+    returning a payload the PDS would reject.
     """
+    if not image_entries:
+        raise ValueError("build_image_embed requires at least one image entry")
     images = [
         {
             "alt": truncate_graphemes(

@@ -7,6 +7,7 @@ import logging
 import secrets
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -1696,17 +1697,19 @@ def _bsky_call_with_reauth(
         )
 
 
-def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> dict | None:
-    """Fetch, downscale, and upload one image for a Bluesky post.
+def _prepare_bluesky_image(
+    echo, item: FeedItem, entry: dict
+) -> tuple[bytes, str, str] | None:
+    """Fetch, downscale, and resolve alt text for one image — no upload.
 
-    Returns {"blob", "alt"} on success. A per-image failure (dead link,
-    unsupported type, still over the blob cap after a downscale attempt,
-    upload rejection) logs and returns None so the caller skips just this
-    image — one bad attachment never drops the whole post. BlueskyAuthError
-    propagates instead: a dead session is a post-level problem, not an image
-    one. Oversized images are downscaled/re-encoded first (the 2026-09-09
-    glass.photo report: ~2.9 MB source JPEGs degraded every glass post to
-    text-only under the old 1 MB cap).
+    Returns (img_bytes, img_type, alt_description) ready for upload_blob, or
+    None to skip this image (dead link, unsupported type, still over the
+    blob cap after a downscale attempt). This step touches no Bluesky
+    session and can't raise BlueskyAuthError, so callers run it for every
+    candidate image concurrently, ahead of the sequential, session-bound
+    upload/retry loop. Oversized images are downscaled/re-encoded first
+    (the 2026-09-09 glass.photo report: ~2.9 MB source JPEGs degraded every
+    glass post to text-only under the old 1 MB cap).
     """
     try:
         image_result = fetch_image(entry["url"])
@@ -1751,30 +1754,7 @@ def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> d
         alt_description = _resolve_alt_text(
             echo, item, entry.get("alt", ""), img_bytes, img_type
         ) or ""
-        blob = upload_blob(
-            pds=session["pds"],
-            access_jwt=session["access_jwt"],
-            image_bytes=img_bytes,
-            content_type=img_type,
-        )
-        if not blob:
-            logger.warning(
-                "Echo %s: Bluesky image upload failed for item %s, skipping that image",
-                echo["id"],
-                item["id"],
-            )
-            return None
-        logger.info(
-            "Echo %s: uploaded Bluesky image blob for item %s",
-            echo["id"],
-            item["id"],
-        )
-        return {"blob": blob, "alt": alt_description}
-    except BlueskyAuthError:
-        # A dead session is post-level, not image-level: propagate so the
-        # caller fails the dispatch (fresh session on retry) instead of
-        # silently publishing a degraded text-only post.
-        raise
+        return img_bytes, img_type, alt_description
     except Exception:
         logger.warning(
             "Echo %s: Bluesky image pipeline failed for one image of item %s, skipping that image",
@@ -1783,6 +1763,75 @@ def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> d
             exc_info=True,
         )
         return None
+
+
+def _prepare_bluesky_images(
+    echo, item: FeedItem, entries: list[dict]
+) -> list[tuple[bytes, str, str] | None]:
+    """Run _prepare_bluesky_image for every entry concurrently.
+
+    Fetch, downscale, and alt-text resolution are each independent,
+    session-free network/CPU work per image — running them one at a time
+    made a 4-image post pay for 4 sequential round-trips. Returns results
+    aligned to `entries` by index (None where that entry was skipped), so
+    the caller's upload loop keeps its existing sequential, index-based
+    retry logic unchanged and just skips the None slots.
+    """
+    if not entries:
+        return []
+    if len(entries) == 1:
+        return [_prepare_bluesky_image(echo, item, entries[0])]
+    with ThreadPoolExecutor(max_workers=min(len(entries), BLUESKY_MAX_IMAGES)) as pool:
+        futures = [
+            pool.submit(_prepare_bluesky_image, echo, item, entry) for entry in entries
+        ]
+        return [future.result() for future in futures]
+
+
+def _upload_bluesky_image(
+    session: dict, echo, item: FeedItem, prepared: tuple[bytes, str, str]
+) -> dict | None:
+    """Upload one already-fetched, already-validated image blob.
+
+    Returns {"blob", "alt"} on success, or None on an upload rejection
+    (logs and lets the caller skip just this image). BlueskyAuthError
+    propagates instead: a dead session is a post-level problem, not an
+    image one.
+    """
+    img_bytes, img_type, alt_description = prepared
+    try:
+        blob = upload_blob(
+            pds=session["pds"],
+            access_jwt=session["access_jwt"],
+            image_bytes=img_bytes,
+            content_type=img_type,
+        )
+    except BlueskyAuthError:
+        # A dead session is post-level, not image-level: propagate so the
+        # caller fails the dispatch (fresh session on retry) instead of
+        # silently publishing a degraded text-only post.
+        raise
+    except Exception:
+        logger.warning(
+            "Echo %s: Bluesky image upload failed for item %s, skipping that image",
+            echo["id"],
+            item["id"],
+            exc_info=True,
+        )
+        return None
+    if not blob:
+        logger.warning(
+            "Echo %s: Bluesky image upload failed for item %s, skipping that image",
+            echo["id"],
+            item["id"],
+        )
+        return None
+    logger.info(
+        "Echo %s: uploaded Bluesky image blob for item %s",
+        echo["id"],
+        item["id"],
+    )
+    return {"blob": blob, "alt": alt_description}
 
 
 def _send_bluesky(
@@ -1827,6 +1876,11 @@ def _send_bluesky(
     image_entries_out: list[dict] = []
     if attach_image:
         image_entries = _item_image_entries(item, limit=BLUESKY_MAX_IMAGES)
+        # Fetch/downscale/alt-text is session-free and independent per
+        # image, so it runs concurrently up front; only the upload_blob
+        # calls below stay sequential, since those are the ones that can
+        # hit a rejected session and need the index-based retry.
+        prepared = _prepare_bluesky_images(echo, item, image_entries)
         # Index-based resume: a per-image skip does not advance
         # image_entries_out, so the retry window must track the INPUT index —
         # slicing by output count would re-upload an already-uploaded image
@@ -1836,10 +1890,10 @@ def _send_bluesky(
         def _upload_remaining(s: dict) -> None:
             nonlocal start_idx
             for idx in range(start_idx, len(image_entries)):
-                entry = image_entries[idx]
-                uploaded = _upload_bluesky_image(s, echo, item, entry)
-                if uploaded:
-                    image_entries_out.append(uploaded)
+                if prepared[idx] is not None:
+                    uploaded = _upload_bluesky_image(s, echo, item, prepared[idx])
+                    if uploaded:
+                        image_entries_out.append(uploaded)
                 # Advance only after the entry has been handled (uploaded or
                 # deliberately skipped); a BlueskyAuthError leaves the index
                 # on the failed entry so the retry resumes there.

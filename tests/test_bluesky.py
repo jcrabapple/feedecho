@@ -314,6 +314,44 @@ class TestBuildFacets:
         facets = build_facets(clipped)
         assert facets == []
 
+class TestBuildImageEmbed:
+    def test_wraps_multiple_entries_with_alts(self):
+        from bluesky import build_image_embed
+
+        blob = {"$type": "blob", "ref": {"$link": "bafy"}}
+        embed = build_image_embed([
+            {"blob": blob, "alt": " one "},
+            {"blob": blob, "alt": "two"},
+        ])
+        assert embed["$type"] == "app.bsky.embed.images"
+        assert [img["alt"] for img in embed["images"]] == ["one", "two"]
+        assert all(img["image"] is blob for img in embed["images"])
+
+    def test_caps_at_max_images(self):
+        from bluesky import MAX_IMAGES, build_image_embed
+
+        entries = [
+            {"blob": {"$type": "blob"}, "alt": str(i)}
+            for i in range(MAX_IMAGES + 2)
+        ]
+        embed = build_image_embed(entries)
+        assert len(embed["images"]) == MAX_IMAGES
+
+    def test_truncates_long_alt_text(self):
+        from bluesky import MAX_ALT_GRAPHEMES, build_image_embed
+
+        embed = build_image_embed([
+            {"blob": {"$type": "blob"}, "alt": "x" * (MAX_ALT_GRAPHEMES + 50)},
+        ])
+        assert len(embed["images"][0]["alt"]) == MAX_ALT_GRAPHEMES
+
+    def test_empty_entries_raise_value_error(self):
+        from bluesky import build_image_embed
+
+        with pytest.raises(ValueError):
+            build_image_embed([])
+
+
 # ── Session expiry ───────────────────────────────────────────────────────────
 
 class TestSessionExpiry:
@@ -492,6 +530,453 @@ class TestSendBluesky:
         assert len(upload_calls) == 0
         assert sent[0]["embed"] is None
 
+    def test_attaches_up_to_four_images_from_image_urls(self, db_tmp, monkeypatch):
+        """image_urls drives a multi-image embed (Bluesky cap 4), per-image alt."""
+        import scheduler
+
+        sent = []
+        uploaded = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: uploaded.append(kw)
+            or {"$type": "blob", "ref": {"$link": "bafkreifake"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": "one"},
+            {"url": "https://example.com/2.jpg", "alt": "two"},
+            {"url": "https://example.com/3.jpg", "alt": ""},
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(uploaded) == 3
+        embed = sent[0]["embed"]
+        assert embed["$type"] == "app.bsky.embed.images"
+        assert [img["alt"] for img in embed["images"]] == ["one", "two", ""]
+        assert all(
+            img["image"]["ref"]["$link"] == "bafkreifake" for img in embed["images"]
+        )
+
+    def test_caps_at_four_images(self, db_tmp, monkeypatch):
+        """More than 4 image_urls are truncated to Bluesky's cap of 4."""
+        import scheduler
+
+        sent = []
+        upload_count = [0]
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def fake_upload(**kw):
+            upload_count[0] += 1
+            return {"$type": "blob", "ref": {"$link": f"bafkrei{upload_count[0]}"}}
+
+        monkeypatch.setattr(scheduler, "upload_blob", fake_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": f"https://example.com/{i}.jpg", "alt": ""} for i in range(6)
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert upload_count[0] == 4
+        assert len(sent[0]["embed"]["images"]) == 4
+
+    def test_failed_image_fetch_skips_only_that_image(self, db_tmp, monkeypatch):
+        """One dead image URL never drops the rest of the attachments."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def flaky_fetch(url):
+            if "broken" in url:
+                return None
+            return (b"fake-image-bytes", "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", flaky_fetch)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: {"$type": "blob", "ref": {"$link": "bafkreifake"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/broken.jpg", "alt": ""},
+            {"url": "https://example.com/good.jpg", "alt": ""},
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(sent[0]["embed"]["images"]) == 1
+
+    def test_unsupported_type_skips_only_that_image(self, db_tmp, monkeypatch):
+        """A non-image content type skips that image, keeps the supported one."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def typed_fetch(url):
+            if url.endswith(".avif"):
+                return (b"bytes", "image/avif")
+            return (b"fake-image-bytes", "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", typed_fetch)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: {"$type": "blob", "ref": {"$link": "bafkreifake"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/photo.avif", "alt": ""},
+            {"url": "https://example.com/photo.jpg", "alt": ""},
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(sent[0]["embed"]["images"]) == 1
+
+    def test_upload_rejection_skips_only_that_image(self, db_tmp, monkeypatch):
+        """An upload that comes back empty skips that image, keeps the rest."""
+        import scheduler
+
+        sent = []
+        uploads = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def flaky_upload(**kw):
+            uploads.append(kw)
+            if len(uploads) == 1:
+                return None
+            return {"$type": "blob", "ref": {"$link": "bafkreifake"}}
+
+        monkeypatch.setattr(scheduler, "upload_blob", flaky_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+            {"url": "https://example.com/2.jpg", "alt": ""},
+        ])
+        scheduler.process_echo(echo, item)
+
+        assert len(uploads) == 2
+        assert len(sent[0]["embed"]["images"]) == 1
+
+    def test_user_alt_override_on_primary_slot(self, db_tmp, monkeypatch):
+        """item['image_alt'] (user-edited) wins for the first image; the
+        secondary slot falls back to AI generation."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: {"$type": "blob", "ref": {"$link": "bafkreifake"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: True)
+        monkeypatch.setattr(
+            alt_text, "generate_alt_text", lambda *a, **kw: "AI-GENERATED"
+        )
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(
+            image_alt="USER EDITED ALT",
+            image_urls=[
+                {"url": "https://example.com/1.jpg", "alt": ""},
+                {"url": "https://example.com/2.jpg", "alt": ""},
+            ],
+        )
+        scheduler.process_echo(echo, item)
+
+        assert [
+            img["alt"] for img in sent[0]["embed"]["images"]
+        ] == ["USER EDITED ALT", "AI-GENERATED"]
+
+    def test_auth_error_during_upload_reauthenticates_and_retries(self, db_tmp, monkeypatch):
+        """A session rejected mid-upload heals in the same dispatch: re-login
+        with the app password, retry the remaining images, publish them all —
+        never a text-only fallback, never a dead-token retry loop."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        sent = []
+        uploads = []
+        logins = {"count": 0}
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def counting_session(pds, handle, pw):
+            logins["count"] += 1
+            return {
+                "did": "did:plc:test123",
+                "access_jwt": f"aj-{logins['count']}",
+                "refresh_jwt": f"rj-{logins['count']}",
+            }
+
+        monkeypatch.setattr(scheduler, "create_session", counting_session)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def flaky_upload(**kw):
+            uploads.append(kw)
+            if len(uploads) == 2:
+                # Second image: rejected once, then accepted after re-login.
+                raise BlueskyAuthError(
+                    "Blob upload rejected: session expired (ExpiredToken)"
+                )
+            return {"$type": "blob", "ref": {"$link": "bafkreifake"}}
+
+        monkeypatch.setattr(scheduler, "upload_blob", flaky_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+            {"url": "https://example.com/2.jpg", "alt": ""},
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        assert len(sent) == 1
+        assert len(sent[0]["embed"]["images"]) == 2  # both images made it
+        assert len(uploads) == 3  # the rejected upload was retried once
+        assert uploads[0]["access_jwt"] == "aj-1"  # pre-re-auth upload
+        assert uploads[2]["access_jwt"] == "aj-2"  # retried with fresh token
+        assert sent[0]["access_jwt"] == "aj-2"  # post uses the rebound session
+        assert logins["count"] == 2  # initial login + one re-auth
+        with database.get_db() as db:
+            account = db.execute(
+                "SELECT access_jwt FROM bluesky_accounts WHERE id = 1"
+            ).fetchone()
+            assert account["access_jwt"] == "aj-2"  # fresh session persisted
+
+    def test_skipped_image_before_auth_error_does_not_duplicate(
+        self, db_tmp, monkeypatch
+    ):
+        """A skipped image before the rejected upload must not shift the retry
+        window: already-uploaded images are never re-uploaded (the retry
+        resumes at the input index, not the success count)."""
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        sent = []
+        fetched = []
+        uploads = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def flaky_fetch(url):
+            fetched.append(url)
+            if "dead" in url:
+                return None  # skip: never uploaded
+            return (b"fake-image-bytes", "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", flaky_fetch)
+
+        def flaky_upload(**kw):
+            uploads.append(kw)
+            if len(uploads) == 2:
+                raise BlueskyAuthError(
+                    "Blob upload rejected: session expired (ExpiredToken)"
+                )
+            return {"$type": "blob", "ref": {"$link": "bafkreifake"}}
+
+        monkeypatch.setattr(scheduler, "upload_blob", flaky_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/dead.jpg", "alt": ""},  # skipped
+            {"url": "https://example.com/1.jpg", "alt": ""},  # uploaded once
+            {"url": "https://example.com/2.jpg", "alt": ""},  # rejected, retried
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        embed_images = sent[0]["embed"]["images"]
+        assert len(embed_images) == 2  # dead skipped; no duplicates
+        assert embed_images[0]["image"]["ref"]["$link"] == "bafkreifake"
+        assert len(uploads) == 3  # 1.jpg once, 2.jpg rejected + retried
+        assert fetched.count("https://example.com/1.jpg") == 1
+
+    def test_auth_error_during_upload_with_dead_credentials_gives_up(
+        self, db_tmp, monkeypatch
+    ):
+        """When the re-login itself is rejected, no retry can help: fail
+        permanently, publish nothing."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        sent = []
+        logins = {"count": 0}
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def dead_session(pds, handle, pw):
+            logins["count"] += 1
+            if logins["count"] == 1:
+                return {"did": "did:plc:test123", "access_jwt": "aj", "refresh_jwt": "rj"}
+            raise BlueskyAuthError("Authentication Required")
+
+        monkeypatch.setattr(scheduler, "create_session", dead_session)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def rejected_upload(**kw):
+            raise BlueskyAuthError(
+                "Blob upload rejected: session expired (ExpiredToken)"
+            )
+
+        monkeypatch.setattr(scheduler, "upload_blob", rejected_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True  # terminal failure unblocks the cursor
+        assert len(sent) == 0
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+            assert row["status"] == "gave_up"
+            assert "credentials" in row["error_message"]
+
+    def test_http_error_on_upload_skips_only_that_image(self, db_tmp, monkeypatch):
+        """Non-auth PDS upload rejections stay image-level: skip that image,
+        keep the rest of the post (same contract as Mastodon's upload_media)."""
+        import scheduler
+        from bluesky import BlueskyError
+
+        sent = []
+        uploads = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def failing_upload(**kw):
+            uploads.append(kw)
+            if len(uploads) == 1:
+                raise BlueskyError("Blob upload failed (HTTP 500)")
+            return {"$type": "blob", "ref": {"$link": "bafkreifake"}}
+
+        monkeypatch.setattr(scheduler, "upload_blob", failing_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+            {"url": "https://example.com/2.jpg", "alt": ""},
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        assert len(sent[0]["embed"]["images"]) == 1
+
+    def test_all_images_failed_warns_text_only(self, db_tmp, monkeypatch, caplog):
+        """When every candidate image is skipped, the degrade to text-only is
+        logged (the old code had a per-branch warning; the loop needs one)."""
+        import logging
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(scheduler, "fetch_image", lambda url: None)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+            {"url": "https://example.com/2.jpg", "alt": ""},
+        ])
+        with caplog.at_level(logging.WARNING):
+            ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        assert sent[0]["embed"] is None
+        assert "no images uploaded" in caplog.text
+
     def test_auth_error_retries_with_fresh_session(self, db_tmp, monkeypatch):
         import database
         import scheduler
@@ -518,6 +1003,117 @@ class TestSendBluesky:
                 "SELECT access_jwt FROM bluesky_accounts WHERE id = 1"
             ).fetchone()
             assert row["access_jwt"] == "aj"  # refreshed via stub create_session
+
+    def test_post_url_uses_refreshed_did_after_reauth(self, db_tmp, monkeypatch):
+        """post_url must name the DID that actually published when a
+        mid-post re-login resolved a different one."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        calls = {"count": 0}
+        logins = {"count": 0}
+
+        def flaky_post(**kw):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise BlueskyAuthError("ExpiredToken")
+            return {"uri": "u", "cid": "c"}
+
+        monkeypatch.setattr(scheduler, "create_post", flaky_post)
+        _stub_session(monkeypatch)
+
+        def rotating_session(pds, handle, pw):
+            logins["count"] += 1
+            did = (
+                "did:plc:test123"
+                if logins["count"] == 1
+                else "did:plc:refreshed"
+            )
+            return {
+                "did": did,
+                "access_jwt": f"aj{logins['count']}",
+                "refresh_jwt": f"rj{logins['count']}",
+            }
+
+        monkeypatch.setattr(scheduler, "create_session", rotating_session)
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT post_url FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+        assert (
+            row["post_url"]
+            == "https://bsky.app/profile/did:plc:refreshed/post/u"
+        )
+
+    def test_post_url_uses_refreshed_did_after_upload_reauth(
+        self, db_tmp, monkeypatch
+    ):
+        """DID rotation triggered by a mid-upload rejection must also reach
+        post_url (the upload-loop re-auth rebinds the session for create_post)."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        sent = []
+        uploads = []
+        logins = {"count": 0}
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def rotating_session(pds, handle, pw):
+            logins["count"] += 1
+            did = (
+                "did:plc:test123"
+                if logins["count"] == 1
+                else "did:plc:refreshed"
+            )
+            return {
+                "did": did,
+                "access_jwt": f"aj{logins['count']}",
+                "refresh_jwt": f"rj{logins['count']}",
+            }
+
+        monkeypatch.setattr(scheduler, "create_session", rotating_session)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def flaky_upload(**kw):
+            uploads.append(kw)
+            if len(uploads) == 1:
+                raise BlueskyAuthError(
+                    "Blob upload rejected: session expired (ExpiredToken)"
+                )
+            return {"$type": "blob", "ref": {"$link": "bafkreifake"}}
+
+        monkeypatch.setattr(scheduler, "upload_blob", flaky_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT post_url FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+        assert (
+            row["post_url"]
+            == "https://bsky.app/profile/did:plc:refreshed/post/u"
+        )
 
     def test_persistent_auth_failure_gives_up_permanently(self, db_tmp, monkeypatch):
         import database

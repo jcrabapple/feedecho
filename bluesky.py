@@ -322,7 +322,6 @@ _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 _TAG_RE = re.compile(
     r"(^|\s)([#＃](?!\ufe0f)[^\s\u00AD\u2060\u200A\u200B\u200C\u200D\u20e2]*)"
 )
-_TAG_ZERO_WIDTH = "\u00AD\u2060\u200A\u200B\u200C\u200D\u20e2"
 _TAG_MAX_CHARS = 64
 _TAG_MAX_BYTES = 640
 _ASCII_DIGITS = "0123456789"
@@ -344,10 +343,13 @@ def _has_tag_body_char(tag: str) -> bool:
     what makes "#123" render as plain text rather than a tag. Only ASCII
     digits are excluded (JS \d is ASCII-only), so a tag of non-ASCII digits
     like "#٢٠٢٦" is a tag to the official client and stays one here.
+
+    `tag` is always derived from a _TAG_RE match with trailing punctuation
+    stripped, so it can never contain whitespace or the zero-width
+    characters _TAG_RE's body class already excludes -- only digits and
+    punctuation need checking here.
     """
     for ch in tag:
-        if ch in _TAG_ZERO_WIDTH or ch.isspace():
-            continue
         if ch in _ASCII_DIGITS:
             continue
         if unicodedata.category(ch).startswith("P"):

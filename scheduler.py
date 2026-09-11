@@ -1538,6 +1538,48 @@ def _bsky_session(account) -> dict:
     }
 
 
+def _bsky_reauth(account, session: dict) -> dict:
+    """Re-login with the stored app password after a rejected session.
+
+    Shared by the image-upload loop and the create_post retry so both heal
+    the same way. Returns the fresh session dict with the new tokens
+    persisted; raises BlueskyError when the account row is gone and
+    BlueskyAuthError when the credentials themselves are dead (callers map
+    that to a permanent failure).
+    """
+    with get_db() as db:
+        fresh = db.execute(
+            "SELECT handle, app_password FROM bluesky_accounts WHERE id = ?",
+            (account["id"],),
+        ).fetchone()
+    if not fresh:
+        raise BlueskyError("Bluesky account was deleted during dispatch")
+    refreshed = create_session(
+        session["pds"], fresh["handle"], decrypt_secret(fresh["app_password"])
+    )
+    with get_db() as db:
+        db.execute(
+            """
+            UPDATE bluesky_accounts
+               SET did = ?, access_jwt = ?, refresh_jwt = ?,
+                   session_expires_at = ?
+             WHERE id = ?
+            """,
+            (
+                refreshed["did"],
+                encrypt_secret(refreshed["access_jwt"]),
+                encrypt_secret(refreshed["refresh_jwt"]),
+                session_expiry(refreshed["access_jwt"]),
+                account["id"],
+            ),
+        )
+    return {
+        "pds": session["pds"],
+        "did": refreshed["did"],
+        "access_jwt": refreshed["access_jwt"],
+    }
+
+
 def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> dict | None:
     """Fetch, downscale, and upload one image for a Bluesky post.
 
@@ -1669,29 +1711,59 @@ def _send_bluesky(
     image_entries_out: list[dict] = []
     if attach_image:
         image_entries = _item_image_entries(item, limit=BLUESKY_MAX_IMAGES)
-        try:
-            for entry in image_entries:
-                uploaded = _upload_bluesky_image(session, echo, item, entry)
-                if uploaded:
-                    image_entries_out.append(uploaded)
-        except BlueskyAuthError as e:
-            # The session died mid-dispatch. Unlike Mastodon (whose tokens
-            # need the user to reconnect), Bluesky re-logins with the stored
-            # app password, so fail transiently: the bounded retry sets up a
-            # fresh session and delivers the post WITH its images instead of
-            # publishing a degraded text-only post as a success.
-            logger.error(
-                "Echo %s: Bluesky session rejected during image upload for item %s: %s",
-                echo["id"],
-                item["id"],
-                e,
-            )
-            return _fail_post(
-                posted_id,
-                claim_token,
-                echo["id"],
-                "Bluesky session rejected during image upload",
-            )
+        for attempt in (1, 2):
+            try:
+                for entry in image_entries[len(image_entries_out):]:
+                    uploaded = _upload_bluesky_image(session, echo, item, entry)
+                    if uploaded:
+                        image_entries_out.append(uploaded)
+                break
+            except BlueskyAuthError:
+                # The session was rejected mid-dispatch. Re-login once with
+                # the stored app password and retry the remaining images —
+                # the same recovery the create_post path below uses. If the
+                # fresh login is rejected too, the credentials are dead and
+                # no retry can help.
+                logger.warning(
+                    "Echo %s: Bluesky session rejected during image upload for item %s, re-authenticating",
+                    echo["id"],
+                    item["id"],
+                )
+                if attempt == 2:
+                    logger.error(
+                        "Echo %s: Bluesky credentials rejected during image upload for item %s; giving up",
+                        echo["id"],
+                        item["id"],
+                    )
+                    return _fail_post(
+                        posted_id,
+                        claim_token,
+                        echo["id"],
+                        "Bluesky credentials rejected",
+                        permanent=True,
+                    )
+                try:
+                    session = _bsky_reauth(account, session)
+                except BlueskyAuthError:
+                    logger.error(
+                        "Echo %s: Bluesky credentials rejected after re-auth during image upload; giving up",
+                        echo["id"],
+                    )
+                    return _fail_post(
+                        posted_id,
+                        claim_token,
+                        echo["id"],
+                        "Bluesky credentials rejected",
+                        permanent=True,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Echo %s: Bluesky re-auth failed during image upload",
+                        echo["id"],
+                    )
+                    return _fail_post(
+                        posted_id, claim_token, echo["id"], "Bluesky delivery failed"
+                    )
         if image_entries and not image_entries_out:
             logger.warning(
                 "Echo %s: no images uploaded for item %s, posting text-only",
@@ -1727,37 +1799,10 @@ def _send_bluesky(
             account["handle"],
         )
         try:
-            with get_db() as db:
-                fresh = db.execute(
-                    "SELECT handle, app_password FROM bluesky_accounts WHERE id = ?",
-                    (account["id"],),
-                ).fetchone()
-            if not fresh:
-                raise BlueskyError("Bluesky account was deleted during dispatch")
-            refreshed = create_session(
-                session["pds"], fresh["handle"], decrypt_secret(fresh["app_password"])
-            )
-            with get_db() as db:
-                db.execute(
-                    """
-                    UPDATE bluesky_accounts
-                       SET did = ?, access_jwt = ?, refresh_jwt = ?,
-                           session_expires_at = ?
-                     WHERE id = ?
-                    """,
-                    (
-                        refreshed["did"],
-                        encrypt_secret(refreshed["access_jwt"]),
-                        encrypt_secret(refreshed["refresh_jwt"]),
-                        session_expiry(refreshed["access_jwt"]),
-                        account["id"],
-                    ),
-                )
-            # post_url below builds from session["did"]; point it at the DID
-            # that actually published (the re-login may have resolved it for
-            # the first time).
-            session["did"] = refreshed["did"]
-            result = _do_post(refreshed["access_jwt"], refreshed["did"])
+            # Rebinding session also updates the DID post_url builds from
+            # (the re-login may have resolved it for the first time).
+            session = _bsky_reauth(account, session)
+            result = _do_post(session["access_jwt"], session["did"])
         except BlueskyAuthError:
             # Credentials themselves are bad/revoked — retries cannot help.
             logger.error(

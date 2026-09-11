@@ -1711,12 +1711,22 @@ def _send_bluesky(
     image_entries_out: list[dict] = []
     if attach_image:
         image_entries = _item_image_entries(item, limit=BLUESKY_MAX_IMAGES)
+        # Index-based resume: a per-image skip does not advance
+        # image_entries_out, so the retry window must track the INPUT index —
+        # slicing by output count would re-upload an already-uploaded image
+        # as a duplicate after a re-auth.
+        start_idx = 0
         for attempt in (1, 2):
             try:
-                for entry in image_entries[len(image_entries_out):]:
+                for idx in range(start_idx, len(image_entries)):
+                    entry = image_entries[idx]
                     uploaded = _upload_bluesky_image(session, echo, item, entry)
                     if uploaded:
                         image_entries_out.append(uploaded)
+                    # Advance only after the entry has been handled (uploaded
+                    # or deliberately skipped); a BlueskyAuthError leaves the
+                    # index on the failed entry so the retry resumes there.
+                    start_idx = idx + 1
                 break
             except BlueskyAuthError:
                 # The session was rejected mid-dispatch. Re-login once with
@@ -1724,11 +1734,6 @@ def _send_bluesky(
                 # the same recovery the create_post path below uses. If the
                 # fresh login is rejected too, the credentials are dead and
                 # no retry can help.
-                logger.warning(
-                    "Echo %s: Bluesky session rejected during image upload for item %s, re-authenticating",
-                    echo["id"],
-                    item["id"],
-                )
                 if attempt == 2:
                     logger.error(
                         "Echo %s: Bluesky credentials rejected during image upload for item %s; giving up",
@@ -1742,6 +1747,11 @@ def _send_bluesky(
                         "Bluesky credentials rejected",
                         permanent=True,
                     )
+                logger.warning(
+                    "Echo %s: Bluesky session rejected during image upload for item %s, re-authenticating",
+                    echo["id"],
+                    item["id"],
+                )
                 try:
                     session = _bsky_reauth(account, session)
                 except BlueskyAuthError:

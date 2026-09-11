@@ -631,6 +631,52 @@ class TestBlueskyDownscaleWiring:
         assert len(uploaded[0]["image_bytes"]) <= 2_000_000
         assert len(uploaded[0]["image_bytes"]) != len(big)
 
+    def test_multi_image_downscales_each_independently(
+        self, db_tmp, monkeypatch, bl_echo
+    ):
+        """Two images: the small one passes through untouched, the oversized
+        one is downscaled, and both attach in one embed."""
+        import scheduler
+
+        sent = []
+        uploaded = []
+        monkeypatch.setattr(
+            scheduler,
+            "create_post",
+            lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"},
+        )
+        self._stub_bsky_session(monkeypatch)
+        small = _jpeg_bytes(width=640, height=480)
+        big = _jpeg_bytes(width=4000, height=3000)
+        assert len(big) > 2_000_000
+
+        def sized_fetch(url):
+            return (big if "big" in url else small, "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", sized_fetch)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: uploaded.append(kw)
+            or {"$type": "blob", "ref": {"$link": "b"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        item = self._bl_item(image_urls=[
+            {"url": "https://example.com/small.jpg", "alt": ""},
+            {"url": "https://example.com/big.jpg", "alt": ""},
+        ])
+        ok = scheduler.process_echo(bl_echo, item)
+
+        assert ok is True
+        assert len(uploaded) == 2
+        assert uploaded[0]["image_bytes"] == small
+        assert len(uploaded[1]["image_bytes"]) <= 2_000_000
+        assert len(uploaded[1]["image_bytes"]) != len(big)
+        assert len(sent[0]["embed"]["images"]) == 2
+
     def test_max_blob_bytes_constant_tracks_bluesky_limit(self):
         """The 1 MB constant was stale when Bluesky raised its embed limit to
         2 MB in April 2026 (atproto PR #4823); pin the new ceiling."""

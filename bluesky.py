@@ -38,6 +38,10 @@ MAX_ALT_GRAPHEMES = 1000
 # images.downscale_image before upload (scheduler._send_bluesky).
 MAX_BLOB_BYTES = 2_000_000
 BLUESKY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+# app.bsky.embed.images carries up to 4 images per post; scheduler._send_bluesky
+# attaches the item's image_urls up to this cap (Mastodon's default cap is the
+# same number, but the two are independent transport limits).
+MAX_IMAGES = 4
 
 # How long to trust a cached access JWT before refreshing (JWT exp takes
 # precedence when decodable). Access tokens typically live ~2 hours.
@@ -603,13 +607,23 @@ def create_post(
     return {"uri": data["uri"], "cid": data["cid"]}
 
 
-def build_image_embed(blob: dict, alt_text: str) -> dict:
-    """Wrap an uploaded blob in an app.bsky.embed.images embed."""
-    alt = truncate_graphemes((alt_text or "").strip(), MAX_ALT_GRAPHEMES)
-    return {
-        "$type": "app.bsky.embed.images",
-        "images": [{"alt": alt, "image": blob}],
-    }
+def build_image_embed(image_entries: list[dict]) -> dict:
+    """Wrap uploaded blobs in an app.bsky.embed.images embed.
+
+    Takes a list of {"blob", "alt"} entries (scheduler._send_bluesky builds
+    them) and drops anything beyond MAX_IMAGES defensively — the per-post
+    cap belongs to this transport, not the caller.
+    """
+    images = [
+        {
+            "alt": truncate_graphemes(
+                (entry.get("alt") or "").strip(), MAX_ALT_GRAPHEMES
+            ),
+            "image": entry["blob"],
+        }
+        for entry in image_entries[:MAX_IMAGES]
+    ]
+    return {"$type": "app.bsky.embed.images", "images": images}
 
 
 # ── Connection testing ───────────────────────────────────────────────────────

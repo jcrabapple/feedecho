@@ -37,6 +37,7 @@ from mastodon import (
 from bluesky import (
     BLUESKY_IMAGE_TYPES,
     MAX_BLOB_BYTES,
+    MAX_IMAGES as BLUESKY_MAX_IMAGES,
     MAX_POST_BYTES,
     MAX_POST_GRAPHEMES,
     BlueskyAuthError,
@@ -1537,6 +1538,89 @@ def _bsky_session(account) -> dict:
     }
 
 
+def _upload_bluesky_image(session: dict, echo, item: FeedItem, entry: dict) -> dict | None:
+    """Fetch, downscale, and upload one image for a Bluesky post.
+
+    Returns {"blob", "alt"} on success. A per-image failure (dead link,
+    unsupported type, still over the blob cap after a downscale attempt,
+    upload rejection) logs and returns None so the caller skips just this
+    image — one bad attachment never drops the whole post. Oversized images
+    are downscaled/re-encoded first (the 2026-09-09 glass.photo report:
+    ~2.9 MB source JPEGs degraded every glass post to text-only under the
+    old 1 MB cap).
+    """
+    try:
+        image_result = fetch_image(entry["url"])
+        if not image_result:
+            logger.info(
+                "Echo %s: image fetch failed for %s, skipping that image",
+                echo["id"],
+                entry["url"],
+            )
+            return None
+        img_bytes, img_type = image_result
+        # Oversized for Bluesky? Downscale/re-encode to fit. None = Pillow
+        # unavailable or still too big — skip just this image.
+        if len(img_bytes) > MAX_BLOB_BYTES:
+            downscaled = images.downscale_image(img_bytes, img_type, MAX_BLOB_BYTES)
+            if downscaled:
+                img_bytes, img_type = downscaled
+                logger.info(
+                    "Echo %s: downscaled Bluesky image for item %s to %d bytes (%s)",
+                    echo["id"],
+                    item["id"],
+                    len(img_bytes),
+                    img_type,
+                )
+            else:
+                logger.warning(
+                    "Echo %s: Bluesky image still exceeds the %d byte blob limit after downscale attempt for item %s, skipping that image",
+                    echo["id"],
+                    MAX_BLOB_BYTES,
+                    item["id"],
+                )
+                return None
+        if img_type not in BLUESKY_IMAGE_TYPES or len(img_bytes) > MAX_BLOB_BYTES:
+            logger.info(
+                "Echo %s: image unsupported for Bluesky (type=%s, size=%d), skipping that image",
+                echo["id"],
+                img_type,
+                len(img_bytes),
+            )
+            return None
+        # Feed-provided alt text wins; AI is the fallback.
+        alt_description = _resolve_alt_text(
+            echo, item, entry.get("alt", ""), img_bytes, img_type
+        ) or ""
+        blob = upload_blob(
+            pds=session["pds"],
+            access_jwt=session["access_jwt"],
+            image_bytes=img_bytes,
+            content_type=img_type,
+        )
+        if not blob:
+            logger.warning(
+                "Echo %s: Bluesky image upload failed for item %s, skipping that image",
+                echo["id"],
+                item["id"],
+            )
+            return None
+        logger.info(
+            "Echo %s: uploaded Bluesky image blob for item %s",
+            echo["id"],
+            item["id"],
+        )
+        return {"blob": blob, "alt": alt_description}
+    except Exception:
+        logger.warning(
+            "Echo %s: Bluesky image pipeline failed for one image of item %s, skipping that image",
+            echo["id"],
+            item["id"],
+            exc_info=True,
+        )
+        return None
+
+
 def _send_bluesky(
     echo,
     item: FeedItem,
@@ -1570,96 +1654,20 @@ def _send_bluesky(
         logger.exception("Echo %s: Bluesky session failed", echo["id"])
         return _fail_post(posted_id, claim_token, echo["id"], "Bluesky session failed")
 
-    # Image attachment: optional, single image, with AI alt text when enabled.
-    # Any failure in the pipeline degrades to a text-only post.
+    # Image attachment: optional, up to BLUESKY_MAX_IMAGES images (Bluesky's
+    # per-post embed cap), each with its own alt text. A failure on any
+    # single image (fetch, downscale, type, upload) skips that image; only
+    # when none survive does the post degrade to text-only.
     attach_image = _echo_attach_image(echo)
 
-    image_blob = None
-    alt_description = ""
-    try:
-        if attach_image:
-            image_url = item.get("image_url", "")
-            if image_url:
-                image_result = fetch_image(image_url)
-                if image_result:
-                    img_bytes, img_type = image_result
-                    # Oversized for Bluesky? Downscale/re-encode to fit (the
-                    # 2026-09-09 glass.photo report: ~2.9 MB source JPEGs
-                    # degraded every glass post to text-only under the old
-                    # 1 MB cap). None = Pillow unavailable or still too big —
-                    # keep the existing skip-to-text-only fallback.
-                    if len(img_bytes) > MAX_BLOB_BYTES:
-                        downscaled = images.downscale_image(
-                            img_bytes, img_type, MAX_BLOB_BYTES
-                        )
-                        if downscaled:
-                            img_bytes, img_type = downscaled
-                            logger.info(
-                                "Echo %s: downscaled Bluesky image for item %s to %d bytes (%s)",
-                                echo["id"],
-                                item["id"],
-                                len(img_bytes),
-                                img_type,
-                            )
-                        else:
-                            logger.warning(
-                                "Echo %s: Bluesky image still exceeds the %d byte blob limit after downscale attempt for item %s, posting text-only",
-                                echo["id"],
-                                MAX_BLOB_BYTES,
-                                item["id"],
-                            )
-                    if img_type in BLUESKY_IMAGE_TYPES and len(img_bytes) <= MAX_BLOB_BYTES:
-                        # Feed-provided alt text wins; AI is the fallback.
-                        alt_description = _resolve_alt_text(
-                            echo,
-                            item,
-                            (item.get("image_alt") or "").strip(),
-                            img_bytes,
-                            img_type,
-                        ) or ""
-                        blob = upload_blob(
-                            pds=session["pds"],
-                            access_jwt=session["access_jwt"],
-                            image_bytes=img_bytes,
-                            content_type=img_type,
-                        )
-                        if blob:
-                            image_blob = blob
-                            logger.info(
-                                "Echo %s: uploaded Bluesky image blob for item %s",
-                                echo["id"],
-                                item["id"],
-                            )
-                        else:
-                            logger.warning(
-                                "Echo %s: Bluesky image upload failed for item %s, posting text-only",
-                                echo["id"],
-                                item["id"],
-                            )
-                    else:
-                        logger.info(
-                            "Echo %s: image unsupported for Bluesky (type=%s, size=%d), posting text-only",
-                            echo["id"],
-                            img_type,
-                            len(img_bytes),
-                        )
-                else:
-                    logger.info(
-                        "Echo %s: image fetch failed for item %s, posting text-only",
-                        echo["id"],
-                        item["id"],
-                    )
-    except Exception:
-        logger.warning(
-            "Echo %s: Bluesky image pipeline failed for item %s, posting text-only",
-            echo["id"],
-            item["id"],
-            exc_info=True,
-        )
-        image_blob = None
-        alt_description = ""
+    image_entries_out: list[dict] = []
+    if attach_image:
+        for entry in _item_image_entries(item, limit=BLUESKY_MAX_IMAGES):
+            uploaded = _upload_bluesky_image(session, echo, item, entry)
+            if uploaded:
+                image_entries_out.append(uploaded)
 
-    embed = build_image_embed(image_blob, alt_description) if image_blob else None
+    embed = build_image_embed(image_entries_out) if image_entries_out else None
 
     # Re-validate claim ownership immediately before the post: if the lease
     # lapsed and another worker reclaimed this row, posting would duplicate.

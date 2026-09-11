@@ -14,7 +14,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 
 - **RSS/Atom/JSON feed support** via feedparser
 - **Mastodon OAuth** — connect accounts with one click, no manual token creation
-- **Bluesky support** — connect accounts with an App Password; posts get auto-detected link facets, 300-grapheme truncation, and image embeds with alt text
+- **Bluesky support** — connect accounts with an App Password; posts get auto-detected link and hashtag facets (links clickable, hashtags as real, searchable tags), 300-grapheme truncation, and image embeds with alt text
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
 - **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
@@ -169,7 +169,7 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 
 - Accounts connect via **App Passwords**, which are scoped to creating posts (and other app activity) and can be revoked individually without changing your main password.
 - Sessions are cached per account (access + refresh JWTs in SQLite) and refreshed automatically; expired tokens trigger a transparent re-login and one retry.
-- Posts are truncated to **300 graphemes** (Unicode-aware) and, separately, to Bluesky's 3000-byte limit on the post text; URLs in the text get proper link facets, so links are clickable everywhere.
+- Posts are truncated to **300 graphemes** (Unicode-aware) and, separately, to Bluesky's 3000-byte limit on the post text; URLs and #hashtags in the text get proper richtext facets, so links are clickable and hashtags become real, searchable Bluesky tags.
 - Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed carrying **up to 4 images** per post; each image's alt text uses the feed's own description when it provides one, otherwise your AI vision config when enabled. Images are capped at 2 MB each and jpeg/png/webp/gif (Bluesky's limits); oversized JPEG/PNG/WebP sources are downscaled or re-encoded to fit automatically, and one image that fails to fetch or upload is skipped without dropping the rest of the post.
 - Content warnings and visibility settings are Mastodon-only and are ignored for Bluesky posts.
 

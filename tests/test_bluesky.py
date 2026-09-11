@@ -314,6 +314,164 @@ class TestBuildFacets:
         facets = build_facets(clipped)
         assert facets == []
 
+    # ── hashtag facets ─────────────────────────────────────────────────────
+
+    def test_tag_facet_basic(self):
+        from bluesky import build_facets
+
+        text = "Hello #world"
+        facets = build_facets(text)
+        assert len(facets) == 1
+        assert facets[0]["features"][0] == {
+            "$type": "app.bsky.richtext.facet#tag",
+            "tag": "world",
+        }
+        start, end = facets[0]["index"]["byteStart"], facets[0]["index"]["byteEnd"]
+        assert text.encode("utf-8")[start:end].decode() == "#world"
+
+    def test_tag_real_post_shape(self):
+        """The exact shape of the post that prompted the fix (2026-09-11):
+        title, blank line, URL, blank line, hashtag."""
+        from bluesky import build_facets
+
+        text = (
+            "Arriving in Kristiansand, Norway.\n\n"
+            "https://glass.photo/digitalpardoe/36Khk4eOLYsafBXiOclVBC\n\n"
+            "#Photography"
+        )
+        facets = build_facets(text)
+        assert len(facets) == 2
+        link, tag = facets
+        assert link["features"][0]["$type"] == "app.bsky.richtext.facet#link"
+        assert tag["features"][0] == {
+            "$type": "app.bsky.richtext.facet#tag",
+            "tag": "Photography",
+        }
+        start, end = tag["index"]["byteStart"], tag["index"]["byteEnd"]
+        assert text.encode("utf-8")[start:end].decode() == "#Photography"
+
+    def test_tag_multibyte_prefix_offsets(self):
+        from bluesky import build_facets
+
+        prefix = "café ☕ "
+        text = prefix + "#photo"
+        facets = build_facets(text)
+        start, end = facets[0]["index"]["byteStart"], facets[0]["index"]["byteEnd"]
+        assert start == len(prefix.encode("utf-8"))
+        assert end == len(text.encode("utf-8"))
+
+    def test_tag_trailing_punctuation_trimmed(self):
+        from bluesky import build_facets
+
+        text = "Nice shot #photo!"
+        facets = build_facets(text)
+        assert facets[0]["features"][0]["tag"] == "photo"
+        start, end = facets[0]["index"]["byteStart"], facets[0]["index"]["byteEnd"]
+        assert text.encode("utf-8")[start:end].decode() == "#photo"
+
+    def test_tag_at_start_of_text(self):
+        from bluesky import build_facets
+
+        facets = build_facets("#first post")
+        assert facets[0]["features"][0]["tag"] == "first"
+        assert facets[0]["index"]["byteStart"] == 0
+        assert facets[0]["index"]["byteEnd"] == len("#first".encode("utf-8"))
+
+    def test_tag_digit_only_skipped(self):
+        from bluesky import build_facets
+
+        assert build_facets("count #123 things") == []
+
+    def test_tag_all_punctuation_skipped(self):
+        from bluesky import build_facets
+
+        assert build_facets("wow #!!!") == []
+
+    def test_tag_fullwidth_hash(self):
+        from bluesky import build_facets
+
+        text = "＃photo"
+        facets = build_facets(text)
+        assert facets[0]["features"][0]["tag"] == "photo"
+        start, end = facets[0]["index"]["byteStart"], facets[0]["index"]["byteEnd"]
+        assert start == 0
+        assert text.encode("utf-8")[start:end].decode() == "＃photo"
+
+    def test_multiple_tags_sorted(self):
+        from bluesky import build_facets
+
+        facets = build_facets("#one two #three")
+        assert [f["features"][0]["tag"] for f in facets] == ["one", "three"]
+        starts = [f["index"]["byteStart"] for f in facets]
+        assert starts == sorted(starts)
+
+    def test_tag_inside_url_not_duplicated(self):
+        from bluesky import build_facets
+
+        facets = build_facets("see https://example.com/page#anchor")
+        assert len(facets) == 1
+        assert facets[0]["features"][0]["$type"] == "app.bsky.richtext.facet#link"
+
+    def test_url_and_tag_both_detected(self):
+        from bluesky import build_facets
+
+        facets = build_facets("read https://example.com/a then #tag")
+        assert [f["features"][0]["$type"] for f in facets] == [
+            "app.bsky.richtext.facet#link",
+            "app.bsky.richtext.facet#tag",
+        ]
+
+    def test_clipped_tag_dropped(self):
+        """A tag sliced by truncation must not become a broken tag facet."""
+        from bluesky import build_facets
+
+        assert build_facets("Ending #Photogra…") == []
+
+    def test_tag_after_paren_not_matched(self):
+        """Client parity: a tag must start the text or follow whitespace."""
+        from bluesky import build_facets
+
+        assert build_facets("(#paren)") == []
+
+    def test_tag_64_char_cap(self):
+        from bluesky import build_facets
+
+        assert build_facets("#" + "a" * 65) == []
+        tag = "a" * 64
+        facets = build_facets("#" + tag)
+        assert facets[0]["features"][0]["tag"] == tag
+
+    def test_tag_case_preserved(self):
+        from bluesky import build_facets
+
+        facets = build_facets("#PhotoGraphy")
+        assert facets[0]["features"][0]["tag"] == "PhotoGraphy"
+
+    def test_tag_non_ascii_digits_are_tags(self):
+        """JS \\d is ASCII-only, so the official client treats a tag of
+        non-ASCII digits as a real tag (e.g. Arabic-Indic year tags)."""
+        from bluesky import build_facets
+
+        facets = build_facets("#٢٠٢٦")
+        assert facets[0]["features"][0]["tag"] == "٢٠٢٦"
+
+    def test_tag_combining_marks_use_grapheme_cap(self):
+        """66 code points but 33 grapheme clusters: under the client cap
+        (which needs BOTH counts over 64), so the tag survives."""
+        from bluesky import build_facets
+
+        tag_body = "a\u0301" * 33
+        facets = build_facets("#" + tag_body)
+        assert facets[0]["features"][0]["tag"] == tag_body
+
+    def test_tag_over_640_bytes_dropped(self):
+        """The tag lexicon caps the property at 640 UTF-8 bytes; an oversized
+        tag facet would fail record validation and kill the whole post."""
+        from bluesky import build_facets
+
+        body = ("\U0001F600" + "\u0301" * 6) * 63  # 63 graphemes, 1008 bytes
+        assert build_facets("#" + body) == []
+
 class TestBuildImageEmbed:
     def test_wraps_multiple_entries_with_alts(self):
         from bluesky import build_image_embed
@@ -442,6 +600,34 @@ class TestSendBluesky:
             assert row["post_url"] == (
                 "https://bsky.app/profile/did:plc:test123/post/u"
             )
+
+    def test_hashtag_facet_flows_to_record(self, db_tmp, monkeypatch):
+        """A literal #hashtag in a member's template reaches the post record
+        as a tag facet (the 2026-09-11 member report)."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        echo = _setup_bluesky_echo(
+            db_tmp, {"template": "{{ title }} {{ link }} #Photography"}
+        )
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        facets = sent[0]["facets"]
+        assert [f["features"][0]["$type"] for f in facets] == [
+            "app.bsky.richtext.facet#link",
+            "app.bsky.richtext.facet#tag",
+        ]
+        tag_facet = facets[1]
+        assert tag_facet["features"][0]["tag"] == "Photography"
+        text = sent[0]["text"]
+        start, end = tag_facet["index"]["byteStart"], tag_facet["index"]["byteEnd"]
+        assert text.encode("utf-8")[start:end].decode() == "#Photography"
 
     def test_content_truncated_to_300_graphemes(self, db_tmp, monkeypatch):
         import scheduler

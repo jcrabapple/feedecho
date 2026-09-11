@@ -56,6 +56,10 @@ class BlueskyAuthError(BlueskyError, DestinationAuthError):
     """Credentials rejected, session expired, or app password revoked."""
 
 
+class BlueskyAccountGoneError(BlueskyError):
+    """The account row was deleted mid-dispatch — retrying can never help."""
+
+
 def _error_detail(response) -> str:
     """Extract the PDS-provided error message from a JSON error body."""
     return json_error_detail(response, "message", "error")

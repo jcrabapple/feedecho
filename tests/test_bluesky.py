@@ -1098,6 +1098,50 @@ class TestSendBluesky:
             assert row["status"] == "gave_up"
             assert "credentials" in row["error_message"]
 
+    def test_auth_error_during_upload_with_account_deleted_gives_up_permanently(
+        self, db_tmp, monkeypatch
+    ):
+        """The account row disappears mid-dispatch (deleted while an image
+        upload triggered a re-auth): give up permanently, not a transient
+        retry that can never succeed against a gone account."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+
+        def rejected_upload(**kw):
+            with database.get_db() as db:
+                db.execute("DELETE FROM bluesky_accounts WHERE id = 1")
+            raise BlueskyAuthError(
+                "Blob upload rejected: session expired (ExpiredToken)"
+            )
+
+        monkeypatch.setattr(scheduler, "upload_blob", rejected_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[{"url": "https://example.com/1.jpg", "alt": ""}])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True  # terminal failure unblocks the cursor
+        assert len(sent) == 0
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+            assert row["status"] == "gave_up"
+            assert "deleted" in row["error_message"].lower()
+
     def test_http_error_on_upload_skips_only_that_image(self, db_tmp, monkeypatch):
         """Non-auth PDS upload rejections stay image-level: skip that image,
         keep the rest of the post (same contract as Mastodon's upload_media)."""
@@ -1323,6 +1367,35 @@ class TestSendBluesky:
             ).fetchone()
             assert row["status"] == "gave_up"
             assert "credentials" in row["error_message"]
+
+    def test_account_deleted_during_post_reauth_gives_up_permanently(
+        self, db_tmp, monkeypatch
+    ):
+        """The account row disappears mid-dispatch (deleted while the
+        create_post retry re-authenticated): give up permanently instead of
+        scheduling a retry against an account that no longer exists."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        def rejected_post(**kw):
+            with database.get_db() as db:
+                db.execute("DELETE FROM bluesky_accounts WHERE id = 1")
+            raise BlueskyAuthError("InvalidToken")
+
+        monkeypatch.setattr(scheduler, "create_post", rejected_post)
+        _stub_session(monkeypatch)
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True  # terminal failure unblocks the cursor
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+            assert row["status"] == "gave_up"
+            assert "deleted" in row["error_message"].lower()
 
     def test_claim_lost_before_dispatch_skips_post(self, db_tmp, monkeypatch):
         import database

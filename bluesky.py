@@ -304,9 +304,10 @@ _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 # beginning of the text or after whitespace, uses an ASCII or fullwidth
 # hash, and runs to the next whitespace or zero-width character. The
 # candidate's trailing punctuation is stripped, it must keep at least one
-# character that is neither a digit nor punctuation (so "#123" is not a
-# tag), and it caps at 64 characters -- the limits the official client
-# applies. Cashtags ($TICKER) and mentions (@handle) are deliberately not
+# character that is neither an ASCII digit nor punctuation (so "#123" is
+# not a tag while a tag of non-ASCII digits is -- JS \d matches ASCII
+# only), and it caps at 64 graphemes / 640 bytes -- the client and the
+# tag lexicon limits. Cashtags ($TICKER) and mentions (@handle) are deliberately not
 # detected: feeds carry foreign @user@instance handles that cannot resolve
 # to Bluesky DIDs, and $TICKER content is rare in feeds.
 _TAG_RE = re.compile(
@@ -314,6 +315,8 @@ _TAG_RE = re.compile(
 )
 _TAG_ZERO_WIDTH = "\u00AD\u2060\u200A\u200B\u200C\u200D\u20e2"
 _TAG_MAX_CHARS = 64
+_TAG_MAX_BYTES = 640
+_ASCII_DIGITS = "0123456789"
 _FACET_LINK_TYPE = "app.bsky.richtext.facet#link"
 _FACET_TAG_TYPE = "app.bsky.richtext.facet#tag"
 
@@ -329,12 +332,14 @@ def _has_tag_body_char(tag: str) -> bool:
     """Whether the tag keeps a character that is neither digit nor punctuation.
 
     atproto's TAG_REGEX requires one such character inside the body; it is
-    what makes "#123" render as plain text rather than a tag.
+    what makes "#123" render as plain text rather than a tag. Only ASCII
+    digits are excluded (JS \d is ASCII-only), so a tag of non-ASCII digits
+    like "#٢٠٢٦" is a tag to the official client and stays one here.
     """
     for ch in tag:
         if ch in _TAG_ZERO_WIDTH or ch.isspace():
             continue
-        if ch.isdigit():
+        if ch in _ASCII_DIGITS:
             continue
         if unicodedata.category(ch).startswith("P"):
             continue
@@ -404,7 +409,18 @@ def build_facets(text: str) -> list[dict]:
         if "…" in candidate:
             continue
         tag = _strip_trailing_punctuation(candidate[1:])
-        if not tag or len(tag) > _TAG_MAX_CHARS:
+        if not tag:
+            continue
+        # Client parity: atproto drops a tag only when BOTH its code-point
+        # count and its grapheme count exceed 64. The tag lexicon separately
+        # caps the property at 640 UTF-8 bytes; an oversized tag facet would
+        # fail record validation and kill the whole post, so guard that too.
+        if (
+            len(tag) > _TAG_MAX_CHARS
+            and len(_grapheme_clusters(tag)) > _TAG_MAX_CHARS
+        ):
+            continue
+        if len(tag.encode("utf-8")) > _TAG_MAX_BYTES:
             continue
         if not _has_tag_body_char(tag):
             continue

@@ -755,6 +755,100 @@ class TestSendBluesky:
             img["image"]["ref"]["$link"] == "bafkreifake" for img in embed["images"]
         )
 
+    def test_concurrent_prefetch_preserves_original_image_order(
+        self, db_tmp, monkeypatch
+    ):
+        """Fetch/downscale/alt-text run concurrently across images, but the
+        final embed order (and upload order) must still match the item's
+        image_urls order even when an earlier image is the slowest to
+        resolve — the sequential upload loop assembles by index, not by
+        fetch completion order."""
+        import time
+        import scheduler
+
+        sent = []
+        uploads = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def slow_fetch(url):
+            if url.endswith("1.jpg"):
+                time.sleep(0.05)  # slowest fetch is for the FIRST image
+            # Distinct bytes per URL so the blob ref carries the image's
+            # identity — a completion-order assembly bug would then surface
+            # as a wrong embed order, not hide behind uniform payloads.
+            return (f"bytes-{url}".encode(), "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", slow_fetch)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: uploads.append(kw)
+            or {"$type": "blob", "ref": {"$link": f"blob-{kw['image_bytes'].decode()}"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": "https://example.com/1.jpg", "alt": ""},
+            {"url": "https://example.com/2.jpg", "alt": ""},
+            {"url": "https://example.com/3.jpg", "alt": ""},
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        embed_images = sent[0]["embed"]["images"]
+        assert [img["image"]["ref"]["$link"] for img in embed_images] == [
+            "blob-bytes-https://example.com/1.jpg",
+            "blob-bytes-https://example.com/2.jpg",
+            "blob-bytes-https://example.com/3.jpg",
+        ]
+
+    def test_prefetch_runs_concurrently_not_sequentially(self, db_tmp, monkeypatch):
+        """Four images must be PREPARED concurrently: a 4-party barrier trips
+        only if all four fetches are in flight at the same time. A sequential
+        loop strands the first fetcher at barrier.wait() until the 2s
+        timeout, _prepare_bluesky_image swallows the BrokenBarrierError and
+        returns None for every image, and the post ships with zero uploads —
+        failing the assertion below. Deterministic, no wall-clock."""
+        import threading
+        import scheduler
+
+        uploads = []
+        barrier = threading.Barrier(4, timeout=2.0)
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def barrier_fetch(url):
+            barrier.wait()
+            return (b"fake-image-bytes", "image/jpeg")
+
+        monkeypatch.setattr(scheduler, "fetch_image", barrier_fetch)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: uploads.append(kw)
+            or {"$type": "blob", "ref": {"$link": f"blob-{len(uploads)}"}},
+        )
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[
+            {"url": f"https://example.com/{i}.jpg", "alt": ""} for i in range(4)
+        ])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is True
+        assert len(uploads) == 4  # every image prepared, i.e. barrier tripped
+
     def test_caps_at_four_images(self, db_tmp, monkeypatch):
         """More than 4 image_urls are truncated to Bluesky's cap of 4."""
         import scheduler

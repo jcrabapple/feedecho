@@ -19,7 +19,12 @@ from urllib.parse import quote
 import httpx
 
 from feed_parser import SSRFError, pinned_request, validate_outbound_url
-from utils import DestinationAuthError, DestinationError, json_error_detail
+from utils import (
+    DestinationAuthError,
+    DestinationError,
+    DestinationNotFoundError,
+    json_error_detail,
+)
 
 PUBLIC_API = "https://public.api.bsky.app"
 PLC_DIRECTORY = "https://plc.directory"
@@ -56,7 +61,7 @@ class BlueskyAuthError(BlueskyError, DestinationAuthError):
     """Credentials rejected, session expired, or app password revoked."""
 
 
-class BlueskyAccountGoneError(BlueskyError):
+class BlueskyAccountGoneError(BlueskyError, DestinationNotFoundError):
     """The account row was deleted mid-dispatch — retrying can never help."""
 
 

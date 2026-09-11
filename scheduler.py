@@ -1758,8 +1758,9 @@ def _send_bluesky(
                     session = _bsky_reauth(account, session)
                 except BlueskyAccountGoneError:
                     logger.error(
-                        "Echo %s: Bluesky account deleted during image upload; giving up",
+                        "Echo %s: Bluesky account deleted during image upload for item %s; giving up",
                         echo["id"],
+                        item["id"],
                     )
                     return _fail_post(
                         posted_id,

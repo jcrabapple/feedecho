@@ -1142,6 +1142,63 @@ class TestSendBluesky:
             assert row["status"] == "gave_up"
             assert "deleted" in row["error_message"].lower()
 
+    def test_pds_outage_during_upload_reauth_stays_transient(
+        self, db_tmp, monkeypatch
+    ):
+        """A plain BlueskyError from create_session during the image-upload
+        re-auth (PDS network error / 5xx) must stay a scheduled retry — only
+        the missing-account-row case is permanent. Pins the boundary the
+        account-deleted fix must not overstep."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError, BlueskyError
+
+        logins = {"count": 0}
+
+        def flaky_session(pds, handle, pw):
+            logins["count"] += 1
+            if logins["count"] == 2:
+                raise BlueskyError("PDS temporarily unavailable (503)")
+            return {
+                "did": "did:plc:test123",
+                "access_jwt": "aj",
+                "refresh_jwt": "rj",
+            }
+
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(scheduler, "create_session", flaky_session)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "create_post",
+            lambda **kw: {"uri": "at://did:plc:test123/app.bsky.feed.post/x", "cid": "c"},
+        )
+
+        def rejected_upload(**kw):
+            raise BlueskyAuthError(
+                "Blob upload rejected: session expired (ExpiredToken)"
+            )
+
+        monkeypatch.setattr(scheduler, "upload_blob", rejected_upload)
+        import alt_text
+
+        monkeypatch.setattr(alt_text, "is_enabled", lambda user_id=1: False)
+
+        echo = _setup_bluesky_echo(db_tmp, {"attach_image": 1})
+        item = _item(image_urls=[{"url": "https://example.com/1.jpg", "alt": ""}])
+        ok = scheduler.process_echo(echo, item)
+
+        assert ok is False  # transient failure: scheduled, not terminal
+        assert logins["count"] == 2  # initial login + the failed re-auth
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, next_retry_at FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+            assert row["status"] == "failed"
+            assert row["next_retry_at"] is not None
+
     def test_http_error_on_upload_skips_only_that_image(self, db_tmp, monkeypatch):
         """Non-auth PDS upload rejections stay image-level: skip that image,
         keep the rest of the post (same contract as Mastodon's upload_media)."""
@@ -1396,6 +1453,48 @@ class TestSendBluesky:
             ).fetchone()
             assert row["status"] == "gave_up"
             assert "deleted" in row["error_message"].lower()
+
+    def test_pds_outage_during_post_reauth_stays_transient(
+        self, db_tmp, monkeypatch
+    ):
+        """A plain BlueskyError from create_session during the create_post
+        re-auth (PDS network error / 5xx) must stay a scheduled retry — the
+        account-deleted fix must not make every re-auth error permanent."""
+        import database
+        import scheduler
+        from bluesky import BlueskyAuthError, BlueskyError
+
+        logins = {"count": 0}
+
+        def flaky_session(pds, handle, pw):
+            logins["count"] += 1
+            if logins["count"] == 2:
+                raise BlueskyError("PDS temporarily unavailable (503)")
+            return {
+                "did": "did:plc:test123",
+                "access_jwt": "aj",
+                "refresh_jwt": "rj",
+            }
+
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(scheduler, "create_session", flaky_session)
+
+        def rejected_post(**kw):
+            raise BlueskyAuthError("InvalidToken")
+
+        monkeypatch.setattr(scheduler, "create_post", rejected_post)
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is False  # transient failure: scheduled, not terminal
+        assert logins["count"] == 2  # initial login + the failed re-auth
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status, next_retry_at FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+            assert row["status"] == "failed"
+            assert row["next_retry_at"] is not None
 
     def test_claim_lost_before_dispatch_skips_post(self, db_tmp, monkeypatch):
         import database

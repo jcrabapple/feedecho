@@ -3332,6 +3332,75 @@ def check_all_feeds() -> None:
             logger.exception("Error checking feed %s (%s)", feed["id"], feed["name"])
 
 
+def cleanup_pending_accounts() -> int:
+    """Delete abandoned card-pending signups (hosted billing only).
+
+    A card-pending account registered while billing is on but never finished
+    Stripe Checkout: plan='trial' with the TRIAL_PENDING sentinel. It cannot
+    reach the app at all, so once it is older than
+    settings.PENDING_ACCOUNT_TTL_DAYS it is only a row, a scrypt hash, a
+    verification email and admin-table noise. Deletion runs the same path as
+    self-serve deletion (account-deletion hooks, then _hard_delete_user), so
+    a Stripe customer created by the abandoned checkout does not outlive the
+    row and no tenant data survives.
+
+    Rows carrying a subscription id are SKIPPED and logged: a webhook that
+    failed mid-flight must never get its paying user deleted.
+
+    Returns the number of accounts deleted (0 when not hosted billing).
+    """
+    if not (settings.MULTI and settings.BILLING_ENABLED):
+        return 0
+    # Imported lazily: app imports this module at startup.
+    import app as app_module
+
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(days=settings.PENDING_ACCOUNT_TTL_DAYS)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, email, trial_ends_at, stripe_subscription_id"
+            " FROM users WHERE plan = 'trial' AND created_at < ?",
+            (cutoff,),
+        ).fetchall()
+    # Sentinel check in Python: the stored form differs by dialect.
+    pending = [row for row in rows if plans.trial_pending(row["trial_ends_at"])]
+
+    deleted = 0
+    for row in pending:
+        uid = row["id"]
+        if (row["stripe_subscription_id"] or "").strip():
+            logger.warning(
+                "Pending-signup cleanup: user %s has a subscription id; skipping",
+                uid,
+            )
+            continue
+        vetoed = False
+        for hook in app_module._account_deletion_hooks:
+            try:
+                hook(uid)
+            except app_module.AccountDeletionAbort as exc:
+                logger.warning(
+                    "Pending-signup cleanup: hook vetoed user %s (%s)", uid, exc
+                )
+                vetoed = True
+                break
+            except Exception:  # noqa: BLE001 — mirrors the delete route
+                logger.exception(
+                    "Pending-signup cleanup: deletion hook failed for user %s", uid
+                )
+        if vetoed:
+            continue
+        with get_db() as db:
+            app_module._hard_delete_user(db, uid)
+        deleted += 1
+        logger.info(
+            "Pending-signup cleanup: deleted user %s (%s)", uid, row["email"]
+        )
+    return deleted
+
+
 def start_scheduler() -> None:
     global scheduler
     if scheduler is not None:
@@ -3383,6 +3452,23 @@ def start_scheduler() -> None:
         coalesce=True,
     )
     scheduler.add_job(flush_queue, "date", id="startup_queue_flush", replace_existing=True)
+
+    # Abandoned-signup cleanup — deletes card-pending accounts past the TTL
+    # (no-op unless multi mode with billing enabled).
+    scheduler.add_job(
+        cleanup_pending_accounts,
+        trigger=IntervalTrigger(hours=6),
+        id="cleanup_pending_accounts",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        cleanup_pending_accounts,
+        "date",
+        id="startup_pending_cleanup",
+        replace_existing=True,
+    )
 
 
 def stop_scheduler() -> None:

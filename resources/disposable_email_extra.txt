@@ -1,0 +1,19 @@
+# Curated disposable-domain additions for FeedEcho signups, layered on top of
+# disposable_email_domains.txt (the upstream snapshot). One domain per line;
+# blank lines and # comments are ignored.
+
+# dropmail.me burner family (observed 2026-09-13/14): three of these
+# registered against feedecho.net within 48h, all with generated
+# gibberish-plus-digit local parts. Family domains the upstream snapshot
+# already lists (dropmail.me, 10mail.*, emlhub/emlpro/emltmp, freeml.net,
+# spymail.one, yomail.info) are deliberately not repeated here.
+mailtowin.com
+picomail.biz
+mail2me.co
+mimimail.me
+pickmemail.com
+pickmail.org
+mailpwr.com
+maximail.vip
+maximail.fyi
+trashmail.lol

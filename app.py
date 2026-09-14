@@ -245,6 +245,11 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     generated uuid) and attaches it to every log record emitted while the
     request is handled, to the response header, and to one access-log line
     per request.
+
+    The access line's ``ip=`` field is the DERIVED client IP (the rightmost
+    X-Forwarded-For entry when the TCP peer is a trusted proxy), not the raw
+    TCP peer: behind Caddy the peer is always the proxy container, which
+    tells you nothing about who is hitting the box. See auth._client_ip.
     """
 
     _VALID_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -261,14 +266,14 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             # reset scope-safely and re-raise (ServerErrorMiddleware logs
             # the traceback, and its record will carry the id).
             duration_ms = round((time.perf_counter() - start) * 1000, 1)
-            peer = request.client.host if request.client else "-"
+            client_ip = auth._client_ip(request)
             uid = getattr(request.state, "user_id", None)
             access_logger.error(
-                "%s %s 500 %sms peer=%s%s (unhandled exception)",
+                "%s %s 500 %sms ip=%s%s (unhandled exception)",
                 request.method,
                 request.url.path,
                 duration_ms,
-                peer,
+                client_ip,
                 f" user={uid}" if uid is not None else "",
             )
             logging_setup.reset_request_id(token)
@@ -277,7 +282,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         # context, so its own record carries the id too.
         response.headers["X-Request-ID"] = request_id
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
-        peer = request.client.host if request.client else "-"
+        client_ip = auth._client_ip(request)
         uid = getattr(request.state, "user_id", None)
         path = request.url.path
         log = (
@@ -286,12 +291,12 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             else access_logger.info
         )
         log(
-            "%s %s %s %sms peer=%s%s",
+            "%s %s %s %sms ip=%s%s",
             request.method,
             path,
             response.status_code,
             duration_ms,
-            peer,
+            client_ip,
             f" user={uid}" if uid is not None else "",
         )
         logging_setup.reset_request_id(token)

@@ -639,6 +639,47 @@ class TestPostgresMigration:
 
 
 @requires_pg
+class TestPendingCleanupOnPostgres:
+    """cleanup_pending_accounts() runs on real PG (timestamp compare + sentinel).
+
+    The sentinel is a TIMESTAMP column here, so the cutoff comparison and the
+    Python-side sentinel check must both survive psycopg's datetime reads.
+    """
+
+    def test_cleanup_deletes_old_pending_rows_on_pg(self, pg_env, monkeypatch):
+        from datetime import timedelta
+
+        import auth as auth_mod
+        import scheduler
+
+        monkeypatch.setattr(settings, "BILLING_ENABLED", True)
+        monkeypatch.setattr(settings, "PENDING_ACCOUNT_TTL_DAYS", 3)
+        auth_mod._register_global.clear()
+        database.init_db()
+        old = (datetime.now(timezone.utc) - timedelta(days=5)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        fresh = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan, trial_ends_at,"
+                " created_at) VALUES (9, 'old-pending@example.com', '', 'trial', ?, ?)",
+                ("2000-01-01 00:00:00", old),
+            )
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan, trial_ends_at,"
+                " created_at) VALUES (10, 'young-pending@example.com', '', 'trial', ?, ?)",
+                ("2000-01-01 00:00:00", fresh),
+            )
+        assert scheduler.cleanup_pending_accounts() == 1
+        with database.get_db() as db:
+            rows = db.execute("SELECT id FROM users WHERE id IN (9, 10)").fetchall()
+        assert [row["id"] for row in rows] == [10]
+
+
+@requires_pg
 class TestAppOnPostgres:
     """Full app request against PG — catches dialect leaks that schema-only
     tests can't (e.g. positional row indexing that works on sqlite Row but

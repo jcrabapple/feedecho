@@ -148,6 +148,8 @@
     <h2>Billing</h2>
     {% if request.query_params.get('billing') == 'upgraded' %}
     <div class="flash flash-ok" role="status">Your subscription is starting — your card will be charged now and your account upgrades to the paid plan.</div>
+    {% elif request.query_params.get('billing') == 'too-many' %}
+    <div class="flash flash-warn" role="status">Too many checkout attempts. Please wait a few minutes and try again.</div>
     {% elif request.query_params.get('billing') == 'upgrade-failed' %}
     <div class="flash flash-warn" role="status">We couldn't start your subscription. Please try again or contact <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</div>
     {% endif %}

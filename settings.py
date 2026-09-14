@@ -239,6 +239,21 @@ FALLBACK_PROXY_SECRET = env("FALLBACK_PROXY_SECRET", "").strip()
 # mode ignores this entirely); the hosted deployment sets FEEDECHO_INVITES_REQUIRED=1.
 INVITES_REQUIRED = env("INVITES_REQUIRED", "") == "1"
 
+# ── Signup abuse controls ────────────────────────────────────────────────────
+#
+# Deployment-wide registration brake: the per-IP bucket in auth.py bounds a
+# single source, but a rotating-IP spray has no ceiling at all, and every
+# valid submission costs a scrypt hash plus one verification email to an
+# address the registrant chooses. These ceilings bound the deployment as a
+# whole. Tune with FEEDECHO_REGISTER_HOURLY_CAP / FEEDECHO_REGISTER_DAILY_CAP.
+REGISTER_HOURLY_CAP = max(1, _env_int("REGISTER_HOURLY_CAP", 30))
+REGISTER_DAILY_CAP = max(1, _env_int("REGISTER_DAILY_CAP", 300))
+
+# Screen known disposable/burner email domains at registration. Multi mode is
+# the only mode with a public /register, so single mode is unaffected. Default
+# ON; set FEEDECHO_DISPOSABLE_EMAIL_BLOCK=0 to accept every domain.
+DISPOSABLE_EMAIL_BLOCK = env("DISPOSABLE_EMAIL_BLOCK", "1") != "0"
+
 
 # ── Billing (hosted-only seam) ────────────────────────────────────────────────
 #
@@ -249,6 +264,12 @@ INVITES_REQUIRED = env("INVITES_REQUIRED", "") == "1"
 # front-end seam and never implies Stripe here. The hosted image sets
 # FEEDECHO_BILLING_ENABLED=1.
 BILLING_ENABLED = env("BILLING_ENABLED", "") == "1"
+
+# Abandoned-signup cleanup: a card-pending account (registered while billing
+# is on, checkout never completed) older than this many days is deleted by
+# the scheduler cleanup job. Hosted only: the job no-ops unless multi mode
+# and billing are both on. Tune with FEEDECHO_PENDING_ACCOUNT_TTL_DAYS.
+PENDING_ACCOUNT_TTL_DAYS = max(1, _env_int("PENDING_ACCOUNT_TTL_DAYS", 3))
 
 
 # ── Backdated entries ─────────────────────────────────────────────────────────

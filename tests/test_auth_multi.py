@@ -22,6 +22,7 @@ def multi_env(monkeypatch, tmp_path):
     database.init_db()
     auth._login_attempts.clear()
     auth._register_attempts.clear()
+    auth._register_global.clear()
     return settings
 
 
@@ -321,3 +322,39 @@ class TestSingleModeUnaffected:
         with TestClient(app) as c:
             resp = c.get("/login")
         assert "Access token" in resp.text
+
+
+@pytest.mark.multi
+class TestSignupAbuseControls:
+    """Global registration brake + disposable-domain screening."""
+
+    def test_register_rejects_disposable_domain(self, client):
+        resp = _register(client, email="mupyvep0nup3@mailtowin.com")
+        assert resp.status_code == 200
+        assert "That email provider" in resp.text
+        assert _user_row("mupyvep0nup3@mailtowin.com") is None
+        # Rejected during validation, so it must not consume the brake.
+        assert auth._register_global == []
+
+    def test_register_rejects_disposable_subdomain(self, client):
+        resp = _register(client, email="bot@mail.mailtowin.com")
+        assert resp.status_code == 200
+        assert _user_row("bot@mail.mailtowin.com") is None
+
+    def test_disposable_screen_can_be_turned_off(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "DISPOSABLE_EMAIL_BLOCK", False)
+        resp = _register(client, email="bot@mailtowin.com")
+        assert resp.status_code == 302
+        assert _user_row("bot@mailtowin.com") is not None
+
+    def test_global_cap_refuses_beyond_hourly_ceiling(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "REGISTER_HOURLY_CAP", 2)
+        monkeypatch.setattr(settings, "REGISTER_DAILY_CAP", 100)
+        auth._register_global.clear()
+        assert _register(client, email="cap1@example.com").status_code == 302
+        assert _register(client, email="cap2@example.com").status_code == 302
+        resp = _register(client, email="cap3@example.com")
+        assert resp.status_code == 200
+        assert "temporarily paused" in resp.text
+        assert _user_row("cap3@example.com") is None
+        assert len(auth._register_global) == 2

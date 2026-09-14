@@ -9,12 +9,21 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import app as app_module
 import database
 import plans
 import scheduler
 import settings
 
 pytestmark = pytest.mark.multi
+
+
+@pytest.fixture(autouse=True)
+def _restore_guards():
+    """Leave the global guard list exactly as it was found."""
+    before = list(app_module._pending_cleanup_guards)
+    yield
+    app_module._pending_cleanup_guards[:] = before
 
 
 def _ts(days_ago: float) -> str:
@@ -132,3 +141,50 @@ class TestPendingCleanup:
         assert scheduler.cleanup_pending_accounts() == 1
         assert _count("just-under@example.com") == 1
         assert _count("just-over@example.com") == 0
+
+    def test_guard_veto_preserves_the_account(self, monkeypatch, tmp_path):
+        # The hosted billing guard vetoes when Stripe still shows a live
+        # subscription (webhook never landed): a payer must not be deleted.
+        _setup(monkeypatch, tmp_path)
+        _insert("maybe-paying@example.com", days_old=5)
+
+        def veto(uid):
+            raise app_module.AccountDeletionAbort("stripe shows a live subscription")
+
+        app_module.register_pending_cleanup_guard(veto)
+        assert scheduler.cleanup_pending_accounts() == 0
+        assert _count("maybe-paying@example.com") == 1
+
+    def test_guard_failure_skips_the_account(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _insert("maybe-paying@example.com", days_old=5)
+
+        def boom(uid):
+            raise RuntimeError("stripe unreachable")
+
+        app_module.register_pending_cleanup_guard(boom)
+        assert scheduler.cleanup_pending_accounts() == 0
+        assert _count("maybe-paying@example.com") == 1
+
+    def test_one_failed_delete_does_not_stop_the_batch(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _insert("first@example.com", days_old=6)
+        _insert("second@example.com", days_old=5)
+        original = app_module._hard_delete_user
+        calls = []
+
+        def flaky(db, uid):
+            calls.append(uid)
+            if len(calls) == 1:
+                raise RuntimeError("db hiccup")
+            return original(db, uid)
+
+        monkeypatch.setattr(app_module, "_hard_delete_user", flaky)
+        assert scheduler.cleanup_pending_accounts() == 1
+        # Order-independent: whichever row failed stays, the other is gone.
+        survivors = [
+            email
+            for email in ("first@example.com", "second@example.com")
+            if _count(email) == 1
+        ]
+        assert len(survivors) == 1

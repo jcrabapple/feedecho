@@ -3345,7 +3345,10 @@ def cleanup_pending_accounts() -> int:
     row and no tenant data survives.
 
     Rows carrying a subscription id are SKIPPED and logged: a webhook that
-    failed mid-flight must never get its paying user deleted.
+    failed mid-flight must never get its paying user deleted. Overlay-
+    registered guards (_pending_cleanup_guards) get the same veto first: the
+    hosted billing module asks Stripe whether a supposedly-cardless account
+    actually has a live subscription. A guard failure is fail-closed.
 
     Returns the number of accounts deleted (0 when not hosted billing).
     """
@@ -3377,6 +3380,23 @@ def cleanup_pending_accounts() -> int:
             )
             continue
         vetoed = False
+        for guard in app_module._pending_cleanup_guards:
+            try:
+                guard(uid)
+            except app_module.AccountDeletionAbort as exc:
+                logger.warning(
+                    "Pending-signup cleanup: guard vetoed user %s (%s)", uid, exc
+                )
+                vetoed = True
+                break
+            except Exception:  # noqa: BLE001 — fail closed, never guess
+                logger.exception(
+                    "Pending-signup cleanup: guard failed for user %s; skipping", uid
+                )
+                vetoed = True
+                break
+        if vetoed:
+            continue
         for hook in app_module._account_deletion_hooks:
             try:
                 hook(uid)
@@ -3392,8 +3412,17 @@ def cleanup_pending_accounts() -> int:
                 )
         if vetoed:
             continue
-        with get_db() as db:
-            app_module._hard_delete_user(db, uid)
+        # One account failing must not abort the batch: an unhandled error
+        # here would re-hit the same row every run and stop cleaning later
+        # accounts.
+        try:
+            with get_db() as db:
+                app_module._hard_delete_user(db, uid)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Pending-signup cleanup: deleting user %s failed; continuing", uid
+            )
+            continue
         deleted += 1
         logger.info(
             "Pending-signup cleanup: deleted user %s (%s)", uid, row["email"]

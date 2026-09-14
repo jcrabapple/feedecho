@@ -24,6 +24,7 @@ break because of this filter.
 """
 
 from pathlib import Path
+import logging
 import threading
 
 _RESOURCES = Path(__file__).resolve().parent / "resources"
@@ -34,16 +35,27 @@ _domains: set[str] | None = None
 
 
 def _load() -> set[str]:
-    """Read both list files. A missing file is skipped, not fatal."""
+    """Read both list files. A missing or unreadable file is skipped.
+
+    A corrupt list (non-UTF-8 bytes from a bad download) must never break
+    registration: the filter fails OPEN with a warning rather than 500 the
+    register route. Inline comments are stripped and trailing dots
+    normalized so every entry compares the way the email side does.
+    """
     domains: set[str] = set()
     for name in _FILES:
         try:
             text = (_RESOURCES / name).read_text(encoding="utf-8")
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            logging.getLogger("feedecho").warning(
+                "Disposable-domain list %s unreadable: %s", name, exc
+            )
             continue
         for line in text.splitlines():
-            entry = line.strip().lower()
-            if entry and not entry.startswith("#"):
+            entry = line.split("#", 1)[0].strip().rstrip(".").lower()
+            if entry:
                 domains.add(entry)
     return domains
 

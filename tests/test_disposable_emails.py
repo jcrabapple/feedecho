@@ -32,3 +32,20 @@ def test_normal_domains_pass():
 def test_malformed_input_fails_open():
     for value in ("", "no-at-sign", "a@", "@example.com", None):
         assert disposable_emails.is_disposable_email(value) is False
+
+
+def test_loader_skips_corrupt_files_and_normalizes_entries(monkeypatch, tmp_path):
+    import disposable_emails as de
+
+    # A bad download (non-UTF-8) must not 500 registration; the good file
+    # still loads, inline comments are stripped, trailing dots normalized.
+    (tmp_path / "disposable_email_domains.txt").write_bytes(b"\xff\xfe\x00not utf8")
+    (tmp_path / "disposable_email_extra.txt").write_text(
+        "bad.example # inline comment\ntrailing.example.\n"
+    )
+    monkeypatch.setattr(de, "_RESOURCES", tmp_path)
+    monkeypatch.setattr(de, "_domains", None)
+
+    assert de.is_disposable_email("x@bad.example") is True
+    assert de.is_disposable_email("x@trailing.example") is True
+    assert de.is_disposable_email("x@gmail.com") is False

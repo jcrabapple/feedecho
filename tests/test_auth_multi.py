@@ -237,6 +237,42 @@ class TestClientIp:
         }
         assert auth._client_ip(SR(scope)) == "203.0.113.9"
 
+    def test_unparseable_trusted_proxy_entry_is_ignored(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        # A typo'd CIDR must not raise (the access logger calls this on every
+        # request) and must not make XFF trusted: fail to "not trusted".
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ("not-a-cidr/99",))
+        scope = {
+            "type": "http",
+            "client": ("1.2.3.4", 12345),
+            "headers": [(b"x-forwarded-for", b"9.9.9.9")],
+        }
+        assert auth._client_ip(SR(scope)) == "1.2.3.4"
+
+    def test_bare_ip_trusted_proxy_entry_matches_the_host(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ("10.0.0.5",))
+        scope = {
+            "type": "http",
+            "client": ("10.0.0.5", 12345),
+            "headers": [(b"x-forwarded-for", b"9.9.9.9")],
+        }
+        assert auth._client_ip(SR(scope)) == "9.9.9.9"
+
+    def test_garbage_xff_entry_falls_back_to_peer(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        # Only a parseable IP may become a log field or throttle bucket key.
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ("10.0.0.0/8",))
+        scope = {
+            "type": "http",
+            "client": ("10.0.0.5", 12345),
+            "headers": [(b"x-forwarded-for", b"9.9.9.9, not-an-ip")],
+        }
+        assert auth._client_ip(SR(scope)) == "10.0.0.5"
+
 
 @pytest.mark.multi
 class TestSessionEnforcement:
@@ -358,3 +394,26 @@ class TestSignupAbuseControls:
         assert "temporarily paused" in resp.text
         assert _user_row("cap3@example.com") is None
         assert len(auth._register_global) == 2
+
+    def test_capped_register_keeps_invite_field_and_code(self, client, monkeypatch):
+        # A capped/throttled response must still render the invite field and
+        # keep the typed code (the user can retry without retyping).
+        import time
+
+        monkeypatch.setattr(settings, "REGISTER_HOURLY_CAP", 1)
+        monkeypatch.setattr(settings, "INVITES_REQUIRED", True)
+        auth._register_global.append(time.monotonic())
+        resp = client.post(
+            "/register",
+            data={
+                "email": "a@example.com",
+                "password": "hunter2hunter2",
+                "confirm": "hunter2hunter2",
+                "invite_code": "MYCODE",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert "temporarily paused" in resp.text
+        assert 'name="invite_code"' in resp.text
+        assert 'value="MYCODE"' in resp.text

@@ -3156,6 +3156,21 @@ def register_account_deletion_hook(fn) -> None:
     _account_deletion_hooks.append(fn)
 
 
+# Overlay-registered GUARDS that the abandoned-signup sweep consults before it
+# deletes a card-pending account (scheduler.cleanup_pending_accounts). Same
+# idea as the deletion hooks but for a background job: hosted billing
+# registers one that verifies with Stripe that the account has no live
+# subscription, because a user whose Checkout webhook never landed still
+# LOOKS card-pending locally while paying in Stripe. A guard raises
+# AccountDeletionAbort to veto; any OTHER exception also skips the account
+# (fail closed — the sweep must never delete on an unverified state).
+_pending_cleanup_guards: list = []
+
+
+def register_pending_cleanup_guard(fn) -> None:
+    _pending_cleanup_guards.append(fn)
+
+
 # Per-user throttle on the deletion password check: a hijacked session (stolen
 # cookie) must not get unlimited online guesses at the account password to
 # authorize irreversible deletion. Keyed by uid, not IP — the attacker may

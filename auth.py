@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+import disposable_emails
 import settings
 import invites
 import plans
@@ -37,6 +38,40 @@ _login_lock = threading.Lock()
 _MAX_REGISTER_ATTEMPTS = 10
 _REGISTER_WINDOW_SECONDS = 10 * 60
 _register_attempts: dict[str, list[float]] = {}
+
+# Deployment-wide registration brake (settings.REGISTER_HOURLY_CAP /
+# REGISTER_DAILY_CAP): the per-IP bucket bounds one source, but a
+# rotating-IP spray has no ceiling, and every valid submission costs a
+# scrypt hash plus a verification email to an address the registrant chooses.
+# Monotonic timestamps, so the bucket resets on restart — acceptable: a
+# restart is not the abuse case, and the DB row count is the backstop.
+_REGISTER_GLOBAL_HOUR = 3600.0
+_REGISTER_GLOBAL_DAY = 86400.0
+_register_global: list[float] = []
+
+
+def _register_global_capped() -> bool:
+    """Whether the deployment-wide signup brake has tripped.
+
+    Two ceilings bound both a short burst (hourly) and a slow drip (daily);
+    entries older than a day are pruned so the list cannot grow without
+    bound. Recording happens via _record_register_global on submission.
+    """
+    now = time.monotonic()
+    with _login_lock:
+        day_cutoff = now - _REGISTER_GLOBAL_DAY
+        while _register_global and _register_global[0] < day_cutoff:
+            _register_global.pop(0)
+        if len(_register_global) >= settings.REGISTER_DAILY_CAP:
+            return True
+        hour_cutoff = now - _REGISTER_GLOBAL_HOUR
+        recent = sum(1 for t in _register_global if t >= hour_cutoff)
+    return recent >= settings.REGISTER_HOURLY_CAP
+
+
+def _record_register_global() -> None:
+    with _login_lock:
+        _register_global.append(time.monotonic())
 
 
 # Forgot-password IP throttle: 5 requests per IP per 10 minutes. Keeps an
@@ -114,26 +149,65 @@ def _trial_end() -> str:
     )
 
 
+_trusted_networks_cache: tuple[tuple[str, ...], tuple] | None = None
+
+
+def _trusted_networks() -> tuple:
+    """Parsed settings.TRUSTED_PROXIES networks, cached, bad entries skipped.
+
+    The access logger now calls _client_ip on every request, so parsing per
+    call is wasted work; and an unparseable entry used to raise, which would
+    turn one typo'd CIDR into a 500 on every request. Bad entries are ignored
+    with a warning, failing to the SAFE side: X-Forwarded-For is simply not
+    believed, exactly as if no proxy were configured.
+    """
+    global _trusted_networks_cache
+    raw = tuple(settings.TRUSTED_PROXIES)
+    if _trusted_networks_cache and _trusted_networks_cache[0] == raw:
+        return _trusted_networks_cache[1]
+    nets = []
+    for cidr in raw:
+        try:
+            nets.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            logging.getLogger("feedecho").warning(
+                "Ignoring unparseable FEEDECHO_TRUSTED_PROXIES entry: %r", cidr
+            )
+    _trusted_networks_cache = (raw, tuple(nets))
+    return _trusted_networks_cache[1]
+
+
 def _client_ip(request: Request) -> str:
-    """The client IP for rate limiting.
+    """The client IP for rate limiting and access logs.
 
     Behind a trusted reverse proxy (settings.TRUSTED_PROXIES), the TCP
     peer is the proxy, so the rightmost X-Forwarded-For entry is used.
-    Without trusted proxies configured, X-Forwarded-For is ignored
-    entirely (it is trivially spoofable).
+    Without trusted proxies configured (or with only unparseable entries),
+    X-Forwarded-For is ignored entirely (it is trivially spoofable).
     """
     peer = request.client.host if request.client else "unknown"
-    if not settings.TRUSTED_PROXIES:
+    nets = _trusted_networks()
+    if not nets:
         return peer
     try:
         peer_ip = ipaddress.ip_address(peer)
     except ValueError:
         return peer
-    if not any(peer_ip in ipaddress.ip_network(c) for c in settings.TRUSTED_PROXIES):
+    if not any(peer_ip in net for net in nets):
         return peer
     forwarded = request.headers.get("x-forwarded-for", "")
     entries = [e.strip() for e in forwarded.split(",") if e.strip()]
-    return entries[-1] if entries else peer
+    if not entries:
+        return peer
+    candidate = entries[-1]
+    # Only a parseable IP is ever used: a proxy that appends garbage (or a
+    # header we do not actually trust) must not become a log field or a
+    # throttle bucket key.
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        return peer
+    return candidate
 
 
 def _prune(bucket: dict[str, list[float]], key: str, window: float) -> list[float]:
@@ -237,6 +311,10 @@ def register_submit(
         errors.append(f"Password must be at most {_MAX_PASSWORD_LENGTH} characters.")
     if password != confirm:
         errors.append("Passwords do not match.")
+    if settings.DISPOSABLE_EMAIL_BLOCK and disposable_emails.is_disposable_email(email):
+        errors.append(
+            "That email provider isn't supported. Please use a permanent email address."
+        )
     if errors:
         return _render_auth(
             request, "register.html", error=" ".join(errors), email=email,
@@ -250,6 +328,20 @@ def register_submit(
             "register.html",
             error="Too many signup attempts from this address. Try again later.",
             email=email,
+            invite_code=invite_code,
+            invites_required=invites.invites_required(),
+        )
+    if _register_global_capped():
+        # Deployment-wide brake: the per-IP bucket above cannot see a
+        # rotating-IP spray, and each valid submission costs a scrypt hash
+        # plus a verification email to an attacker-chosen address.
+        return _render_auth(
+            request,
+            "register.html",
+            error="Signups are temporarily paused. Please try again later.",
+            email=email,
+            invite_code=invite_code,
+            invites_required=invites.invites_required(),
         )
 
     try:
@@ -281,6 +373,7 @@ def register_submit(
                 )
 
             _record_register(ip)
+            _record_register_global()
             # Card-gated trial (hosted billing): the trial clock does NOT start
             # at registration — a past trial_ends_at pauses posting through the
             # existing expired-trial path until the card is collected, when the

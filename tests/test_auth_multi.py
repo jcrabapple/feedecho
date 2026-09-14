@@ -273,6 +273,17 @@ class TestClientIp:
         }
         assert auth._client_ip(SR(scope)) == "10.0.0.5"
 
+    def test_missing_client_falls_back_to_unknown(self, monkeypatch):
+        from starlette.requests import Request as SR
+
+        # The ASGI scope can carry no client at all (the access logger must
+        # still log something for it).
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ("10.0.0.0/8",))
+        scope = {"type": "http", "headers": [(b"x-forwarded-for", b"9.9.9.9")]}
+        req = SR(scope)
+        assert req.client is None
+        assert auth._client_ip(req) == "unknown"
+
 
 @pytest.mark.multi
 class TestSessionEnforcement:

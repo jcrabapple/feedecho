@@ -232,6 +232,16 @@ TRIAL_GRACE_NOTE = env("TRIAL_GRACE_NOTE", "")
 FALLBACK_PROXY_URL = env("FALLBACK_PROXY_URL", "").strip()
 FALLBACK_PROXY_SECRET = env("FALLBACK_PROXY_SECRET", "").strip()
 
+# ── FeedBooster ─────────────────────────────────────────────────────────────
+#
+# Optional URL + shared token of a FeedBooster instance (an ActivityPub
+# service that announces echoed posts as @feedbooster@feedecho.net). When
+# unconfigured, the per-account booster toggle is hidden and echoes are never
+# boosted. The hosted deployment points at https://ap.feedecho.net; a
+# self-hoster can run their own booster and point these at it.
+BOOSTER_URL = env("BOOSTER_URL", "").strip().rstrip("/")
+BOOSTER_TOKEN = env("BOOSTER_TOKEN", "").strip()
+
 # ── Invite codes (hosted beta gate) ─────────────────────────────────────────
 #
 # When True, /register requires a valid unused invite code. Default is False

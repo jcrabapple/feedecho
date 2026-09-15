@@ -897,6 +897,8 @@ button:hover { background: var(--primary-hover); }
 .btn-sm:hover { background: var(--border); }
 .btn-danger { background: var(--danger); color: var(--primary-contrast); border-color: var(--danger); }
 .btn-danger:hover { background: var(--danger); filter: brightness(1.12); }
+.btn-success { background: var(--success); color: var(--primary-contrast); border-color: var(--success); }
+.btn-success:hover { background: var(--success); filter: brightness(1.12); }
 .action-cell { white-space: nowrap; }
 
 /* Inline action status (showStatus): feedback rendered next to the button

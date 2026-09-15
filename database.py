@@ -490,6 +490,7 @@ def init_db_sqlite() -> None:
                     "UPDATE accounts SET username = ? WHERE id = ?",
                     (username, row["id"]),
                 )
+        _add_column_if_missing(db, "accounts", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS saved_searches (
@@ -1230,6 +1231,7 @@ def init_db_postgres() -> None:
                     "UPDATE accounts SET username = ? WHERE id = ?",
                     (username, row["id"]),
                 )
+        _add_column_if_missing(db, "accounts", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS saved_searches (

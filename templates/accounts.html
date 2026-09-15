@@ -115,6 +115,14 @@
                 <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                 <td data-label="Actions" class="action-cell">
                     <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('mastodon', {{ account.id }}, btn))">Test</button>
+                    {% if booster_configured %}
+                    <form method="post" action="/api/accounts/{{ account.id }}/booster" class="inline">
+                        <button type="submit" class="btn-sm{% if account.booster_enabled %} btn-success{% endif %}"
+                                title="When on, posts FeedEcho publishes to this account are also announced (boosted) by @feedbooster@feedecho.net">
+                            Boost: {% if account.booster_enabled %}On{% else %}Off{% endif %}
+                        </button>
+                    </form>
+                    {% endif %}
                     <form method="post" action="/api/accounts/{{ account.id }}/delete" class="inline">
                         <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                     </form>

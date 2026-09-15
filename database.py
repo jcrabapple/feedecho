@@ -468,6 +468,7 @@ def init_db_sqlite() -> None:
                 username TEXT DEFAULT '',
                 instance TEXT NOT NULL,
                 access_token TEXT NOT NULL,
+                booster_enabled INTEGER NOT NULL DEFAULT 0,
                 user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -490,6 +491,7 @@ def init_db_sqlite() -> None:
                     "UPDATE accounts SET username = ? WHERE id = ?",
                     (username, row["id"]),
                 )
+        _add_column_if_missing(db, "accounts", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS saved_searches (
@@ -1204,6 +1206,7 @@ def init_db_postgres() -> None:
                 username TEXT DEFAULT '',
                 instance TEXT NOT NULL,
                 access_token TEXT NOT NULL,
+                booster_enabled INTEGER NOT NULL DEFAULT 0,
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -1230,6 +1233,7 @@ def init_db_postgres() -> None:
                     "UPDATE accounts SET username = ? WHERE id = ?",
                     (username, row["id"]),
                 )
+        _add_column_if_missing(db, "accounts", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS saved_searches (

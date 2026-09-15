@@ -1165,7 +1165,7 @@ def _get_all_accounts(user_id: int = 1):
     webhook accounts for one user."""
     with get_db() as db:
         mastodon = db.execute(
-            "SELECT id, name, username, instance, created_at FROM accounts"
+            "SELECT id, name, username, instance, booster_enabled, created_at FROM accounts"
             " WHERE user_id = ? ORDER BY name",
             (user_id,),
         ).fetchall()
@@ -1265,6 +1265,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         webhook_accounts=webhook_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
+        booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN),
         error=message,
     )
 
@@ -2305,7 +2306,8 @@ async def accounts_page(request: Request):
                   discord_accounts=discord_accounts,
                   webhook_accounts=webhook_accounts,
                   smtp_configured=smtp_configured,
-                  smtp_settings=smtp_settings)
+                  smtp_settings=smtp_settings,
+                  booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN))
 
 
 @app.get("/echoes", response_class=HTMLResponse)
@@ -3346,6 +3348,27 @@ def test_account(request: Request, account_id: int):
         raise HTTPException(status_code=404, detail="Account not found")
     success, message = test_connection(account["instance"], security.decrypt_secret(account["access_token"]))
     return {"success": success, "message": message}
+
+
+@app.post("/api/accounts/{account_id}/booster")
+async def toggle_booster(request: Request, account_id: int):
+    """Toggle FeedBooster for one Mastodon destination: echoed posts to this
+    account get announced by @feedbooster@feedecho.net."""
+    uid = current_user_id(request)
+    if not (settings.BOOSTER_URL and settings.BOOSTER_TOKEN):
+        return _render_accounts_error(request, "FeedBooster is not configured on this server.")
+    with get_db() as db:
+        row = db.execute(
+            "SELECT booster_enabled FROM accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        db.execute(
+            "UPDATE accounts SET booster_enabled = ? WHERE id = ? AND user_id = ?",
+            (0 if row["booster_enabled"] else 1, account_id, uid),
+        )
+    return RedirectResponse(url="/accounts", status_code=303)
 
 
 @app.post("/api/accounts/{account_id}/delete")

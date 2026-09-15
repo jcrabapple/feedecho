@@ -1236,6 +1236,45 @@ def _finalize_success(
     return ok
 
 
+def _maybe_boost(account, post_url: str, echo_id, visibility: str = "public") -> None:
+    """Fire-and-forget boost request to the FeedBooster service, when the
+    destination account has the booster enabled and a booster is configured.
+
+    Caller-side visibility gate: only public/unlisted echoes are boosted.
+    The booster re-checks the object's Public addressing on its side, but
+    the leak must be prevented here, not caught downstream.
+
+    Best-effort by design: the post is already published, so a booster outage
+    or refusal must never fail the delivery — log-only, no retries from this
+    side (the booster keeps its own retry queue).
+    """
+    if visibility not in ("public", "unlisted"):
+        return
+    try:
+        if not account["booster_enabled"]:
+            return
+    except (KeyError, IndexError):
+        return
+    if not settings.BOOSTER_URL or not settings.BOOSTER_TOKEN:
+        return
+    try:
+        response = httpx.post(
+            f"{settings.BOOSTER_URL}/internal/boost",
+            json={"url": post_url},
+            headers={"authorization": f"Bearer {settings.BOOSTER_TOKEN}"},
+            timeout=5,
+        )
+    except Exception:
+        logger.warning("Echo %s: boost request for %s failed", echo_id, post_url, exc_info=True)
+        return
+    if response.status_code >= 400:
+        logger.warning(
+            "Echo %s: booster refused %s: HTTP %s", echo_id, post_url, response.status_code
+        )
+    else:
+        logger.info("Echo %s: boost requested for %s", echo_id, post_url)
+
+
 def _send_mastodon(
     echo,
     item: FeedItem,
@@ -1382,6 +1421,14 @@ def _send_mastodon(
     raw_url = result.get("url") if isinstance(result, dict) else None
     if isinstance(raw_url, str) and raw_url:
         post_url = raw_url
+
+    if post_url:
+        # echo is a sqlite Row: bracket access can raise on a missing column.
+        try:
+            echo_visibility = echo["visibility"]
+        except (KeyError, IndexError):
+            echo_visibility = "public"
+        _maybe_boost(account, post_url, echo["id"], echo_visibility)
 
     return _finalize_success(posted_id, claim_token, echo["id"], post_url=post_url or None)
 

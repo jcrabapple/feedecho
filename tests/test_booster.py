@@ -1,8 +1,6 @@
 """FeedBooster integration: accounts.booster_enabled column, the per-account
 toggle route, the accounts-page UI gate, and the scheduler boost hook."""
 
-import json
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -124,6 +122,68 @@ class TestSchedulerHook:
         account = {"booster_enabled": 0}
         scheduler._maybe_boost(account, "https://m.example/@a/1", 1)
         assert not calls
+
+    def test_no_call_for_private_or_direct(self, monkeypatch):
+        # HIGH-gate fix: followers-only and direct echoes must never be sent
+        # to the booster, even with the toggle on.
+        import scheduler
+
+        calls = []
+        monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
+        monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
+        for visibility in ("private", "direct"):
+            scheduler._maybe_boost(
+                {"booster_enabled": 1}, "https://m.example/@a/1", 1, visibility
+            )
+        assert not calls
+
+    def test_unlisted_is_boosted(self, monkeypatch):
+        import scheduler
+
+        captured = {}
+
+        class FakeResponse:
+            status_code = 202
+
+        monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
+        monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
+        monkeypatch.setattr(
+            scheduler.httpx,
+            "post",
+            lambda url, json=None, headers=None, timeout=None: captured.update(url=url)
+            or FakeResponse(),
+        )
+        scheduler._maybe_boost(
+            {"booster_enabled": 1}, "https://m.example/@a/1", 1, "unlisted"
+        )
+        assert captured["url"] == f"{BOOSTER_URL}/internal/boost"
+
+    def test_error_page_keeps_booster_buttons(self, multi_client, monkeypatch):
+        # MEDIUM-gate fix: _render_accounts_error must pass booster_configured
+        # so the Boost buttons don't vanish on error renders. Deleting an
+        # account that still has dependent echoes hits the error path.
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (1, 'f', 'https://f.example/rss', 5)"
+            )
+            db.execute(
+                "INSERT INTO echoes (feed_id, destination_type, destination_id, user_id)"
+                " VALUES (1, 'mastodon', 1, 5)"
+            )
+        monkeypatch.setattr(settings, "BOOSTER_URL", "")
+        monkeypatch.setattr(settings, "BOOSTER_TOKEN", "")
+        r = multi_client.post("/api/accounts/1/delete")
+        assert r.status_code == 200
+        assert "booster" not in r.text.lower()
+
+        # And for a configured booster the buttons survive the error render.
+        monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
+        monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
+        r2 = multi_client.post("/api/accounts/1/delete")
+        assert r2.status_code == 200
+        assert "/api/accounts/1/booster" in r2.text
 
     def test_no_call_when_unconfigured(self, monkeypatch):
         import scheduler

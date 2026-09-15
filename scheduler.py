@@ -1236,14 +1236,20 @@ def _finalize_success(
     return ok
 
 
-def _maybe_boost(account, post_url: str, echo_id) -> None:
+def _maybe_boost(account, post_url: str, echo_id, visibility: str = "public") -> None:
     """Fire-and-forget boost request to the FeedBooster service, when the
     destination account has the booster enabled and a booster is configured.
+
+    Caller-side visibility gate: only public/unlisted echoes are boosted.
+    The booster re-checks the object's Public addressing on its side, but
+    the leak must be prevented here, not caught downstream.
 
     Best-effort by design: the post is already published, so a booster outage
     or refusal must never fail the delivery — log-only, no retries from this
     side (the booster keeps its own retry queue).
     """
+    if visibility not in ("public", "unlisted"):
+        return
     try:
         if not account["booster_enabled"]:
             return
@@ -1417,7 +1423,12 @@ def _send_mastodon(
         post_url = raw_url
 
     if post_url:
-        _maybe_boost(account, post_url, echo["id"])
+        # echo is a sqlite Row: bracket access can raise on a missing column.
+        try:
+            echo_visibility = echo["visibility"]
+        except (KeyError, IndexError):
+            echo_visibility = "public"
+        _maybe_boost(account, post_url, echo["id"], echo_visibility)
 
     return _finalize_success(posted_id, claim_token, echo["id"], post_url=post_url or None)
 

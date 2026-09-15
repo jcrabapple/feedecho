@@ -1265,6 +1265,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         webhook_accounts=webhook_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
+        booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN),
         error=message,
     )
 

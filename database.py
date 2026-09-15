@@ -468,6 +468,7 @@ def init_db_sqlite() -> None:
                 username TEXT DEFAULT '',
                 instance TEXT NOT NULL,
                 access_token TEXT NOT NULL,
+                booster_enabled INTEGER NOT NULL DEFAULT 0,
                 user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -1205,6 +1206,7 @@ def init_db_postgres() -> None:
                 username TEXT DEFAULT '',
                 instance TEXT NOT NULL,
                 access_token TEXT NOT NULL,
+                booster_enabled INTEGER NOT NULL DEFAULT 0,
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

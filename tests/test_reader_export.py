@@ -70,6 +70,7 @@ class TestStarredExportCSV:
             r = c.get("/api/reader/starred/export?format=csv")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/csv")
+        assert "charset=utf-8" in r.headers["content-type"].lower()
         assert "attachment" in r.headers["content-disposition"]
         assert "feedecho-starred.csv" in r.headers["content-disposition"]
         rows = _rows(r.text)
@@ -170,8 +171,8 @@ class TestStarredExportMultiMode:
             db.execute("UPDATE feeds SET user_id = 12")
             # A second tenant's starred item must never leak into user 12's export.
             db.execute(
-                "INSERT INTO feeds (name, url, read_enabled, user_id)"
-                " VALUES ('Other', 'https://example.com/other', 1, 13)"
+                "INSERT INTO feeds (id, name, url, read_enabled, user_id)"
+                " VALUES (3, 'Other', 'https://example.com/other', 1, 13)"
             )
             db.execute(
                 "INSERT INTO feed_items (feed_id, item_id, title, starred, published_at)"

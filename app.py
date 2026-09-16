@@ -5096,7 +5096,7 @@ def _csv_formula_safe(value: str) -> str:
     when the CSV is opened in Excel/LibreOffice. Prefixing with an apostrophe
     defuses it (OWASP CSV injection guidance).
     """
-    if value.lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@"):
+    if value.lstrip()[:1] in ("=", "+", "-", "@"):
         return "'" + value
     return value
 

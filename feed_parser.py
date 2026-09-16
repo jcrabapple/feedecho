@@ -260,10 +260,45 @@ def _pins_for_urls(urls: list[str]) -> dict[str, str]:
     return pins
 
 
+def _ssl_context(no_alpn: bool):
+    """Build the SSL context for the pinned connection pool.
+
+    With ``no_alpn=True`` the context silently ignores ``set_alpn_protocols``.
+    httpcore always advertises ALPN ``http/1.1`` at connect time
+    (httpcore/_sync/connection.py), and some edge proxies — notably Tumblr's
+    custom-domain frontend — drop TLS connections that advertise ALPN
+    ``http/1.1`` (server closes without a response) and reset streams when
+    HTTP/2 is negotiated instead. Omitting the ALPN extension entirely makes
+    such edges serve plain HTTP/1.1. Verified safe against Cloudflare,
+    nginx, and GitHub edges, which all default to HTTP/1.1 without ALPN.
+    """
+    from httpx._config import create_ssl_context
+
+    if not no_alpn:
+        return create_ssl_context(verify=True, cert=None, trust_env=True)
+
+    import ssl
+
+    class _NoAlpnSSLContext(ssl.SSLContext):
+        def set_alpn_protocols(self, alpn_protocols):
+            return None
+
+    base = create_ssl_context(verify=True, cert=None, trust_env=True)
+    ctx = _NoAlpnSSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = base.check_hostname
+    ctx.verify_mode = base.verify_mode
+    ctx.load_default_certs()
+    import certifi
+
+    ctx.load_verify_locations(cafile=certifi.where())
+    return ctx
+
+
 def ssrf_client(
     urls: list[str],
     *,
     timeout: float = 30,
+    no_alpn: bool = False,
 ) -> tuple[httpx.Client, PinningNetworkBackend]:
     """Build an httpx.Client whose connections are pinned to validated IPs.
 
@@ -272,16 +307,18 @@ def ssrf_client(
     (the redirect-validating fetch helper) can pin additional hops as they
     validate them. Callers MUST close the client when done (try/finally);
     that releases the pool and its connections.
+
+    With ``no_alpn=True`` connections are dialed without advertising ALPN;
+    see ``_ssl_context`` for why some edge proxies require this.
     """
     import httpcore
-    from httpx._config import create_ssl_context
 
     pins = _pins_for_urls(urls)
     backend = PinningNetworkBackend()
     for key, addr in pins.items():
         backend.set_pin(key, addr)
     pool = httpcore.ConnectionPool(
-        ssl_context=create_ssl_context(verify=True, cert=None, trust_env=True),
+        ssl_context=_ssl_context(no_alpn),
         network_backend=backend,
     )
 
@@ -447,6 +484,19 @@ def fetch_feed(url: str) -> dict:
     headers = {"User-Agent": USER_AGENT}
     try:
         client, backend = ssrf_client([url])
+        try:
+            content, content_type = _fetch_with_redirect_validation(
+                client, url, headers, MAX_FEED_SIZE, backend=backend
+            )
+        finally:
+            client.close()
+    except httpx.RemoteProtocolError:
+        # Some edge proxies (notably Tumblr's custom-domain frontend) drop
+        # TLS connections that advertise ALPN "http/1.1" — the server closes
+        # without a response — and reset streams when HTTP/2 is negotiated
+        # instead. httpcore always advertises ALPN http/1.1, so retry once
+        # with ALPN suppressed; the edge then serves plain HTTP/1.1.
+        client, backend = ssrf_client([url], no_alpn=True)
         try:
             content, content_type = _fetch_with_redirect_validation(
                 client, url, headers, MAX_FEED_SIZE, backend=backend

@@ -94,6 +94,19 @@ class TestStarredExportCSV:
         # '=Cookie Recipe' must not survive as a spreadsheet formula.
         assert rows[0]["title"] == "'=Cookie Recipe"
 
+    def test_formula_prefix_after_leading_whitespace(self, env):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, starred, published_at)"
+                " VALUES (1, 'i5', ' \t=cmd|calc!A0', 1, '2026-09-12 10:00:00')"
+            )
+        with TestClient(app) as c:
+            r = c.get("/api/reader/starred/export?format=csv")
+        rows = _rows(r.text)
+        # Excel strips leading whitespace before formula parsing, so the
+        # guard must check past it.
+        assert rows[0]["title"] == "' \t=cmd|calc!A0"
+
     def test_unstarred_and_soft_deleted_excluded(self, env):
         with database.get_db() as db:
             db.execute(
@@ -150,7 +163,20 @@ class TestStarredExportMultiMode:
                 "INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'paid')",
                 (12, "paid@example.com"),
             )
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, plan) VALUES (?, ?, '', 'paid')",
+                (13, "other@example.com"),
+            )
             db.execute("UPDATE feeds SET user_id = 12")
+            # A second tenant's starred item must never leak into user 12's export.
+            db.execute(
+                "INSERT INTO feeds (name, url, read_enabled, user_id)"
+                " VALUES ('Other', 'https://example.com/other', 1, 13)"
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title, starred, published_at)"
+                " VALUES (3, 'x1', 'Other User Post', 1, '2026-09-11 10:00:00')"
+            )
         return settings
 
     def test_paid_user_exports(self, multi_env):
@@ -158,7 +184,9 @@ class TestStarredExportMultiMode:
             c.cookies.set("feedecho_session", security.sign_session(12, "paid@example.com"))
             r = c.get("/api/reader/starred/export?format=json")
         assert r.status_code == 200
-        assert json.loads(r.text)["count"] == 2
+        data = json.loads(r.text)
+        assert data["count"] == 2
+        assert all(it["feed"] != "Other" for it in data["items"])
 
     def test_non_reader_plan_402(self, multi_env):
         with database.get_db() as db:
@@ -177,6 +205,12 @@ class TestStarredExportUI:
         assert "/api/reader/starred/export?format=csv" in starred
         assert "/api/reader/starred/export?format=json" in starred
         assert "/api/reader/starred/export" not in all_view
+
+    def test_export_links_hidden_during_search(self, env):
+        # Export ignores the search query, so the links hide while one is active.
+        with TestClient(app) as c:
+            searched = c.get("/reader?view=starred&q=post").text
+        assert "/api/reader/starred/export" not in searched
 
 
 @requires_pg

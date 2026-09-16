@@ -5096,7 +5096,7 @@ def _csv_formula_safe(value: str) -> str:
     when the CSV is opened in Excel/LibreOffice. Prefixing with an apostrophe
     defuses it (OWASP CSV injection guidance).
     """
-    if value[:1] in ("=", "+", "-", "@"):
+    if value.lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@"):
         return "'" + value
     return value
 
@@ -5144,7 +5144,7 @@ def reader_export_starred(request: Request, format: str = "csv"):
             )
         return Response(
             content=buf.getvalue(),
-            media_type="text/csv",
+            media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": 'attachment; filename="feedecho-starred.csv"'},
         )
 

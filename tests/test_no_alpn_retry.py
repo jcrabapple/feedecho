@@ -47,6 +47,38 @@ class _FakeClientFactory:
         return result
 
 
+class TestNoAlpnSslContext:
+    """The no-ALPN context must differ from the normal one ONLY in that
+    httpcore's set_alpn_protocols call becomes a no-op."""
+
+    def test_no_alpn_context_ignores_alpn_setting(self):
+        ctx = feed_parser._ssl_context(no_alpn=True)
+        # httpcore calls this unconditionally before wrap_socket. The real
+        # OpenSSL implementation validates its argument and would raise on
+        # garbage; the subclass must swallow even that, proving the call
+        # never reaches the TLS layer.
+        assert ctx.set_alpn_protocols(["http/1.1"]) is None
+        assert ctx.set_alpn_protocols([12345, "not-a-protocol"]) is None  # type: ignore[list-item]
+
+    def test_normal_context_still_enforces_alpn_setting(self):
+        ctx = feed_parser._ssl_context(no_alpn=False)
+        with pytest.raises((TypeError, ValueError)):
+            ctx.set_alpn_protocols([12345, "not-a-protocol"])  # type: ignore[list-item]
+
+    def test_no_alpn_context_matches_normal_context_security_settings(self):
+        normal = feed_parser._ssl_context(no_alpn=False)
+        no_alpn = feed_parser._ssl_context(no_alpn=True)
+        assert no_alpn.verify_flags == normal.verify_flags
+        assert no_alpn.verify_mode == normal.verify_mode
+        assert no_alpn.check_hostname == normal.check_hostname
+        assert no_alpn.get_ca_certs() != []  # trust store carried over
+
+    def test_no_alpn_context_is_an_ssl_context(self):
+        import ssl
+
+        assert isinstance(feed_parser._ssl_context(no_alpn=True), ssl.SSLContext)
+
+
 class TestNoAlpnRetry:
     def test_retries_with_no_alpn_after_remote_disconnect(self):
         pair = _FakeClientFactory(

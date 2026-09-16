@@ -271,11 +271,16 @@ def _ssl_context(no_alpn: bool):
     HTTP/2 is negotiated instead. Omitting the ALPN extension entirely makes
     such edges serve plain HTTP/1.1. Verified safe against Cloudflare,
     nginx, and GitHub edges, which all default to HTTP/1.1 without ALPN.
+
+    The no-ALPN variant is the httpx context with only its class replaced,
+    so verify flags, trust store, and trust_env (SSL_CERT_FILE/DIR) handling
+    stay byte-for-byte identical to the ALPN-advertising path.
     """
     from httpx._config import create_ssl_context
 
+    ctx = create_ssl_context(verify=True, cert=None, trust_env=True)
     if not no_alpn:
-        return create_ssl_context(verify=True, cert=None, trust_env=True)
+        return ctx
 
     import ssl
 
@@ -283,14 +288,7 @@ def _ssl_context(no_alpn: bool):
         def set_alpn_protocols(self, alpn_protocols):
             return None
 
-    base = create_ssl_context(verify=True, cert=None, trust_env=True)
-    ctx = _NoAlpnSSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = base.check_hostname
-    ctx.verify_mode = base.verify_mode
-    ctx.load_default_certs()
-    import certifi
-
-    ctx.load_verify_locations(cafile=certifi.where())
+    ctx.__class__ = _NoAlpnSSLContext
     return ctx
 
 

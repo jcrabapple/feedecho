@@ -222,12 +222,18 @@ class TestStarredExportPg:
     def test_json_roundtrip_orders_nulls_last(self, monkeypatch):
         from cryptography.fernet import Fernet
 
+        import scheduler
+
         monkeypatch.setattr(settings, "MULTI", True)
         monkeypatch.setattr(settings, "DATABASE_URL", TEST_PG_URL)
         monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", False)
         monkeypatch.setattr(settings, "SESSION_SECRET", "s" * 40)
         monkeypatch.setattr(settings, "STATE_SECRET", "s" * 40)
         monkeypatch.setattr(settings, "CREDENTIAL_KEY", Fernet.generate_key().decode())
+        # The lifespan starts the scheduler with immediate startup jobs; their
+        # lingering connections deadlock the next pg test's DROP SCHEMA.
+        for job in ("check_all_feeds", "flush_digests", "flush_drips", "flush_queue"):
+            monkeypatch.setattr(scheduler, job, lambda *a, **k: None)
         with database.get_db() as db:
             db.execute("DROP SCHEMA public CASCADE")
             db.execute("CREATE SCHEMA public")

@@ -229,10 +229,13 @@ class TestEchoToggleRoute:
 
     def test_account_boost_supersedes_then_echo_flag_persists(self, seeded_client):
         # Approved semantics: while the account setting is on, both flags may
-        # be set (the account supersedes per-echo, and the UI shows the locked
-        # badge instead of the toggle). Turning the account setting back off
-        # does NOT clear per-echo flags — they resume boosting, whether they
-        # were set before or during the account-on window.
+        # be set in the database (the account supersedes per-echo, and the UI
+        # shows the locked badge instead of the toggle). Turning the account
+        # setting back off does NOT clear per-echo flags — flags set prior to
+        # enabling the account setting resume boosting. (The toggle route
+        # refuses NEW enables while the account setting is on, so a flag can
+        # only be set while it is off; import/export deliberately does not
+        # carry the flag.)
         assert seeded_client.post("/api/echoes/1/booster", follow_redirects=False).status_code == 303
         assert seeded_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
         r = seeded_client.get("/echoes")
@@ -303,11 +306,14 @@ class TestEchoesPageUI:
         assert r.status_code == 200
         assert '/api/echoes/1/booster' in r.text
         assert "Boost: Off" in r.text
+        # Off state never carries the active styling (strict pin for F8).
+        assert "btn-success" not in r.text
 
     def test_toggle_shows_on_state(self, seeded_client):
         assert seeded_client.post("/api/echoes/1/booster", follow_redirects=False).status_code == 303
         r = seeded_client.get("/echoes")
         assert "Boost: On" in r.text
+        assert "btn-success" in r.text
         # Strict pin: one state marker per echo, so a revert of the flip or
         # the template state logic shows up here.
         assert "Boost: Off" not in r.text
@@ -508,6 +514,10 @@ class TestSingleMode:
     def _seed_operator_echo(self):
         with database.get_db() as db:
             db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token, user_id)"
+                " VALUES (1, 'acc', 'acc', 'https://m.example', 'x', 1)"
+            )
+            db.execute(
                 "INSERT INTO feeds (id, name, url, user_id)"
                 " VALUES (1, 'f', 'https://f.example/rss', 1)"
             )
@@ -523,6 +533,23 @@ class TestSingleMode:
         with database.get_db() as db:
             row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
         assert row["booster_enabled"] == 1
+
+        # Toggle back off: a true roundtrip.
+        r2 = single_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r2.status_code == 303
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 0
+
+    def test_exclusivity_refusal_in_single_mode(self, single_client):
+        self._seed_operator_echo()
+        assert single_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
+        r = single_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r.status_code == 200
+        assert "already enabled for this Mastodon account" in r.text
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 0
 
     def test_page_renders_with_toggle(self, single_client):
         self._seed_operator_echo()

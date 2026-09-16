@@ -120,6 +120,9 @@
         {% endif %}
       </form>
       <div class="reader-toolbar-right">
+        {% if view == 'starred' and not q %}
+        <span class="reader-export"><a class="btn-sm" href="/api/reader/starred/export?format=csv">Export CSV</a> <a class="btn-sm" href="/api/reader/starred/export?format=json">JSON</a></span>
+        {% endif %}
         {% if items and not q %}
         <button class="btn-sm" onclick="readerMarkAllRead(this)">Mark all read</button>
         {% endif %}

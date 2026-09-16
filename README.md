@@ -22,7 +22,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
 - **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, and webhook endpoints
 - **Per-feed poll intervals** — each feed checked on its own schedule
-- **Built-in feed reader** — read items in place instead of a third-party app: folders with OPML import/export, unread and starred tracking, saved searches, a full-text view, and a compose desk that turns any item into a post without leaving FeedEcho
+- **Built-in feed reader** — read items in place instead of a third-party app: folders with OPML import/export, unread and starred tracking with CSV/JSON export of starred items, saved searches, a full-text view, and a compose desk that turns any item into a post without leaving FeedEcho
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline

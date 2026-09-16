@@ -10,6 +10,8 @@ event loop, where one 30-second feed fetch stalls every other request in the
 process. ``tests/test_review_fixes.py`` enforces this.
 """
 
+import csv
+import io
 import json
 import os
 import re
@@ -5085,6 +5087,78 @@ def reader_toggle_star(request: Request, item_id: int):
         row = db.execute("SELECT starred FROM feed_items WHERE id = ?", (item_id,)).fetchone()
     _saved_search_counts_cache.invalidate(uid)
     return {"success": True, "starred": bool(row["starred"])}
+
+
+def _csv_formula_safe(value: str) -> str:
+    """Neutralize spreadsheet formula injection in exported CSV cells.
+
+    A cell whose text starts with =, +, - or @ is evaluated as a formula
+    when the CSV is opened in Excel/LibreOffice. Prefixing with an apostrophe
+    defuses it (OWASP CSV injection guidance).
+    """
+    if value.lstrip()[:1] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
+@app.get("/api/reader/starred/export")
+def reader_export_starred(request: Request, format: str = "csv"):
+    """Download every starred reader item as CSV or JSON."""
+    uid = current_user_id(request)
+    fmt = (format or "").lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="format must be csv or json")
+    with get_db() as db:
+        _require_reader(db, uid)
+        rows = db.execute(
+            "SELECT fi.id, fi.item_id, fi.title, fi.author, fi.link, fi.summary,"
+            " fi.is_read, fi.published_at, f.name AS feed_name"
+            " FROM feed_items fi JOIN feeds f ON f.id = fi.feed_id"
+            " WHERE fi.starred = 1 AND f.user_id = ? AND f.deleted_at IS NULL"
+            " ORDER BY fi.published_at IS NULL, fi.published_at DESC, fi.id DESC",
+            (uid,),
+        ).fetchall()
+
+    items = [
+        {
+            "id": r["id"],
+            "item_id": r["item_id"],
+            "title": r["title"] or "",
+            "feed": r["feed_name"] or "",
+            "author": r["author"] or "",
+            "link": r["link"] or "",
+            "published_at": timestamp_str(r["published_at"]),
+            "is_read": bool(r["is_read"]),
+            "summary": r["summary"] or "",
+        }
+        for r in rows
+    ]
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\n")
+        writer.writerow(["title", "feed", "author", "link", "published_at"])
+        for it in items:
+            writer.writerow(
+                [_csv_formula_safe(it[c]) for c in ("title", "feed", "author", "link", "published_at")]
+            )
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="feedecho-starred.csv"'},
+        )
+
+    payload = {
+        "format": "feedecho-starred-export",
+        "version": 1,
+        "count": len(items),
+        "items": items,
+    }
+    return Response(
+        content=json.dumps(payload, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="feedecho-starred.json"'},
+    )
 
 
 @app.post("/api/reader/mark-all-read")

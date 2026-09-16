@@ -5817,10 +5817,11 @@ async def toggle_echo_booster(request: Request, echo_id: int):
     """Toggle FeedBooster for one echo: this echo's posts to its Mastodon
     destination get announced by @feedbooster@feedecho.net. Refused when the
     destination account itself has Boost on — the account setting already
-    boosts every echo to it, so the two cannot both apply."""
+    boosts every echo to it, so the two cannot both be newly enabled."""
     uid = current_user_id(request)
     if not (settings.BOOSTER_URL and settings.BOOSTER_TOKEN):
         return _render_echoes_error(request, "FeedBooster is not configured on this server.")
+    refusal = None
     with get_db() as db:
         row = db.execute(
             """
@@ -5835,21 +5836,50 @@ async def toggle_echo_booster(request: Request, echo_id: int):
         if not row:
             raise HTTPException(status_code=404, detail="Echo not found")
         if row["destination_type"] != "mastodon":
-            return _render_echoes_error(
-                request, "Boost is only available for echoes to Mastodon destinations."
+            refusal = "Boost is only available for echoes to Mastodon destinations."
+        else:
+            # Atomic flip, conditional on the account flag staying off: a
+            # concurrent account-level enable cannot interleave between the
+            # check above and this write, and an echo soft-deleted in that
+            # window is never touched.
+            flipped = db.execute(
+                """
+                UPDATE echoes SET booster_enabled = 1 - booster_enabled
+                WHERE id = ? AND user_id = ? AND destination_type = 'mastodon'
+                  AND deleted_at IS NULL
+                  AND COALESCE((
+                        SELECT a.booster_enabled FROM accounts a
+                        WHERE a.id = echoes.destination_id AND a.user_id = echoes.user_id
+                      ), 0) = 0
+                """,
+                (echo_id, uid),
             )
-        if row["account_boost_enabled"]:
-            return _render_echoes_error(
-                request,
-                "Boost is already enabled for this Mastodon account, so every echo to it is"
-                " boosted. Turn off the account setting on the Accounts page to control"
-                " individual echoes.",
-            )
-        db.execute(
-            "UPDATE echoes SET booster_enabled = 1 - booster_enabled"
-            " WHERE id = ? AND user_id = ? AND destination_type = 'mastodon'",
-            (echo_id, uid),
-        )
+            if flipped.rowcount == 0:
+                # Re-read so the error names the real reason: most likely the
+                # account setting turned on between the SELECT and the UPDATE.
+                row2 = db.execute(
+                    """
+                    SELECT COALESCE(a.booster_enabled, 0) AS account_boost_enabled
+                    FROM echoes e
+                    LEFT JOIN accounts a
+                      ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+                    WHERE e.id = ? AND e.deleted_at IS NULL AND e.user_id = ?
+                    """,
+                    (echo_id, uid),
+                ).fetchone()
+                if row2 and row2["account_boost_enabled"]:
+                    refusal = (
+                        "Boost is already enabled for this Mastodon account, so every echo to it is"
+                        " boosted. Turn off the account setting on the Accounts page to control"
+                        " individual echoes."
+                    )
+                else:
+                    refusal = "Could not update the Boost setting for this echo. Try again."
+    # Rendered OUTSIDE the connection block: _render_echoes_error opens its
+    # own connection, and re-rendering the page while still holding this
+    # request's connection would tie up two per refusal.
+    if refusal:
+        return _render_echoes_error(request, refusal)
     return RedirectResponse(url="/echoes", status_code=303)
 
 
@@ -5964,6 +5994,15 @@ async def edit_echo(
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
              delivery_mode, drip_limit, is_enabled, echo_id, uid),
         )
+        if (echo["destination_type"], echo["destination_id"]) != (destination_type, destination_id):
+            # Per-echo boost does not survive a destination change: a stale
+            # flag must not silently attach to a different destination (and
+            # on a non-Mastodon or account-boosted target it could never be
+            # turned off through the UI, which hides the toggle there).
+            db.execute(
+                "UPDATE echoes SET booster_enabled = 0 WHERE id = ? AND user_id = ?",
+                (echo_id, uid),
+            )
     return RedirectResponse(url="/echoes", status_code=303)
 
 

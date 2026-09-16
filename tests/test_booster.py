@@ -54,6 +54,20 @@ def unconfigured_client(multi_client, monkeypatch):
 
 
 @pytest.fixture()
+def single_client(monkeypatch, db_tmp):
+    """Single-mode TestClient: shared-secret cookie auth, operator uid 1."""
+    monkeypatch.setattr(settings, "MULTI", False)
+    monkeypatch.setattr(settings, "AUTH_TOKEN", "single-token")
+    monkeypatch.setattr(settings, "DATABASE_URL", "")
+    monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
+    monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
+    monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
+    client = TestClient(app)
+    client.cookies.set(auth.AUTH_COOKIE_NAME, "single-token")
+    return client
+
+
+@pytest.fixture()
 def seeded_client(multi_client):
     """multi_client plus feed 1 + Mastodon echo 1, both owned by user 5."""
     with database.get_db() as db:
@@ -212,6 +226,65 @@ class TestEchoToggleRoute:
         with database.get_db() as db:
             row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
         assert row["booster_enabled"] == 1
+
+    def test_account_boost_supersedes_then_echo_flag_persists(self, seeded_client):
+        # Approved semantics: while the account setting is on, both flags may
+        # be set (the account supersedes per-echo, and the UI shows the locked
+        # badge instead of the toggle). Turning the account setting back off
+        # does NOT clear per-echo flags — they resume boosting, whether they
+        # were set before or during the account-on window.
+        assert seeded_client.post("/api/echoes/1/booster", follow_redirects=False).status_code == 303
+        assert seeded_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
+        r = seeded_client.get("/echoes")
+        assert "Boost: Account" in r.text
+        with database.get_db() as db:
+            acct = db.execute("SELECT booster_enabled FROM accounts WHERE id = 1").fetchone()
+            echo = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert acct["booster_enabled"] == 1
+        assert echo["booster_enabled"] == 1
+
+        assert seeded_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
+        with database.get_db() as db:
+            echo = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert echo["booster_enabled"] == 1
+
+    def test_edit_destination_change_clears_echo_boost(self, seeded_client, db_tmp):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token, user_id)"
+                " VALUES (2, 'acc2', 'acc2', 'https://m.example', 'x', 5)"
+            )
+        assert seeded_client.post("/api/echoes/1/booster", follow_redirects=False).status_code == 303
+        r = seeded_client.post(
+            "/api/echoes/1/edit",
+            data={"feed_id": 1, "destination_type": "mastodon", "account_id": 2, "enabled": "true"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        with database.get_db() as db:
+            echo = db.execute(
+                "SELECT destination_id, booster_enabled FROM echoes WHERE id = 1"
+            ).fetchone()
+        assert echo["destination_id"] == 2
+        assert echo["booster_enabled"] == 0
+
+    def test_edit_without_destination_change_preserves_echo_boost(self, seeded_client):
+        assert seeded_client.post("/api/echoes/1/booster", follow_redirects=False).status_code == 303
+        r = seeded_client.post(
+            "/api/echoes/1/edit",
+            data={
+                "feed_id": 1, "destination_type": "mastodon", "account_id": 1,
+                "template": "{{ title }}", "enabled": "true",
+            },
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        with database.get_db() as db:
+            echo = db.execute(
+                "SELECT template, booster_enabled FROM echoes WHERE id = 1"
+            ).fetchone()
+        assert echo["booster_enabled"] == 1
+        assert echo["template"] == "{{ title }}"
 
 
 class TestEchoesPageUI:
@@ -421,3 +494,39 @@ class TestSchedulerHook:
         monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
         scheduler._maybe_boost({}, {}, "https://m.example/@a/1")
         assert not calls
+
+    def test_none_inputs_do_not_raise(self, monkeypatch):
+        import scheduler
+
+        calls = []
+        monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
+        scheduler._maybe_boost(None, None, "https://m.example/@a/1")
+        assert not calls
+
+
+class TestSingleMode:
+    def _seed_operator_echo(self):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (1, 'f', 'https://f.example/rss', 1)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+                " VALUES (1, 1, 'mastodon', 1, 1)"
+            )
+
+    def test_echo_boost_toggle_roundtrip(self, single_client):
+        self._seed_operator_echo()
+        r = single_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r.status_code == 303
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 1
+
+    def test_page_renders_with_toggle(self, single_client):
+        self._seed_operator_echo()
+        r = single_client.get("/echoes")
+        assert r.status_code == 200
+        assert "/api/echoes/1/booster" in r.text
+        assert "Boost: Off" in r.text

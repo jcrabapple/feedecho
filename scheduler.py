@@ -1254,11 +1254,11 @@ def _maybe_boost(account, echo, post_url, visibility: str = "public") -> None:
         return
     try:
         account_on = bool(account["booster_enabled"])
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         account_on = False
     try:
         echo_on = bool(echo["booster_enabled"])
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         echo_on = False
     if not (account_on or echo_on):
         return
@@ -1266,7 +1266,7 @@ def _maybe_boost(account, echo, post_url, visibility: str = "public") -> None:
         return
     try:
         echo_id = echo["id"]
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         echo_id = "?"
     try:
         response = httpx.post(

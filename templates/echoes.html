@@ -286,7 +286,7 @@
                     <span class="badge badge-info" title="Boosted via the Mastodon account setting — manage it on the Accounts page.">Boost: Account</span>
                     {% else %}
                     <form method="post" action="/api/echoes/{{ echo.id }}/booster" class="inline">
-                        <button type="submit" class="btn-sm" title="Boost this echo's posts via FeedBooster.">{{ 'Boost: On' if echo.booster_enabled else 'Boost: Off' }}</button>
+                        <button type="submit" class="btn-sm{% if echo.booster_enabled %} btn-success{% endif %}" title="Boost this echo's posts via FeedBooster.">{{ 'Boost: On' if echo.booster_enabled else 'Boost: Off' }}</button>
                     </form>
                     {% endif %}
                 {% endif %}

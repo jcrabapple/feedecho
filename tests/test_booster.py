@@ -1,5 +1,6 @@
-"""FeedBooster integration: accounts.booster_enabled column, the per-account
-toggle route, the accounts-page UI gate, and the scheduler boost hook."""
+"""FeedBooster integration: the per-account toggle (accounts.booster_enabled),
+the per-echo toggle (echoes.booster_enabled) and its mutual exclusivity with
+the account setting, the echoes-page UI gate, and the scheduler boost hook."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,6 +50,21 @@ def multi_client(monkeypatch, db_tmp):
 def unconfigured_client(multi_client, monkeypatch):
     monkeypatch.setattr(settings, "BOOSTER_URL", "")
     monkeypatch.setattr(settings, "BOOSTER_TOKEN", "")
+    return multi_client
+
+
+@pytest.fixture()
+def seeded_client(multi_client):
+    """multi_client plus feed 1 + Mastodon echo 1, both owned by user 5."""
+    with database.get_db() as db:
+        db.execute(
+            "INSERT INTO feeds (id, name, url, user_id)"
+            " VALUES (1, 'f', 'https://f.example/rss', 5)"
+        )
+        db.execute(
+            "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+            " VALUES (1, 1, 'mastodon', 1, 5)"
+        )
     return multi_client
 
 
@@ -113,19 +129,156 @@ class TestAccountsPageUI:
         assert "Boost: On" in r.text
 
 
+class TestEchoColumn:
+    def test_column_exists_on_fresh_db(self, db_tmp):
+        with database.get_db() as db:
+            db.execute("SELECT booster_enabled FROM echoes LIMIT 1")
+
+    def test_default_is_zero(self, seeded_client):
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 0
+
+
+class TestEchoToggleRoute:
+    def test_toggle_on_then_off(self, seeded_client):
+        r = seeded_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers["location"] == "/echoes"
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 1
+
+        r = seeded_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r.status_code == 303
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 0
+
+    def test_other_users_echo_404s(self, multi_client, db_tmp):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (99, 'other', 'https://o.example/rss', 777)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+                " VALUES (99, 99, 'mastodon', 99, 777)"
+            )
+        r = multi_client.post("/api/echoes/99/booster", follow_redirects=False)
+        assert r.status_code == 404
+
+    def test_missing_echo_404s(self, seeded_client):
+        assert seeded_client.post("/api/echoes/12345/booster").status_code == 404
+
+    def test_deleted_echo_404s(self, seeded_client, db_tmp):
+        with database.get_db() as db:
+            db.execute("UPDATE echoes SET deleted_at = CURRENT_TIMESTAMP WHERE id = 1")
+        assert seeded_client.post("/api/echoes/1/booster").status_code == 404
+
+    def test_refuses_when_booster_unconfigured(self, unconfigured_client):
+        # Checked before the echo lookup: the banner renders regardless.
+        r = unconfigured_client.post("/api/echoes/1/booster")
+        assert r.status_code == 200
+        assert "FeedBooster is not configured on this server." in r.text
+
+    def test_refuses_for_non_mastodon_echo(self, seeded_client, db_tmp):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+                " VALUES (2, 1, 'bluesky', 1, 5)"
+            )
+        r = seeded_client.post("/api/echoes/2/booster", follow_redirects=False)
+        assert r.status_code == 200
+        assert "only available for echoes to Mastodon" in r.text
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 2").fetchone()
+        assert row["booster_enabled"] == 0
+
+    def test_refused_while_account_boost_on_then_allowed_after(self, seeded_client):
+        # Account-level boost on: the per-echo toggle refuses and flips nothing.
+        assert seeded_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
+        r = seeded_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r.status_code == 200
+        assert "already enabled for this Mastodon account" in r.text
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 0
+
+        # Account-level boost off again: the per-echo toggle works.
+        assert seeded_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
+        r2 = seeded_client.post("/api/echoes/1/booster", follow_redirects=False)
+        assert r2.status_code == 303
+        with database.get_db() as db:
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 1
+
+
+class TestEchoesPageUI:
+    def test_toggle_hidden_when_unconfigured(self, unconfigured_client):
+        r = unconfigured_client.get("/echoes")
+        assert r.status_code == 200
+        assert "boost" not in r.text.lower()
+
+    def test_error_banner_renders_on_refusal(self, unconfigured_client):
+        r = unconfigured_client.post("/api/echoes/1/booster")
+        assert r.status_code == 200
+        assert "FeedBooster is not configured on this server." in r.text
+
+    def test_toggle_visible_when_configured(self, seeded_client):
+        r = seeded_client.get("/echoes")
+        assert r.status_code == 200
+        assert '/api/echoes/1/booster' in r.text
+        assert "Boost: Off" in r.text
+
+    def test_toggle_shows_on_state(self, seeded_client):
+        assert seeded_client.post("/api/echoes/1/booster", follow_redirects=False).status_code == 303
+        r = seeded_client.get("/echoes")
+        assert "Boost: On" in r.text
+        # Strict pin: one state marker per echo, so a revert of the flip or
+        # the template state logic shows up here.
+        assert "Boost: Off" not in r.text
+
+    def test_locked_when_account_boost_on(self, seeded_client):
+        assert seeded_client.post("/api/accounts/1/booster", follow_redirects=False).status_code == 303
+        r = seeded_client.get("/echoes")
+        assert "Boost: Account" in r.text
+        # No per-echo toggle form while the account setting owns the state.
+        assert '/api/echoes/1/booster' not in r.text
+
+    def test_no_toggle_for_non_mastodon_echo(self, seeded_client, db_tmp):
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+                " VALUES (2, 1, 'bluesky', 1, 5)"
+            )
+        r = seeded_client.get("/echoes")
+        assert r.status_code == 200
+        assert '/api/echoes/2/booster' not in r.text
+
+
 class TestSchedulerHook:
     def test_no_call_when_disabled(self, monkeypatch):
         import scheduler
 
         calls = []
         monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
-        account = {"booster_enabled": 0}
-        scheduler._maybe_boost(account, "https://m.example/@a/1", 1)
+        scheduler._maybe_boost(
+            {"booster_enabled": 0}, {"id": 1, "booster_enabled": 0}, "https://m.example/@a/1"
+        )
+        assert not calls
+
+    def test_no_call_when_both_flags_missing(self, monkeypatch):
+        import scheduler
+
+        calls = []
+        monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
+        scheduler._maybe_boost({}, {"id": 1}, "https://m.example/@a/1")
         assert not calls
 
     def test_no_call_for_private_or_direct(self, monkeypatch):
         # HIGH-gate fix: followers-only and direct echoes must never be sent
-        # to the booster, even with the toggle on.
+        # to the booster, even with both toggles on.
         import scheduler
 
         calls = []
@@ -134,7 +287,10 @@ class TestSchedulerHook:
         monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
         for visibility in ("private", "direct"):
             scheduler._maybe_boost(
-                {"booster_enabled": 1}, "https://m.example/@a/1", 1, visibility
+                {"booster_enabled": 1},
+                {"id": 1, "booster_enabled": 1},
+                "https://m.example/@a/1",
+                visibility,
             )
         assert not calls
 
@@ -155,7 +311,10 @@ class TestSchedulerHook:
             or FakeResponse(),
         )
         scheduler._maybe_boost(
-            {"booster_enabled": 1}, "https://m.example/@a/1", 1, "unlisted"
+            {"booster_enabled": 0},
+            {"id": 1, "booster_enabled": 1},
+            "https://m.example/@a/1",
+            "unlisted",
         )
         assert captured["url"] == f"{BOOSTER_URL}/internal/boost"
 
@@ -192,10 +351,12 @@ class TestSchedulerHook:
         monkeypatch.setattr(settings, "BOOSTER_TOKEN", "")
         calls = []
         monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
-        scheduler._maybe_boost({"booster_enabled": 1}, "https://m.example/@a/1", 1)
+        scheduler._maybe_boost(
+            {"booster_enabled": 1}, {"id": 1, "booster_enabled": 1}, "https://m.example/@a/1"
+        )
         assert not calls
 
-    def test_posts_to_booster_when_enabled(self, monkeypatch):
+    def test_posts_to_booster_when_account_enabled(self, monkeypatch):
         import scheduler
 
         captured = {}
@@ -210,11 +371,35 @@ class TestSchedulerHook:
         monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
         monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
         monkeypatch.setattr(scheduler.httpx, "post", fake_post)
-        scheduler._maybe_boost({"booster_enabled": 1}, "https://m.example/@a/1", 1)
+        scheduler._maybe_boost(
+            {"booster_enabled": 1}, {"id": 1, "booster_enabled": 0}, "https://m.example/@a/1"
+        )
         assert captured["url"] == f"{BOOSTER_URL}/internal/boost"
         assert captured["json"] == {"url": "https://m.example/@a/1"}
         assert captured["headers"]["authorization"] == f"Bearer {BOOSTER_TOKEN}"
         assert captured["timeout"] <= 10
+
+    def test_posts_to_booster_when_only_echo_enabled(self, monkeypatch):
+        # The per-echo toggle alone must drive the boost when the account
+        # setting is off.
+        import scheduler
+
+        captured = {}
+
+        class FakeResponse:
+            status_code = 202
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured.update(url=url)
+            return FakeResponse()
+
+        monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
+        monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
+        monkeypatch.setattr(scheduler.httpx, "post", fake_post)
+        scheduler._maybe_boost(
+            {"booster_enabled": 0}, {"id": 1, "booster_enabled": 1}, "https://m.example/@a/1"
+        )
+        assert captured["url"] == f"{BOOSTER_URL}/internal/boost"
 
     def test_booster_outage_never_raises(self, monkeypatch):
         import scheduler
@@ -225,12 +410,14 @@ class TestSchedulerHook:
         monkeypatch.setattr(settings, "BOOSTER_URL", BOOSTER_URL)
         monkeypatch.setattr(settings, "BOOSTER_TOKEN", BOOSTER_TOKEN)
         monkeypatch.setattr(scheduler.httpx, "post", fake_post)
-        scheduler._maybe_boost({"booster_enabled": 1}, "https://m.example/@a/1", 1)
+        scheduler._maybe_boost(
+            {"booster_enabled": 0}, {"id": 1, "booster_enabled": 1}, "https://m.example/@a/1"
+        )
 
-    def test_missing_column_treated_as_disabled(self, monkeypatch):
+    def test_missing_columns_treated_as_disabled(self, monkeypatch):
         import scheduler
 
         calls = []
         monkeypatch.setattr(scheduler.httpx, "post", lambda *a, **k: calls.append(a))
-        scheduler._maybe_boost({}, "https://m.example/@a/1", 1)
+        scheduler._maybe_boost({}, {}, "https://m.example/@a/1")
         assert not calls

@@ -621,6 +621,7 @@ def init_db_sqlite() -> None:
                 delivery_mode TEXT NOT NULL DEFAULT 'instant',
                 drip_limit INTEGER NOT NULL DEFAULT 0,
                 one_shot INTEGER NOT NULL DEFAULT 0,
+                booster_enabled INTEGER NOT NULL DEFAULT 0,
                 deleted_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
@@ -642,6 +643,7 @@ def init_db_sqlite() -> None:
         )
         _add_column_if_missing(db, "echoes", "deleted_at", "TIMESTAMP")
         _add_column_if_missing(db, "echoes", "one_shot", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "echoes", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS digest_items (
@@ -1357,12 +1359,14 @@ def init_db_postgres() -> None:
                 delivery_mode TEXT NOT NULL DEFAULT 'instant',
                 drip_limit INTEGER NOT NULL DEFAULT 0,
                 one_shot INTEGER NOT NULL DEFAULT 0,
+                booster_enabled INTEGER NOT NULL DEFAULT 0,
                 deleted_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
             )
         """)
         _add_column_if_missing(db, "echoes", "one_shot", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "echoes", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "echoes", "filter_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(
             db, "echoes", "filter_mode", "TEXT NOT NULL DEFAULT 'exclude'"

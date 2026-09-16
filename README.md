@@ -107,7 +107,7 @@ docker run -d --name feedecho \
 | `FEEDECHO_STATE_SECRET` | required in multi mode (32+ chars) | OAuth state signing secret. In multi mode the app refuses to start without it. Single mode falls back to `FEEDECHO_AUTH_TOKEN`, then a random per-process value. |
 | `FEEDECHO_ALLOW_BACKDATED_ENTRIES` | no | Set to `1` to deliver feed items that appear positionally older than the cursor but whose publish date is within `FEEDECHO_MAX_BACKDATED_ENTRY_DAYS` of now. Off by default. |
 | `FEEDECHO_MAX_BACKDATED_ENTRY_DAYS` | no | How many days back to accept backdated entries (default `3`). Only consulted when `FEEDECHO_ALLOW_BACKDATED_ENTRIES=1`. |
-| `FEEDECHO_BOOSTER_URL` / `FEEDECHO_BOOSTER_TOKEN` | no | FeedBooster service URL and shared token. When both are set, Mastodon destinations get a Boost toggle (echoes are announced by the booster's fediverse account). Without them, the feature is hidden and inert. |
+| `FEEDECHO_BOOSTER_URL` / `FEEDECHO_BOOSTER_TOKEN` | no | FeedBooster service URL and shared token. When both are set, Mastodon destinations get a Boost toggle — per account on /accounts and per echo on /echoes (echoed posts are announced by the booster's fediverse account). Without them, the feature is hidden and inert. |
 
 Behind a reverse proxy (nginx, Caddy, Traefik), point the proxy at port `8453` and set `FEEDECHO_CALLBACK_URL` to the public HTTPS URL.
 
@@ -204,6 +204,7 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - When a booster is configured (`FEEDECHO_BOOSTER_URL` + `FEEDECHO_BOOSTER_TOKEN`; the hosted service runs one at `@feedbooster@feedecho.net`), each Mastodon account row on `/accounts` gains a **Boost: On/Off** toggle.
 - With the toggle on, every post FeedEcho publishes to that account is also announced (boosted) by the booster's fediverse account: it shows up on the booster's profile, in the original author's notifications, and in the timelines of people who follow the booster. Posts made directly on the account, outside FeedEcho, are not boosted.
 - Public and unlisted echoes are boosted; followers-only and direct posts never are, because a boost would leak them.
+- Boost can also be enabled per echo: each Mastodon echo row on /echoes gains its own **Boost: On/Off** toggle. This is for picking specific echoes while the account setting is off — if the destination account has Boost on, every echo to it is boosted and the per-echo control is locked (shown as "Boost: Account"). The two settings are mutually exclusive: turn off the account-level Boost to control individual echoes. The per-echo toggle applies from the moment it is switched on; posts already published are not boosted retroactively.
 - The boost request is fire-and-forget: a booster outage never delays or fails the post itself. The booster deduplicates per post and keeps its own retry queue.
 - Self-hosters can run their own copy of [FeedBooster](https://github.com/jcrabapple/feedbooster) and point the two variables at it. Without a booster configured, the toggle is hidden and nothing changes.
 

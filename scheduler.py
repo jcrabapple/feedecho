@@ -1236,9 +1236,11 @@ def _finalize_success(
     return ok
 
 
-def _maybe_boost(account, post_url: str, echo_id, visibility: str = "public") -> None:
-    """Fire-and-forget boost request to the FeedBooster service, when the
-    destination account has the booster enabled and a booster is configured.
+def _maybe_boost(account, echo, post_url, visibility: str = "public") -> None:
+    """Fire-and-forget boost request to the FeedBooster service, when a
+    booster is configured and either the destination account or this
+    individual echo has boosting enabled (the account setting covers every
+    echo to it, so either flag is sufficient).
 
     Caller-side visibility gate: only public/unlisted echoes are boosted.
     The booster re-checks the object's Public addressing on its side, but
@@ -1251,12 +1253,21 @@ def _maybe_boost(account, post_url: str, echo_id, visibility: str = "public") ->
     if visibility not in ("public", "unlisted"):
         return
     try:
-        if not account["booster_enabled"]:
-            return
+        account_on = bool(account["booster_enabled"])
     except (KeyError, IndexError):
+        account_on = False
+    try:
+        echo_on = bool(echo["booster_enabled"])
+    except (KeyError, IndexError):
+        echo_on = False
+    if not (account_on or echo_on):
         return
     if not settings.BOOSTER_URL or not settings.BOOSTER_TOKEN:
         return
+    try:
+        echo_id = echo["id"]
+    except (KeyError, IndexError):
+        echo_id = "?"
     try:
         response = httpx.post(
             f"{settings.BOOSTER_URL}/internal/boost",
@@ -1428,7 +1439,7 @@ def _send_mastodon(
             echo_visibility = echo["visibility"]
         except (KeyError, IndexError):
             echo_visibility = "public"
-        _maybe_boost(account, post_url, echo["id"], echo_visibility)
+        _maybe_boost(account, echo, post_url, echo_visibility)
 
     return _finalize_success(posted_id, claim_token, echo["id"], post_url=post_url or None)
 

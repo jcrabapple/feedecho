@@ -2310,81 +2310,115 @@ async def accounts_page(request: Request):
                   booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN))
 
 
+def _echoes_page_context(db, uid: int) -> dict:
+    """Everything the echoes page (and any error re-render of it) needs.
+
+    One builder because /api/echoes/{id}/booster re-renders the page on
+    refusal — the page's queries must not drift between the two entry
+    points.
+    """
+    echoes = db.execute("""
+        SELECT e.*, f.name as feed_name,
+               CASE
+                 WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
+                 WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
+                 WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
+                 WHEN e.destination_type = 'microblog' THEN mb.name
+                 WHEN e.destination_type = 'matrix' THEN mx.name
+                 WHEN e.destination_type = 'discord' THEN dc.name
+                 WHEN e.destination_type = 'webhook' THEN wh.name
+               END as destination_name,
+               a.booster_enabled as dest_booster_enabled
+        FROM echoes e
+        JOIN feeds f ON e.feed_id = f.id
+        LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+        LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
+        LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
+        LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
+        LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
+        LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+        LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
+        WHERE e.deleted_at IS NULL AND e.user_id = ?
+        ORDER BY e.created_at DESC
+    """, (uid,)).fetchall()
+    feeds = db.execute(
+        "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    mastodon_accounts = db.execute(
+        "SELECT id, name, username, instance FROM accounts WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    email_accounts = db.execute(
+        "SELECT id, name, email FROM email_accounts WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    bluesky_accounts = db.execute(
+        "SELECT id, name, handle FROM bluesky_accounts WHERE user_id = ? ORDER BY handle",
+        (uid,),
+    ).fetchall()
+    microblog_accounts = db.execute(
+        "SELECT id, name, uid FROM microblog_accounts WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    matrix_accounts = db.execute(
+        "SELECT id, name, room_id, room_alias FROM matrix_accounts"
+        " WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    discord_accounts = db.execute(
+        "SELECT id, name, channel_id FROM discord_accounts"
+        " WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    webhook_accounts = db.execute(
+        "SELECT id, name FROM webhook_accounts"
+        " WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
+    return {
+        "echoes": echoes,
+        "feeds": feeds,
+        "mastodon_accounts": mastodon_accounts,
+        "email_accounts": email_accounts,
+        "bluesky_accounts": bluesky_accounts,
+        "microblog_accounts": microblog_accounts,
+        "matrix_accounts": matrix_accounts,
+        "discord_accounts": discord_accounts,
+        "webhook_accounts": webhook_accounts,
+    }
+
+
+def _render_echoes_error(request: Request, message: str) -> HTMLResponse:
+    """Render the echoes page with an error banner (mirrors _render_accounts_error)."""
+    uid = current_user_id(request)
+    with get_db() as db:
+        ctx = _echoes_page_context(db, uid)
+    return render(
+        "echoes.html",
+        request,
+        **ctx,
+        template_vars=available_variables(),
+        preselect_feed_id=0,
+        return_to="/echoes",
+        booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN),
+        error=message,
+    )
+
+
 @app.get("/echoes", response_class=HTMLResponse)
 async def echoes_page(request: Request, feed: str = "", from_: str = "echoes"):
     uid = current_user_id(request)
     with get_db() as db:
-        echoes = db.execute("""
-            SELECT e.*, f.name as feed_name,
-                   CASE
-                     WHEN e.destination_type = 'mastodon' THEN '@' || a.username || '@' || REPLACE(a.instance, 'https://', '')
-                     WHEN e.destination_type = 'email' THEN ea.name || ' (' || ea.email || ')'
-                     WHEN e.destination_type = 'bluesky' THEN '@' || b.handle
-                     WHEN e.destination_type = 'microblog' THEN mb.name
-                     WHEN e.destination_type = 'matrix' THEN mx.name
-                     WHEN e.destination_type = 'discord' THEN dc.name
-                     WHEN e.destination_type = 'webhook' THEN wh.name
-                   END as destination_name
-            FROM echoes e
-            JOIN feeds f ON e.feed_id = f.id
-            LEFT JOIN accounts a ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
-            LEFT JOIN email_accounts ea ON e.destination_type = 'email' AND e.destination_id = ea.id AND ea.user_id = e.user_id
-            LEFT JOIN bluesky_accounts b ON e.destination_type = 'bluesky' AND e.destination_id = b.id AND b.user_id = e.user_id
-            LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
-            LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
-            LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
-            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
-            WHERE e.deleted_at IS NULL AND e.user_id = ?
-            ORDER BY e.created_at DESC
-        """, (uid,)).fetchall()
-        feeds = db.execute(
-            "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
-        mastodon_accounts = db.execute(
-            "SELECT id, name, username, instance FROM accounts WHERE user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
-        email_accounts = db.execute(
-            "SELECT id, name, email FROM email_accounts WHERE user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
-        bluesky_accounts = db.execute(
-            "SELECT id, name, handle FROM bluesky_accounts WHERE user_id = ? ORDER BY handle",
-            (uid,),
-        ).fetchall()
-        microblog_accounts = db.execute(
-            "SELECT id, name, uid FROM microblog_accounts WHERE user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
-        matrix_accounts = db.execute(
-            "SELECT id, name, room_id, room_alias FROM matrix_accounts"
-            " WHERE user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
-        discord_accounts = db.execute(
-            "SELECT id, name, channel_id FROM discord_accounts"
-            " WHERE user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
-        webhook_accounts = db.execute(
-            "SELECT id, name FROM webhook_accounts"
-            " WHERE user_id = ? ORDER BY name",
-            (uid,),
-        ).fetchall()
+        ctx = _echoes_page_context(db, uid)
     preselect_feed_id = _filter_int(feed)
     return_to = "/reader" if from_ == "reader" else "/echoes"
-    return render("echoes.html", request, echoes=echoes, feeds=feeds,
-                  mastodon_accounts=mastodon_accounts,
-                  email_accounts=email_accounts,
-                  bluesky_accounts=bluesky_accounts,
-                  microblog_accounts=microblog_accounts,
-                  matrix_accounts=matrix_accounts,
-                  discord_accounts=discord_accounts,
-                  webhook_accounts=webhook_accounts,
+    return render("echoes.html", request,
+                  booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN),
                   template_vars=available_variables(),
                   preselect_feed_id=preselect_feed_id,
-                  return_to=return_to)
+                  return_to=return_to,
+                  **ctx)
 
 
 # Post history: one label per destination type, the instance/handle detail
@@ -5776,6 +5810,47 @@ async def toggle_echo(request: Request, echo_id: int):
             (new_val, echo_id, uid),
         )
     return {"success": True, "enabled": bool(new_val)}
+
+
+@app.post("/api/echoes/{echo_id}/booster")
+async def toggle_echo_booster(request: Request, echo_id: int):
+    """Toggle FeedBooster for one echo: this echo's posts to its Mastodon
+    destination get announced by @feedbooster@feedecho.net. Refused when the
+    destination account itself has Boost on — the account setting already
+    boosts every echo to it, so the two cannot both apply."""
+    uid = current_user_id(request)
+    if not (settings.BOOSTER_URL and settings.BOOSTER_TOKEN):
+        return _render_echoes_error(request, "FeedBooster is not configured on this server.")
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT e.destination_type, a.booster_enabled AS account_boost_enabled
+            FROM echoes e
+            LEFT JOIN accounts a
+              ON e.destination_type = 'mastodon' AND e.destination_id = a.id AND a.user_id = e.user_id
+            WHERE e.id = ? AND e.deleted_at IS NULL AND e.user_id = ?
+            """,
+            (echo_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Echo not found")
+        if row["destination_type"] != "mastodon":
+            return _render_echoes_error(
+                request, "Boost is only available for echoes to Mastodon destinations."
+            )
+        if row["account_boost_enabled"]:
+            return _render_echoes_error(
+                request,
+                "Boost is already enabled for this Mastodon account, so every echo to it is"
+                " boosted. Turn off the account setting on the Accounts page to control"
+                " individual echoes.",
+            )
+        db.execute(
+            "UPDATE echoes SET booster_enabled = 1 - booster_enabled"
+            " WHERE id = ? AND user_id = ? AND destination_type = 'mastodon'",
+            (echo_id, uid),
+        )
+    return RedirectResponse(url="/echoes", status_code=303)
 
 
 @app.post("/api/echoes/{echo_id}/edit")

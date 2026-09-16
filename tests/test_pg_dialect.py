@@ -1127,3 +1127,53 @@ class TestPostgresTimestampReads:
         finally:
             with database.get_db() as db:
                 db.execute(f'ALTER DATABASE "{dbname}" RESET TIME ZONE')
+
+
+@requires_pg
+class TestEchoBoosterConditionalFlip:
+    """The per-echo booster route's atomic conditional UPDATE must behave
+    identically on Postgres: the correlated subquery over accounts decides
+    whether the flip matches (dialect coverage for the d97d5cc gate fix)."""
+
+    _FLIP_SQL = """
+        UPDATE echoes SET booster_enabled = 1 - booster_enabled
+        WHERE id = ? AND user_id = ? AND destination_type = 'mastodon'
+          AND deleted_at IS NULL
+          AND COALESCE((
+                SELECT a.booster_enabled FROM accounts a
+                WHERE a.id = echoes.destination_id AND a.user_id = echoes.user_id
+              ), 0) = 0
+    """
+
+    def _seed(self):
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (id, name, username, instance, access_token, user_id)"
+                " VALUES (1, 'acc', 'acc', 'https://m.example', 'x', 1)"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id)"
+                " VALUES (1, 'f', 'https://f.example/rss', 1)"
+            )
+            db.execute(
+                "INSERT INTO echoes (id, feed_id, destination_type, destination_id, user_id)"
+                " VALUES (1, 1, 'mastodon', 1, 1)"
+            )
+
+    def test_flip_matches_while_account_boost_off(self, pg_env):
+        self._seed()
+        with database.get_db() as db:
+            cur = db.execute(self._FLIP_SQL, (1, 1))
+            assert cur.rowcount == 1
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 1
+
+    def test_flip_refused_while_account_boost_on(self, pg_env):
+        self._seed()
+        with database.get_db() as db:
+            db.execute("UPDATE accounts SET booster_enabled = 1 WHERE id = 1")
+            cur = db.execute(self._FLIP_SQL, (1, 1))
+            assert cur.rowcount == 0
+            row = db.execute("SELECT booster_enabled FROM echoes WHERE id = 1").fetchone()
+        assert row["booster_enabled"] == 0

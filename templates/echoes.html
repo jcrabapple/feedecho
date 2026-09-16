@@ -3,6 +3,10 @@
 {% block content %}
 <h1>Echoes</h1>
 
+{% if error %}
+<div class="alert alert-error" role="alert">{{ error }}</div>
+{% endif %}
+
 <p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, a generic webhook, or email) using a template.</p>
 
 {% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or webhook_accounts %}
@@ -277,6 +281,15 @@
                 {% endif %}
             </td>
             <td data-label="Actions" class="action-cell">
+                {% if booster_configured and echo.destination_type == 'mastodon' %}
+                    {% if echo.dest_booster_enabled %}
+                    <span class="badge badge-info" title="Boosted via the Mastodon account setting — manage it on the Accounts page.">Boost: Account</span>
+                    {% else %}
+                    <form method="post" action="/api/echoes/{{ echo.id }}/booster" class="inline">
+                        <button type="submit" class="btn-sm{% if echo.booster_enabled %} btn-success{% endif %}" title="Boost this echo's posts via FeedBooster.">{{ 'Boost: On' if echo.booster_enabled else 'Boost: Off' }}</button>
+                    </form>
+                    {% endif %}
+                {% endif %}
                 <button class="btn-sm" onclick="editEcho({{ echo.id }})">Edit</button>
                 {% if echo.enabled %}
                 <button class="btn-sm" onclick="withBusy(this, (btn) => disableEcho({{ echo.id }}, btn))">Disable</button>

@@ -9,3 +9,6 @@ venv/
 
 # Local critique tooling artifacts
 .impeccable/
+
+# Internal review/audit docs (local only)
+docs/reviews/

@@ -111,14 +111,6 @@ docker run -d --name feedecho \
 
 Behind a reverse proxy (nginx, Caddy, Traefik), point the proxy at port `8453` and set `FEEDECHO_CALLBACK_URL` to the public HTTPS URL.
 
-#### Upgrading from `FEEDCHO_*`
-
-Every variable used to be spelled `FEEDCHO_` (one `E`) — a typo. The old names
-still work, so nothing breaks on upgrade: FeedEcho prefers the `FEEDECHO_` name
-when both are set, and logs a warning at startup naming each old name it fell
-back to. Rename them at your convenience; support for the old spelling will be
-dropped in a future release.
-
 ### From source
 
 ```bash

@@ -1641,17 +1641,70 @@ def _admin_guard_last_admin(db, user_id: int, column: str) -> str | None:
     return None
 
 
+_VERIFIED_FILTERS = ("yes", "no")
+
+
+def _admin_filter_params(plan, verified):
+    """Normalize the admin user-list filter inputs (None-safe).
+
+    Unknown or invalid values fall back to 'no filter' instead of erroring:
+    a stale or hand-edited URL must never 500 the admin page.
+    """
+    p = (plan or "").strip().lower()
+    v = (verified or "").strip().lower()
+    plan_f = p if p in settings.PLAN_LIMITS else ""
+    ver_f = v if v in _VERIFIED_FILTERS else ""
+    return plan_f, ver_f
+
+
+def _admin_filter_qs(plan_f, ver_f):
+    """Query string ('?plan=trial&verified=no') carrying the active filters."""
+    parts = []
+    if plan_f:
+        parts.append("plan=" + plan_f)
+    if ver_f:
+        parts.append("verified=" + ver_f)
+    return ("?" + "&".join(parts)) if parts else ""
+
+
+async def _admin_filter_qs_from_form(request):
+    """Filter query string to re-apply after an admin action POST.
+
+    The per-row action forms carry the current filters as hidden inputs so
+    a suspend/delete inside a filtered view lands back on that view.
+    """
+    try:
+        form = await request.form()
+    except Exception:  # noqa: BLE001 — a broken body must never 500 the redirect
+        form = {}
+    plan_f, ver_f = _admin_filter_params(
+        form.get("filter_plan"), form.get("filter_verified")
+    )
+    return _admin_filter_qs(plan_f, ver_f)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     uid = _require_admin(request)
+    plan_f, ver_f = _admin_filter_params(
+        request.query_params.get("plan"), request.query_params.get("verified")
+    )
     with get_db() as db:
-        users = db.execute("""
+        sql = """
             SELECT id, email, plan, trial_ends_at, email_verified,
                    suspended, is_admin, created_at
               FROM users
              WHERE email != 'local'
-             ORDER BY created_at DESC
-        """).fetchall()
+        """
+        params = []
+        if plan_f:
+            sql += " AND plan = ?"
+            params.append(plan_f)
+        if ver_f:
+            sql += " AND email_verified = ?"
+            params.append(1 if ver_f == "yes" else 0)
+        sql += " ORDER BY created_at DESC"
+        users = db.execute(sql, params).fetchall()
         stats = _admin_stats(db)
         usage_rows = _admin_usage(db)
         usage_by_user = {row["user_id"]: row for row in usage_rows}
@@ -1669,7 +1722,8 @@ async def admin_page(request: Request):
                   plan_names=sorted(settings.PLAN_LIMITS.keys()),
                   invite_codes=invite_rows,
                   invites_required=settings.INVITES_REQUIRED,
-                  usage_by_user=usage_by_user)
+                  usage_by_user=usage_by_user,
+                  filter_plan=plan_f, filter_verified=ver_f)
 
 
 _SMTP_FORM_KEYS = (
@@ -1768,7 +1822,8 @@ async def admin_suspend(user_id: int, request: Request):
             (user_id,),
         )
     logger.info("Admin %s suspended user %s", uid, user_id)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/users/{user_id}/unsuspend")
@@ -1781,7 +1836,8 @@ async def admin_unsuspend(user_id: int, request: Request):
             (user_id,),
         )
     logger.info("Admin %s unsuspended user %s", uid, user_id)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/users/{user_id}/promote")
@@ -1794,7 +1850,8 @@ async def admin_promote(user_id: int, request: Request):
             (user_id,),
         )
     logger.info("Admin %s promoted user %s", uid, user_id)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/users/{user_id}/demote")
@@ -1814,7 +1871,8 @@ async def admin_demote(user_id: int, request: Request):
             (user_id,),
         )
     logger.info("Admin %s demoted user %s", uid, user_id)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/users/{user_id}/plan")
@@ -1837,7 +1895,8 @@ async def admin_set_plan(user_id: int, request: Request):
         row = _get_user_or_404(db, user_id)
         db.execute("UPDATE users SET plan = ? WHERE id = ?", (plan, user_id))
     logger.info("Admin %s set user %s plan to %s", uid, user_id, plan)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/users/{user_id}/extend-trial")
@@ -1873,7 +1932,8 @@ async def admin_extend_trial(user_id: int, request: Request):
             (new_end, user_id),
         )
     logger.info("Admin %s extended user %s trial by %d days (to %s)", uid, user_id, days, new_end)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/users/{user_id}/delete")
@@ -1941,7 +2001,8 @@ async def admin_delete_user(user_id: int, request: Request):
     with get_db() as db:
         _hard_delete_user(db, user_id)
     logger.info("Admin %s DELETED user %s (%s) and all their data", uid, user_id, email)
-    return RedirectResponse(url="/admin", status_code=302)
+    return RedirectResponse(url="/admin" + await _admin_filter_qs_from_form(request),
+                            status_code=302)
 
 
 @app.post("/admin/invites/generate")

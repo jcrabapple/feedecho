@@ -23,7 +23,7 @@ import secrets
 import secrets as _secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit, urlparse
+from urllib.parse import urlsplit, urlparse, urlencode
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -1648,23 +1648,30 @@ def _admin_filter_params(plan, verified):
     """Normalize the admin user-list filter inputs (None-safe).
 
     Unknown or invalid values fall back to 'no filter' instead of erroring:
-    a stale or hand-edited URL must never 500 the admin page.
+    a stale or hand-edited URL (or a stray multipart field) must never 500
+    the admin page. Plan keys are matched EXACTLY — custom
+    FEEDECHO_PLAN_LIMITS keys may be case-sensitive, and the per-row plan
+    dropdown posts the raw key — while `verified` accepts only yes/no.
     """
-    p = (plan or "").strip().lower()
-    v = (verified or "").strip().lower()
+    p = plan.strip() if isinstance(plan, str) else ""
+    v = verified.strip().lower() if isinstance(verified, str) else ""
     plan_f = p if p in settings.PLAN_LIMITS else ""
     ver_f = v if v in _VERIFIED_FILTERS else ""
     return plan_f, ver_f
 
 
 def _admin_filter_qs(plan_f, ver_f):
-    """Query string ('?plan=trial&verified=no') carrying the active filters."""
-    parts = []
+    """Query string ('?plan=trial&verified=no') carrying the active filters.
+
+    urlencode handles plan keys with reserved characters (custom
+    FEEDECHO_PLAN_LIMITS names are arbitrary strings).
+    """
+    params = {}
     if plan_f:
-        parts.append("plan=" + plan_f)
+        params["plan"] = plan_f
     if ver_f:
-        parts.append("verified=" + ver_f)
-    return ("?" + "&".join(parts)) if parts else ""
+        params["verified"] = ver_f
+    return ("?" + urlencode(params)) if params else ""
 
 
 async def _admin_filter_qs_from_form(request):

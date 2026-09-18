@@ -30,14 +30,14 @@
     <form method="get" action="/admin" class="inline-form filter-form">
         <label for="filter-plan">Plan</label>
         <select name="plan" id="filter-plan">
-            <option value="all"{% if not filter_plan %} selected{% endif %}>All plans</option>
+            <option value=""{% if not filter_plan %} selected{% endif %}>All plans</option>
             {% for p in plan_names %}
             <option value="{{ p }}"{% if filter_plan == p %} selected{% endif %}>{{ p }}</option>
             {% endfor %}
         </select>
         <label for="filter-verified">Verified</label>
         <select name="verified" id="filter-verified">
-            <option value="all"{% if not filter_verified %} selected{% endif %}>All</option>
+            <option value=""{% if not filter_verified %} selected{% endif %}>All</option>
             <option value="yes"{% if filter_verified == 'yes' %} selected{% endif %}>Verified</option>
             <option value="no"{% if filter_verified == 'no' %} selected{% endif %}>Unverified</option>
         </select>

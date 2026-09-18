@@ -789,6 +789,7 @@ def init_db_sqlite() -> None:
                 name TEXT NOT NULL,
                 url TEXT NOT NULL,
                 headers TEXT NOT NULL DEFAULT '{}',
+                body_template TEXT NOT NULL DEFAULT '',
                 user_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, url)
@@ -1019,6 +1020,10 @@ def init_db_sqlite() -> None:
             )
         """)
         _add_column_if_missing(db, "oauth_states", "user_id", "INTEGER")
+        # v1.65.0: per-webhook custom JSON body template ('' = default payload).
+        _add_column_if_missing(
+            db, "webhook_accounts", "body_template", "TEXT NOT NULL DEFAULT ''"
+        )
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS invite_codes (
@@ -1195,6 +1200,7 @@ def init_db_postgres() -> None:
                 name TEXT NOT NULL,
                 url TEXT NOT NULL,
                 headers TEXT NOT NULL DEFAULT '{}',
+                body_template TEXT NOT NULL DEFAULT '',
                 user_id BIGINT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, url)
@@ -1693,6 +1699,11 @@ def init_db_postgres() -> None:
         # Session epoch: bumped on password reset, invalidating all prior
         # session cookies for the user.
         _add_column_if_missing(db, "users", "session_epoch", "INTEGER NOT NULL DEFAULT 0")
+
+        # v1.65.0: per-webhook custom JSON body template ('' = default payload).
+        _add_column_if_missing(
+            db, "webhook_accounts", "body_template", "TEXT NOT NULL DEFAULT ''"
+        )
 
         _init_shared_tables(db)
 

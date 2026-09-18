@@ -44,6 +44,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+import template_engine
 import settings
 from feed_parser import SSRFError, ssrf_client, unpinned_client, validate_outbound_url
 from utils import (
@@ -308,33 +309,130 @@ def send_webhook(url: str, headers: dict[str, str], payload: dict) -> None:
     _raise_for_status(resp)
 
 
-def test_connection(url: str, headers: dict[str, str]) -> tuple[bool, str]:
+# ── Custom JSON body template ───────────────────────────────────────────────
+
+# The stored template is a JSON document with Jinja2 placeholders. Cap is
+# generous for real bodies while blocking paste-a-novel rows.
+MAX_BODY_TEMPLATE_CHARS = 10_000
+
+# Blank and this sentinel both mean "no custom body": blank on reconnect
+# keeps the stored template (same convention as headers, so a display-name
+# edit cannot wipe it), '{}' is the explicit way to clear one.
+CLEAR_BODY_SENTINEL = "{}"
+
+# Sample item used to render-test a body template at connect time and to
+# build the Test-button payload. Mirrors build_payload's flat item shape.
+_SAMPLE_ITEM: dict = {
+    "id": "sample-item",
+    "title": "FeedEcho webhook test",
+    "link": "",
+    "summary": "",
+    "content": "",
+    "content_link": "",
+    "author": "",
+    "date": "",
+    "tags": [],
+    "image_url": "",
+    "image_alt": "",
+}
+
+
+def normalize_body_template(text: str | None) -> str:
+    """Validate a custom JSON body template and return the stored form.
+
+    Returns '' for blank input (no custom body — keep the default flat
+    payload) and for the ``{}`` clear sentinel. Anything else must be a
+    sandbox-renderable Jinja2 template whose sample render parses as a JSON
+    object; ValueError with a user-facing message otherwise. Never called on
+    the dispatch path — dispatch uses build_body_payload, which converts
+    failures into WebhookRejectedError.
+    """
+    value = (text or "").strip()
+    if not value or value == CLEAR_BODY_SENTINEL:
+        return ""
+    if len(value) > MAX_BODY_TEMPLATE_CHARS:
+        raise ValueError(
+            f"Body template is too long (max {MAX_BODY_TEMPLATE_CHARS} characters)"
+        )
+    try:
+        rendered = render_sample_body(value)
+    except template_engine.TemplateSyntaxError as e:
+        raise ValueError(f"Body template has a syntax error: {e.message}") from e
+    except Exception as e:
+        raise ValueError(f"Body template failed to render: {type(e).__name__}") from e
+    try:
+        parsed = json.loads(rendered)
+    except ValueError as e:
+        raise ValueError(
+            "Body template must be valid JSON after placeholders render"
+            f" (sample render failed: {e})"
+        ) from e
+    if not isinstance(parsed, dict):
+        raise ValueError("Body template must be a JSON object (starts with {)")
+    return value
+
+
+def build_body_payload(template: str, item: dict, feed_name: str = "") -> dict:
+    """Render a stored body template into the payload for one item.
+
+    The rendered JSON object IS the payload — the custom body fully replaces
+    the default flat shape. Raises WebhookRejectedError (permanent) when the
+    template fails to render or the result is not a JSON object: that is a
+    stored-config problem, and retrying the same request cannot change it.
+    """
+    try:
+        rendered = template_engine.render_template(template, item, feed_name=feed_name)
+        parsed = json.loads(rendered)
+    except Exception as e:
+        raise WebhookRejectedError(
+            f"Custom body template failed: {type(e).__name__}"
+        ) from e
+    if not isinstance(parsed, dict):
+        raise WebhookRejectedError("Custom body template did not render a JSON object")
+    return parsed
+
+
+def render_sample_body(template: str) -> str:
+    """Render a body template against the sample item (connect-time check)."""
+    return template_engine.render_template(template, _SAMPLE_ITEM, feed_name="Sample feed")
+
+
+def test_connection(
+    url: str,
+    headers: dict[str, str],
+    body_template: str = "",
+) -> tuple[bool, str]:
     """Send a real test payload. Backs the accounts page Test button.
 
     A generic webhook has no read-only check — the only way to prove the
     endpoint works is to deliver something, so this posts a minimal message
-    with the account's own headers.
+    with the account's own headers. With a custom body template, the test
+    payload is built by rendering that template against the sample item, so
+    a broken template surfaces here instead of on the first real echo.
     """
+    if body_template:
+        try:
+            payload = build_body_payload(body_template, _SAMPLE_ITEM)
+        except WebhookRejectedError as e:
+            return False, f"Body template failed: {e}"
+    else:
+        payload = {
+            "text": "FeedEcho webhook test",
+            "id": "",
+            "title": "FeedEcho webhook test",
+            "link": "",
+            "summary": "",
+            "content": "",
+            "content_link": "",
+            "author": "",
+            "published": "",
+            "tags": [],
+            "image_url": "",
+            "image_alt": "",
+            "feed_name": "",
+        }
     try:
-        send_webhook(
-            url,
-            headers,
-            {
-                "text": "FeedEcho webhook test",
-                "id": "",
-                "title": "FeedEcho webhook test",
-                "link": "",
-                "summary": "",
-                "content": "",
-                "content_link": "",
-                "author": "",
-                "published": "",
-                "tags": [],
-                "image_url": "",
-                "image_alt": "",
-                "feed_name": "",
-            },
-        )
+        send_webhook(url, headers, payload)
     except WebhookAuthError as e:
         return False, str(e)
     except WebhookNotFoundError as e:

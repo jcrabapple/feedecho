@@ -412,6 +412,9 @@
                 <input type="text" name="name" id="webhook-name" placeholder="n8n workflow">
                 <label for="webhook-headers">Headers (optional)</label>
                 <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer your-token&#10;X-Custom-Header: value"></textarea>
+                <label for="webhook-body-template">Custom JSON body (optional)</label>
+                {% raw %}<textarea name="body_template" id="webhook-body-template" rows="5" placeholder='{"title": "{{ title }}", "message": "{{ summary or title }}", "open_url": "{{ link }}", "thread_id": "{{ feed_name }}"}'></textarea>{% endraw %}
+                <p class="hint">Give the endpoint a different body shape than the default payload. It uses the same variables as echo templates, must render to a JSON object, and is checked when you connect. Handy for push services — the placeholder above is the shape brrr (brrr.now) expects. Leave blank to keep any stored template on reconnect; enter <code>{}</code> to remove one.</p>
                 <button type="submit">Connect Webhook</button>
             </form>
         </section>
@@ -425,6 +428,7 @@
                     <th scope="col">Name</th>
                     <th scope="col">URL</th>
                     <th scope="col">Headers</th>
+                    <th scope="col">Body</th>
                     <th scope="col">Added</th>
                     <th scope="col">Actions</th>
                 </tr>
@@ -435,6 +439,7 @@
                     <td data-label="Name">{{ account.name }}</td>
                     <td data-label="URL"><code>{{ account.url_display }}</code></td>
                     <td data-label="Headers">{% if account.header_names %}<small>{{ account.header_names }}</small>{% else %}—{% endif %}</td>
+                    <td data-label="Body">{% if account.has_body %}<small>custom</small>{% else %}—{% endif %}</td>
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('webhook', {{ account.id }}, btn))">Test</button>

@@ -30,7 +30,7 @@ import plans
 import settings
 from _version import __version__ as APP_VERSION
 from security import decrypt_secret, encrypt_secret, hash_secret
-from webhook import dump_headers
+from webhook import dump_headers, normalize_body_template as webhook_normalize_body_template
 
 FORMAT = "feedecho-export"
 VERSION = 1
@@ -52,7 +52,7 @@ _ACCOUNTS = [
         "matrix_user_id", "room_id", "room_alias",
     ], ("homeserver", "room_id")),
     ("discord", "discord_accounts", ["name", "webhook_url", "webhook_url_hash", "channel_id"], ("webhook_url_hash",)),
-    ("webhook", "webhook_accounts", ["name", "url", "headers"], ("url",)),
+    ("webhook", "webhook_accounts", ["name", "url", "headers", "body_template"], ("url",)),
 ]
 
 ACCOUNT_TYPES = tuple(section for section, *_ in _ACCOUNTS)
@@ -300,6 +300,12 @@ def _normalize_account(section: str, account: dict) -> None:
             account["headers"] = dump_headers(headers)
         elif headers is None:
             account["headers"] = "{}"
+        # body_template is NOT NULL DEFAULT '' — same explicit-NULL coercion
+        # as base_url/headers above. A legacy export without the column
+        # simply has no key, and .get() yields None here.
+        body_template = account.get("body_template")
+        if not isinstance(body_template, str):
+            account["body_template"] = ""
 
 
 def _validate_account(section: str, account: dict, record_id) -> None:
@@ -321,6 +327,12 @@ def _validate_account(section: str, account: dict, record_id) -> None:
         headers = account.get("headers")
         if not isinstance(headers, str):
             raise ExportError(f"{label} has an invalid 'headers' value.")
+        body_template = account.get("body_template")
+        if body_template:
+            try:
+                webhook_normalize_body_template(body_template)
+            except ValueError as e:
+                raise ExportError(f"{label} has an invalid 'body_template': {e}") from e
 
 
 def _existing_account_id(db, uid: int, section: str, account: dict):

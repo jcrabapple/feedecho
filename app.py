@@ -79,10 +79,12 @@ from discord import (
     test_connection as test_discord_connection,
 )
 from webhook import (
+    CLEAR_BODY_SENTINEL as webhook_clear_body_sentinel,
     MAX_HEADERS_TEXT,
     WebhookError,
     dump_headers,
     load_headers,
+    normalize_body_template as webhook_normalize_body_template,
     normalize_webhook_url as webhook_normalize_url,
     parse_headers as webhook_parse_headers,
     test_connection as test_webhook_connection,
@@ -1202,17 +1204,19 @@ def _get_all_accounts(user_id: int = 1):
         # there) and headers shown by NAME only — values are credentials.
         webhook_rows = []
         for row in db.execute(
-            "SELECT id, name, url, headers, created_at FROM webhook_accounts"
+            "SELECT id, name, url, headers, body_template, created_at FROM webhook_accounts"
             " WHERE user_id = ? ORDER BY name",
             (user_id,),
         ).fetchall():
             header_names = ", ".join(load_headers(row["headers"]).keys())
+            has_body = bool((row["body_template"] if "body_template" in row.keys() else "") or "")
             webhook_rows.append(
                 {
                     "id": row["id"],
                     "name": row["name"],
                     "url_display": _webhook_url_display(row["url"]),
                     "header_names": header_names,
+                    "has_body": has_body,
                     "created_at": row["created_at"],
                 }
             )
@@ -3990,6 +3994,7 @@ def add_webhook_account(
     url: str = Form(...),
     name: str = Form(""),
     headers_text: str = Form(""),
+    body_template: str = Form(""),
 ):
     """Validate a generic webhook endpoint and store one account row for it.
 
@@ -4002,6 +4007,13 @@ def add_webhook_account(
     edit, not a request to clear headers — it leaves the previously stored
     headers untouched. Submitting non-empty headers still fully replaces the
     old set.
+
+    ``body_template`` follows the same keep-on-blank convention; the explicit
+    ``{}`` sentinel clears a stored template and returns the endpoint to the
+    default flat payload. Unlike headers, the template is not a credential —
+    it renders the same sandboxed template engine as echo templates and is
+    validated at connect time by rendering a sample item and parsing the
+    result as JSON.
     """
     url = url.strip()
     if not url:
@@ -4017,6 +4029,10 @@ def add_webhook_account(
         headers = webhook_parse_headers(headers_text)
     except ValueError as e:
         return _render_accounts_error(request, str(e))
+    try:
+        body_template_stored = webhook_normalize_body_template(body_template)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
 
     display_name = name.strip()[:100] or "Webhook"
 
@@ -4025,7 +4041,7 @@ def add_webhook_account(
         # Cap counts NEW rows only: reconnecting the same endpoint (to rotate
         # a token) updates in place and must not be blocked at the cap.
         existing = db.execute(
-            "SELECT id FROM webhook_accounts"
+            "SELECT id, body_template FROM webhook_accounts"
             " WHERE user_id = ? AND url = ?",
             (uid, url),
         ).fetchone()
@@ -4034,17 +4050,26 @@ def add_webhook_account(
                 _check_destination_cap(db, uid)
             except PlanError as e:
                 return _render_accounts_error(request, str(e))
+        if body_template_stored:
+            stored_body = body_template_stored
+        elif body_template.strip() == webhook_clear_body_sentinel:
+            # Explicit clear.
+            stored_body = ""
+        else:
+            # Blank (or reconnect without touching the field): keep stored.
+            stored_body = (existing["body_template"] if existing else "") or ""
         db.execute(
             """
-            INSERT INTO webhook_accounts (name, url, headers, user_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO webhook_accounts (name, url, headers, body_template, user_id)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id, url) DO UPDATE SET
                 name = excluded.name,
                 headers = CASE WHEN excluded.headers != '{}'
                                THEN excluded.headers
-                               ELSE webhook_accounts.headers END
+                               ELSE webhook_accounts.headers END,
+                body_template = excluded.body_template
             """,
-            (display_name, url, dump_headers(headers), uid),
+            (display_name, url, dump_headers(headers), stored_body, uid),
         )
     return RedirectResponse(url="/accounts?status=webhook_connected", status_code=303)
 
@@ -4060,9 +4085,13 @@ def test_webhook_account(request: Request, account_id: int):
     if not account:
         raise HTTPException(status_code=404, detail="Webhook account not found")
     # Sends a real test delivery to the endpoint with the account's headers —
-    # a generic webhook has no read-only check.
+    # a generic webhook has no read-only check. With a custom body template
+    # the test payload is rendered from it, so a broken template shows up on
+    # the Test button instead of on the first real echo.
     success, message = test_webhook_connection(
-        account["url"], load_headers(account["headers"])
+        account["url"],
+        load_headers(account["headers"]),
+        body_template=(account["body_template"] if "body_template" in account.keys() else "") or "",
     )
     return {"success": success, "message": message}
 

@@ -39,7 +39,7 @@ def _item(**overrides):
     item.update(overrides)
     return item
 
-def _setup_webhook_echo(db_tmp, echo_overrides=None, headers=None):
+def _setup_webhook_echo(db_tmp, echo_overrides=None, headers=None, body_template=None):
     """Create a webhook account, feed, and echo. Returns the echo row."""
     echo_kwargs = {
         "destination_type": "webhook",
@@ -58,9 +58,9 @@ def _setup_webhook_echo(db_tmp, echo_overrides=None, headers=None):
     headers_json = json.dumps(headers or {"Authorization": "Bearer sekrit"})
     with db_tmp.get_db() as db:
         db.execute(
-            "INSERT INTO webhook_accounts (name, url, headers)"
-            " VALUES (?, ?, ?)",
-            ("My Receiver", HOOK_URL, headers_json),
+            "INSERT INTO webhook_accounts (name, url, headers, body_template)"
+            " VALUES (?, ?, ?, ?)",
+            ("My Receiver", HOOK_URL, headers_json, body_template or ""),
         )
         db.execute(
             "INSERT INTO feeds (name, url) VALUES (?, ?)",
@@ -237,6 +237,71 @@ class TestLoadHeaders:
 
     def test_control_char_value_dropped(self):
         assert webhook.load_headers('{"X-A": "a\\rb"}') == {}
+
+# ── Client: custom JSON body template ───────────────────────────────────────
+
+BRRR_TEMPLATE = (
+    '{"title": "{{ title }}", "message": "{{ summary or title }}",'
+    ' "open_url": "{{ link }}", "thread_id": "{{ feed_name }}"}'
+)
+
+
+class TestNormalizeBodyTemplate:
+    def test_blank_is_empty(self):
+        assert webhook.normalize_body_template("") == ""
+        assert webhook.normalize_body_template("   ") == ""
+        assert webhook.normalize_body_template(None) == ""
+
+    def test_clear_sentinel_is_empty(self):
+        assert webhook.normalize_body_template("{}") == ""
+        assert webhook.normalize_body_template("  {}  ") == ""
+
+    def test_valid_template_roundtrips(self):
+        assert webhook.normalize_body_template(BRRR_TEMPLATE) == BRRR_TEMPLATE
+
+    def test_invalid_json_after_render_rejected(self):
+        # {{ title }} renders unquoted inside the object, so the result is
+        # not parseable JSON.
+        with pytest.raises(ValueError, match="valid JSON"):
+            webhook.normalize_body_template('{"a": {{ title }}}')
+
+    def test_syntax_error_rejected(self):
+        with pytest.raises(ValueError, match="syntax"):
+            webhook.normalize_body_template("{% if %}")
+
+    def test_non_object_rejected(self):
+        with pytest.raises(ValueError, match="JSON object"):
+            webhook.normalize_body_template('["{{ title }}"]')
+
+    def test_overlong_rejected(self):
+        with pytest.raises(ValueError, match="too long"):
+            webhook.normalize_body_template('{"a": "' + "x" * 10_001 + '"}')
+
+
+class TestBuildBodyPayload:
+    def test_custom_shape_replaces_default(self):
+        item = _item(summary="")
+        payload = webhook.build_body_payload(BRRR_TEMPLATE, item, feed_name="f")
+        assert payload == {
+            "title": "Test Post",
+            "message": "Test Post",
+            "open_url": "https://example.com/post/1",
+            "thread_id": "f",
+        }
+
+    def test_summary_wins_over_title(self):
+        payload = webhook.build_body_payload(BRRR_TEMPLATE, _item(), feed_name="f")
+        assert payload["message"] == "A summary of the post."
+
+    def test_render_failure_is_permanent(self):
+        with pytest.raises(webhook.WebhookRejectedError):
+            webhook.build_body_payload(
+                '{"a": "{% for x in range(999999999999) %}{% endfor %}"}', _item()
+            )
+
+    def test_non_object_render_is_permanent(self):
+        with pytest.raises(webhook.WebhookRejectedError, match="JSON object"):
+            webhook.build_body_payload('["{{ title }}"]', _item())
 
 # ── Client: send_webhook ────────────────────────────────────────────────────
 
@@ -432,6 +497,50 @@ class TestSendWebhookDispatch:
 
         monkeypatch.setattr(scheduler, "webhook_send_webhook", fail)
         assert scheduler.process_echo(echo, item) is True
+
+    def test_custom_body_template_used_for_payload(self, db_tmp, monkeypatch):
+        echo = _setup_webhook_echo(
+            db_tmp, body_template=BRRR_TEMPLATE
+        )
+        sent = []
+        monkeypatch.setattr(
+            scheduler,
+            "webhook_send_webhook",
+            lambda *a, **kw: sent.append(a) or None,
+        )
+        ok = scheduler.process_echo(echo, _item(), feed_name="f")
+        assert ok is True
+        url, headers, payload = sent[0]
+        assert payload == {
+            "title": "Test Post",
+            "message": "A summary of the post.",
+            "open_url": "https://example.com/post/1",
+            "thread_id": "f",
+        }
+        assert headers == {"Authorization": "Bearer sekrit"}
+        with db_tmp.get_db() as db:
+            row = db.execute(
+                "SELECT status FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+        assert row["status"] == "success"
+
+    def test_broken_body_template_is_permanent(self, db_tmp, monkeypatch):
+        echo = _setup_webhook_echo(db_tmp, body_template='{"a": "{% if %}"}')
+        sent = []
+        monkeypatch.setattr(
+            scheduler,
+            "webhook_send_webhook",
+            lambda *a, **kw: sent.append(a) or None,
+        )
+        assert scheduler.process_echo(echo, _item()) is True
+        # Nothing reached the wire: the payload never rendered.
+        assert sent == []
+        with db_tmp.get_db() as db:
+            row = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE echo_id = 1"
+            ).fetchone()
+        assert row["status"] == "gave_up"
+        assert "body template failed" in row["error_message"]
 
     def test_generic_error_is_retryable(self, db_tmp, monkeypatch):
         echo = _setup_webhook_echo(db_tmp)
@@ -661,6 +770,114 @@ class TestWebhookRoutes:
                 "SELECT headers FROM webhook_accounts WHERE user_id = 5"
             ).fetchone()
         assert webhook.load_headers(row["headers"]) == {}
+
+    def test_connect_stores_body_template(self, multi_client):
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Push", "body_template": BRRR_TEMPLATE},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert row["body_template"] == BRRR_TEMPLATE
+
+    def test_connect_invalid_body_template_rejected(self, multi_client):
+        r = multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": '{"a": "{% if %}"'},
+            follow_redirects=False,
+        )
+        assert r.status_code == 200
+        assert "Body template" in r.text
+        with database.get_db() as db:
+            rows = db.execute(
+                "SELECT id FROM webhook_accounts WHERE user_id = 5"
+            ).fetchall()
+        assert rows == []
+
+    def test_reconnect_blank_body_template_preserves_existing(self, multi_client):
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": BRRR_TEMPLATE},
+            follow_redirects=False,
+        )
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Renamed"},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT name, body_template FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert row["name"] == "Renamed"
+        assert row["body_template"] == BRRR_TEMPLATE
+
+    def test_reconnect_clear_sentinel_removes_body_template(self, multi_client):
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": BRRR_TEMPLATE},
+            follow_redirects=False,
+        )
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Back to default", "body_template": "{}"},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert row["body_template"] == ""
+
+    def test_test_endpoint_renders_custom_body(self, multi_client, monkeypatch):
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": BRRR_TEMPLATE},
+            follow_redirects=False,
+        )
+        sent = []
+        monkeypatch.setattr(
+            webhook, "send_webhook", lambda *a: sent.append(a) or None
+        )
+        with database.get_db() as db:
+            account_id = db.execute(
+                "SELECT id FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()["id"]
+        r = multi_client.post(f"/api/webhook-accounts/{account_id}/test")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        url, headers, payload = sent[0]
+        # The test payload is rendered from the stored template.
+        assert payload["title"] == "FeedEcho webhook test"
+        assert payload["open_url"] == ""
+        assert "text" not in payload
+
+    def test_test_endpoint_reports_broken_body_template(self, multi_client):
+        """A template that snuck past connect validation (tampered/legacy row)
+        surfaces as success=false on the Test button, never a 500."""
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": BRRR_TEMPLATE},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            account_id = db.execute(
+                "SELECT id FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()["id"]
+            db.execute(
+                "UPDATE webhook_accounts SET body_template = '{\"a\": \"{% if %}\"}'"
+                " WHERE id = ?",
+                (account_id,),
+            )
+        r = multi_client.post(f"/api/webhook-accounts/{account_id}/test")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is False
+        assert "Body template failed" in body["message"]
 
     def test_test_endpoint(self, multi_client):
         multi_client.post(

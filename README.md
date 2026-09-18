@@ -18,7 +18,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
 - **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
-- **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, or anything you run yourself
+- **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, push services like brrr, or anything you run yourself (optional custom JSON body template per endpoint)
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
 - **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, and webhook endpoints
 - **Per-feed poll intervals** — each feed checked on its own schedule
@@ -186,6 +186,7 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 ### Webhook details
 
 - Each item is POSTed as one flat JSON object: `text` (your template output), `id`, `title`, `link`, `summary`, `content`, `content_link`, `author`, `published`, `tags`, `image_url`, `image_alt`, and `feed_name`. Receivers map whatever shape they need; FeedEcho never downloads the image, the consumer fetches `image_url` itself if it wants it.
+- **Custom JSON body (optional):** paste a JSON template to replace the default flat payload entirely — same variables as echo templates, and it must render to a JSON object (validated at connect time against a sample item). Handy for push services: the shape brrr (brrr.now) expects is `{"title": "{{ title }}", "message": "{{ summary or title }}", "open_url": "{{ link }}", "thread_id": "{{ feed_name }}"}`. Blank keeps any stored template on reconnect; `{}` clears one. A template that fails to render at dispatch time is a permanent delivery failure, like a rejected payload.
 - Custom headers are optional and entered one per line (`Authorization: Bearer ...`). Header values are stored like credentials — never rendered back in the UI and never written to logs or error history.
 - Connect stores the endpoint without posting to it. The Test button sends a real test delivery — a generic webhook has no read-only check.
 - Self-hosted mode allows http and LAN/loopback targets (post to ntfy on your own network). The hosted service requires https and validates every URL against the SSRF guard, then sends through the pinned-IP transport, so a URL can never reach private addresses from our servers — and your header credentials never go out in cleartext.

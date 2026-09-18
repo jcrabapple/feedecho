@@ -84,6 +84,7 @@ from webhook import (
     WebhookError,
     WebhookNotFoundError,
     WebhookRejectedError,
+    build_body_payload as webhook_build_body_payload,
     build_payload as webhook_build_payload,
     load_headers,
     send_webhook as webhook_send_webhook,
@@ -2388,8 +2389,25 @@ def _send_webhook(
     if account is None:
         return fail_result
 
-    payload = webhook_build_payload(item, content, feed_name=feed_name)
     headers = load_headers(account["headers"])
+    body_template = (account["body_template"] if "body_template" in account.keys() else "") or ""
+    if body_template:
+        # Custom JSON body: the rendered template IS the payload. A render or
+        # parse failure is a stored-config problem — permanent, like a
+        # rejected payload, because retrying cannot change the template.
+        try:
+            payload = webhook_build_body_payload(body_template, item, feed_name=feed_name)
+        except WebhookRejectedError as e:
+            logger.error("Echo %s: webhook body template failed: %s", echo["id"], e)
+            return _fail_post(
+                posted_id,
+                claim_token,
+                echo["id"],
+                f"Webhook delivery refused: {e}",
+                permanent=True,
+            )
+    else:
+        payload = webhook_build_payload(item, content, feed_name=feed_name)
 
     # Same contract as the other senders: re-validate the claim immediately
     # before the irreversible step.

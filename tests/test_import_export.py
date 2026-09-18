@@ -280,6 +280,68 @@ class TestAccountValidation:
             with pytest.raises(import_export.ExportError):
                 import_export.import_data(db, 1, payload)
 
+    def test_webhook_body_template_import_and_export_roundtrip(self, temp_db):
+        template = '{"title": {{ title | tojson }}}'
+        payload = _payload(accounts={
+            "webhook": [{
+                "id": 1, "name": "W", "url": "https://hooks.example/x",
+                "headers": "{}", "body_template": template,
+            }],
+        })
+        with get_db() as db:
+            summary = import_export.import_data(db, 1, payload)
+            assert summary["added_accounts"] == 1
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts"
+            ).fetchone()
+            assert row["body_template"] == template
+            exported = import_export.build_export(db, 1)
+        section = [a for a in exported["accounts"]["webhook"] if a["name"] == "W"]
+        assert section[0]["body_template"] == template
+
+    def test_webhook_body_template_clear_sentinel_normalizes_to_empty(self, temp_db):
+        """`{}` in an import document means "no custom body", never a literal
+        template that would dispatch empty JSON objects."""
+        payload = _payload(accounts={
+            "webhook": [{
+                "id": 1, "name": "W", "url": "https://hooks.example/x",
+                "body_template": "{}",
+            }],
+        })
+        with get_db() as db:
+            import_export.import_data(db, 1, payload)
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts"
+            ).fetchone()
+        assert row["body_template"] == ""
+
+    def test_webhook_body_template_legacy_export_defaults_empty(self, temp_db):
+        """An export produced before the column existed imports cleanly."""
+        payload = _payload(accounts={
+            "webhook": [{
+                "id": 1, "name": "W", "url": "https://hooks.example/x",
+                "headers": "{}",
+            }],
+        })
+        with get_db() as db:
+            summary = import_export.import_data(db, 1, payload)
+            assert summary["added_accounts"] == 1
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts"
+            ).fetchone()
+        assert row["body_template"] == ""
+
+    def test_webhook_body_template_invalid_raises_export_error(self, temp_db):
+        payload = _payload(accounts={
+            "webhook": [{
+                "id": 1, "name": "W", "url": "https://hooks.example/x",
+                "body_template": '{"a": "{% if %}"}',
+            }],
+        })
+        with get_db() as db:
+            with pytest.raises(import_export.ExportError, match="body_template"):
+                import_export.import_data(db, 1, payload)
+
     def test_discord_recomputes_hash_ignoring_stale_payload_value(self, temp_db):
         """Finding #27: the hash in the payload must never be trusted --
         it's always recomputed from webhook_url."""

@@ -322,11 +322,15 @@ CLEAR_BODY_SENTINEL = "{}"
 
 # Sample item used to render-test a body template at connect time and to
 # build the Test-button payload. Mirrors build_payload's flat item shape.
+# Deliberately nasty: the title carries double quotes and a backslash, the
+# summary a newline, so a naive `"{{ title }}"`-style template (placeholder
+# inside JSON quotes) fails validation AT CONNECT TIME with a pointer to the
+# `| tojson` filter instead of permanently failing on the first real item.
 _SAMPLE_ITEM: dict = {
     "id": "sample-item",
-    "title": "FeedEcho webhook test",
+    "title": 'Feed "Echo" test \\ demo',
     "link": "",
-    "summary": "",
+    "summary": "Line one\nLine two",
     "content": "",
     "content_link": "",
     "author": "",
@@ -335,6 +339,15 @@ _SAMPLE_ITEM: dict = {
     "image_url": "",
     "image_alt": "",
 }
+
+
+def is_clear_body(text: str | None) -> bool:
+    """True when the submitted body template is the clear sentinel.
+
+    Whitespace-insensitive: `{}`, `{ }`, and `{\n}` all mean "remove the
+    stored template and return to the default payload".
+    """
+    return re.sub(r"\s+", "", (text or "")) == "{}"
 
 
 def normalize_body_template(text: str | None) -> str:
@@ -348,7 +361,7 @@ def normalize_body_template(text: str | None) -> str:
     failures into WebhookRejectedError.
     """
     value = (text or "").strip()
-    if not value or value == CLEAR_BODY_SENTINEL:
+    if not value or is_clear_body(value):
         return ""
     if len(value) > MAX_BODY_TEMPLATE_CHARS:
         raise ValueError(
@@ -365,7 +378,9 @@ def normalize_body_template(text: str | None) -> str:
     except ValueError as e:
         raise ValueError(
             "Body template must be valid JSON after placeholders render"
-            f" (sample render failed: {e})"
+            f" (sample render failed: {e}). To put text inside a JSON"
+            " string, use the tojson filter and no surrounding quotes —"
+            " {{ title | tojson }} instead of \"{{ title }}\"."
         ) from e
     if not isinstance(parsed, dict):
         raise ValueError("Body template must be a JSON object (starts with {)")
@@ -412,7 +427,7 @@ def test_connection(
     """
     if body_template:
         try:
-            payload = build_body_payload(body_template, _SAMPLE_ITEM)
+            payload = build_body_payload(body_template, _SAMPLE_ITEM, feed_name="Sample feed")
         except WebhookRejectedError as e:
             return False, f"Body template failed: {e}"
     else:

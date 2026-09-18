@@ -241,8 +241,8 @@ class TestLoadHeaders:
 # ── Client: custom JSON body template ───────────────────────────────────────
 
 BRRR_TEMPLATE = (
-    '{"title": "{{ title }}", "message": "{{ summary or title }}",'
-    ' "open_url": "{{ link }}", "thread_id": "{{ feed_name }}"}'
+    '{"title": {{ title | tojson }}, "message": {{ (summary or title) | tojson }},'
+    ' "open_url": {{ link | tojson }}, "thread_id": {{ feed_name | tojson }}}'
 )
 
 
@@ -259,6 +259,21 @@ class TestNormalizeBodyTemplate:
     def test_valid_template_roundtrips(self):
         assert webhook.normalize_body_template(BRRR_TEMPLATE) == BRRR_TEMPLATE
 
+    def test_naive_quoted_interpolation_rejected(self):
+        """`"{{ title }}"` inside JSON quotes breaks on any item carrying a
+        quote or newline — the nasty sample item makes that a CONNECT-time
+        failure instead of a permanent dispatch failure on a real item."""
+        with pytest.raises(ValueError, match="tojson"):
+            webhook.normalize_body_template('{"title": "{{ title }}"}')
+
+    def test_clear_sentinel_whitespace_variants(self):
+        assert webhook.is_clear_body("{}")
+        assert webhook.is_clear_body("{ }")
+        assert webhook.is_clear_body("{\n}")
+        assert webhook.normalize_body_template("{ }") == ""
+        assert not webhook.is_clear_body('{"a": 1}')
+        assert not webhook.is_clear_body("")
+
     def test_invalid_json_after_render_rejected(self):
         # {{ title }} renders unquoted inside the object, so the result is
         # not parseable JSON.
@@ -271,7 +286,7 @@ class TestNormalizeBodyTemplate:
 
     def test_non_object_rejected(self):
         with pytest.raises(ValueError, match="JSON object"):
-            webhook.normalize_body_template('["{{ title }}"]')
+            webhook.normalize_body_template('[{{ title | tojson }}]')
 
     def test_overlong_rejected(self):
         with pytest.raises(ValueError, match="too long"):
@@ -302,6 +317,30 @@ class TestBuildBodyPayload:
     def test_non_object_render_is_permanent(self):
         with pytest.raises(webhook.WebhookRejectedError, match="JSON object"):
             webhook.build_body_payload('["{{ title }}"]', _item())
+
+    def test_special_characters_survive_via_tojson(self):
+        """Quotes, backslashes, and newlines in untrusted feed content must
+        round-trip exactly — this is what `| tojson` buys over naive
+        string interpolation."""
+        nasty = _item(title='Say "hi" \\ C:\\path', summary="a\nb")
+        payload = webhook.build_body_payload(BRRR_TEMPLATE, nasty, feed_name="f\nd")
+        assert payload == {
+            "title": 'Say "hi" \\ C:\\path',
+            "message": "a\nb",
+            "open_url": "https://example.com/post/1",
+            "thread_id": "f\nd",
+        }
+
+    def test_injection_via_title_is_escaped(self):
+        """A hostile title cannot add keys to the rendered JSON object."""
+        hostile = _item(title='x", "admin": true, "evil": "')
+        payload = webhook.build_body_payload(BRRR_TEMPLATE, hostile, feed_name="f")
+        assert payload == {
+            "title": 'x", "admin": true, "evil": "',
+            "message": "A summary of the post.",
+            "open_url": "https://example.com/post/1",
+            "thread_id": "f",
+        }
 
 # ── Client: send_webhook ────────────────────────────────────────────────────
 
@@ -832,6 +871,24 @@ class TestWebhookRoutes:
             ).fetchone()
         assert row["body_template"] == ""
 
+    def test_reconnect_clear_sentinel_with_whitespace(self, multi_client):
+        """`{ }` and `{}\\n` are the same clear request as `{}`."""
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": BRRR_TEMPLATE},
+            follow_redirects=False,
+        )
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "body_template": " { }\n"},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert row["body_template"] == ""
+
     def test_test_endpoint_renders_custom_body(self, multi_client, monkeypatch):
         multi_client.post(
             "/api/webhook-accounts",
@@ -851,9 +908,10 @@ class TestWebhookRoutes:
         body = r.json()
         assert body["success"] is True
         url, headers, payload = sent[0]
-        # The test payload is rendered from the stored template.
-        assert payload["title"] == "FeedEcho webhook test"
-        assert payload["open_url"] == ""
+        # The test payload is rendered from the stored template against the
+        # (nasty) sample item, so the escaped title proves tojson handled it.
+        assert payload["title"] == 'Feed "Echo" test \\ demo'
+        assert payload["thread_id"] == "Sample feed"
         assert "text" not in payload
 
     def test_test_endpoint_reports_broken_body_template(self, multi_client):

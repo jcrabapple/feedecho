@@ -83,6 +83,7 @@ from webhook import (
     MAX_HEADERS_TEXT,
     WebhookError,
     dump_headers,
+    is_clear_body as webhook_is_clear_body,
     load_headers,
     normalize_body_template as webhook_normalize_body_template,
     normalize_webhook_url as webhook_normalize_url,
@@ -4030,9 +4031,12 @@ def add_webhook_account(
     except ValueError as e:
         return _render_accounts_error(request, str(e))
     try:
-        body_template_stored = webhook_normalize_body_template(body_template)
+        body_for_sql = webhook_normalize_body_template(body_template)
     except ValueError as e:
         return _render_accounts_error(request, str(e))
+    if webhook_is_clear_body(body_template):
+        # Explicit clear, expressed in SQL as the sentinel value.
+        body_for_sql = webhook_clear_body_sentinel
 
     display_name = name.strip()[:100] or "Webhook"
 
@@ -4041,7 +4045,7 @@ def add_webhook_account(
         # Cap counts NEW rows only: reconnecting the same endpoint (to rotate
         # a token) updates in place and must not be blocked at the cap.
         existing = db.execute(
-            "SELECT id, body_template FROM webhook_accounts"
+            "SELECT id FROM webhook_accounts"
             " WHERE user_id = ? AND url = ?",
             (uid, url),
         ).fetchone()
@@ -4050,14 +4054,10 @@ def add_webhook_account(
                 _check_destination_cap(db, uid)
             except PlanError as e:
                 return _render_accounts_error(request, str(e))
-        if body_template_stored:
-            stored_body = body_template_stored
-        elif body_template.strip() == webhook_clear_body_sentinel:
-            # Explicit clear.
-            stored_body = ""
-        else:
-            # Blank (or reconnect without touching the field): keep stored.
-            stored_body = (existing["body_template"] if existing else "") or ""
+        # The keep-on-blank / clear-on-sentinel logic lives in the SQL CASE
+        # so two concurrent first-connects cannot clobber each other (the
+        # headers column follows the same pattern). Blank keeps the stored
+        # template; the sentinel clears it; anything else replaces it.
         db.execute(
             """
             INSERT INTO webhook_accounts (name, url, headers, body_template, user_id)
@@ -4067,9 +4067,15 @@ def add_webhook_account(
                 headers = CASE WHEN excluded.headers != '{}'
                                THEN excluded.headers
                                ELSE webhook_accounts.headers END,
-                body_template = excluded.body_template
+                body_template = CASE
+                    WHEN excluded.body_template = '{}'
+                        THEN ''
+                    WHEN excluded.body_template != ''
+                        THEN excluded.body_template
+                    ELSE webhook_accounts.body_template
+                END
             """,
-            (display_name, url, dump_headers(headers), stored_body, uid),
+            (display_name, url, dump_headers(headers), body_for_sql, uid),
         )
     return RedirectResponse(url="/accounts?status=webhook_connected", status_code=303)
 

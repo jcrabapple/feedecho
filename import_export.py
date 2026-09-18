@@ -328,9 +328,16 @@ def _validate_account(section: str, account: dict, record_id) -> None:
         if not isinstance(headers, str):
             raise ExportError(f"{label} has an invalid 'headers' value.")
         body_template = account.get("body_template")
-        if body_template:
+        if not isinstance(body_template, str) or not body_template:
+            # Missing key (legacy export), None, or blank: default payload.
+            account["body_template"] = ""
+        else:
+            # Store the NORMALIZED form back: the {} clear sentinel must not
+            # persist as a literal template (it would dispatch empty objects
+            # instead of the default payload), and this validates real
+            # templates the same way the connect route does.
             try:
-                webhook_normalize_body_template(body_template)
+                account["body_template"] = webhook_normalize_body_template(body_template)
             except ValueError as e:
                 raise ExportError(f"{label} has an invalid 'body_template': {e}") from e
 

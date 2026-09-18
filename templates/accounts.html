@@ -413,8 +413,8 @@
                 <label for="webhook-headers">Headers (optional)</label>
                 <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer your-token&#10;X-Custom-Header: value"></textarea>
                 <label for="webhook-body-template">Custom JSON body (optional)</label>
-                {% raw %}<textarea name="body_template" id="webhook-body-template" rows="5" placeholder='{"title": "{{ title }}", "message": "{{ summary or title }}", "open_url": "{{ link }}", "thread_id": "{{ feed_name }}"}'></textarea>{% endraw %}
-                <p class="hint">Give the endpoint a different body shape than the default payload. It uses the same variables as echo templates, must render to a JSON object, and is checked when you connect. Handy for push services — the placeholder above is the shape brrr (brrr.now) expects. Leave blank to keep any stored template on reconnect; enter <code>{}</code> to remove one.</p>
+                {% raw %}<textarea name="body_template" id="webhook-body-template" rows="5" placeholder='{"title": {{ title | tojson }}, "message": {{ (summary or title) | tojson }}, "open_url": {{ link | tojson }}, "thread_id": {{ feed_name | tojson }}}'></textarea>{% endraw %}
+                {% raw %}<p class="hint">Give the endpoint a different body shape than the default payload. It uses the same variables as echo templates, must render to a JSON object, and is checked when you connect. Important: embed text with the <code>tojson</code> filter and no surrounding quotes — <code>{{ title | tojson }}</code>, not <code>"{{ title }}"</code> — so titles containing quotes or newlines stay valid JSON. Handy for push services: the placeholder above is the shape brrr (brrr.now) expects. Leave blank to keep any stored template on reconnect; enter <code>{}</code> to remove one.</p>{% endraw %}
                 <button type="submit">Connect Webhook</button>
             </form>
         </section>

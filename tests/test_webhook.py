@@ -889,6 +889,20 @@ class TestWebhookRoutes:
             ).fetchone()
         assert row["body_template"] == ""
 
+    def test_first_connect_with_clear_sentinel_stores_empty(self, multi_client):
+        """Initial connect has no conflict row, so the SQL CASE never fires —
+        the sentinel must still normalize to '', not persist as literal {}."""
+        multi_client.post(
+            "/api/webhook-accounts",
+            data={"url": HOOK_URL, "name": "Fresh", "body_template": "{}"},
+            follow_redirects=False,
+        )
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT body_template FROM webhook_accounts WHERE user_id = 5"
+            ).fetchone()
+        assert row["body_template"] == ""
+
     def test_test_endpoint_renders_custom_body(self, multi_client, monkeypatch):
         multi_client.post(
             "/api/webhook-accounts",

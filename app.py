@@ -4058,6 +4058,11 @@ def add_webhook_account(
         # so two concurrent first-connects cannot clobber each other (the
         # headers column follows the same pattern). Blank keeps the stored
         # template; the sentinel clears it; anything else replaces it.
+        # On INITIAL connect there is no conflict row, so the CASE never
+        # fires — a fresh row must store '' for the clear sentinel, never
+        # the literal '{}', or dispatch would send empty JSON objects.
+        if webhook_is_clear_body(body_template) and not existing:
+            body_for_sql = ""
         db.execute(
             """
             INSERT INTO webhook_accounts (name, url, headers, body_template, user_id)

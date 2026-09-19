@@ -16,7 +16,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Mastodon OAuth** — connect accounts with one click, no manual token creation
 - **Bluesky support** — connect accounts with an App Password; posts get auto-detected link and hashtag facets (links clickable, hashtags as real, searchable tags), 300-grapheme truncation, and image embeds with alt text
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
-- **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries
+- **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries (optionally with full-HTML formatted bodies via the render_html echo flag)
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
 - **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, push services like brrr, or anything you run yourself (optional custom JSON body template per endpoint)
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ content_html }}` (sanitized HTML passthrough for markup-aware destinations), `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
@@ -223,7 +223,7 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ hashtags }}` | Feed tags as #hashtags |
 | `{{ image_url }}` | First image URL from the item |
 | `{{ content_link }}` | First outbound link inside the item's content (link-blogs) |
-| `{{ content_html }}` | Full content as sanitized HTML — links, formatting, and images kept; scripts/handlers/foreign schemes stripped at ingest. Renders in webhook bodies and other markup-aware destinations; plain-text destinations (Mastodon, Bluesky) show the raw tags, so use `{{ content }}` there |
+| `{{ content_html }}` | Full content as sanitized HTML — links, formatting, and images kept; scripts/handlers/foreign schemes stripped at ingest. Renders in webhook bodies, email HTML parts (render_html echo flag), and Matrix formatted bodies; plain-text destinations (Mastodon, Bluesky) show the raw tags, so use `{{ content }}` there |
 | `{{ feed_name }}` | Name of the source feed |
 
 Legacy spellings `{{ date:iso }}` and `{{ date:short }}` keep working.

@@ -455,3 +455,129 @@ class TestImportExportRenderHtml:
             import_export.import_data(db, 1, self._export_payload(1))
             exported = import_export.build_export(db, 1)
         assert exported["echoes"][0]["render_html"] == 1
+
+
+# ── Phase 3: Matrix formatted_body passthrough ──────────────────────────────
+
+class TestMatrixRenderHtml:
+    def test_send_message_formatted_becomes_formatted_body(self):
+        from matrix import send_message
+
+        sent = []
+        with mock.patch("matrix.send_event", lambda *a: sent.append(a) or "evt"):
+            send_message("https://hs.example", "tok", "!r:hs.example",
+                         "fallback text", "txn1", formatted="<p>Hi <b>there</b></p>")
+        content = sent[0][3]
+        assert content["format"] == "org.matrix.custom.html"
+        assert content["formatted_body"] == "<p>Hi <b>there</b></p>"
+        assert content["body"] == "fallback text"
+
+    def test_send_message_without_formatted_keeps_legacy_linkify(self):
+        from matrix import send_message
+
+        sent = []
+        with mock.patch("matrix.send_event", lambda *a: sent.append(a) or "evt"):
+            send_message("https://hs.example", "tok", "!r:hs.example",
+                         "see https://e.com/x", "txn2")
+        content = sent[0][3]
+        assert content["formatted_body"] != "see https://e.com/x"
+        assert 'href="https://e.com/x"' in content["formatted_body"]
+
+    def _setup_matrix_echo(self, db_tmp, render_html):
+        with db_tmp.get_db() as db:
+            db.execute(
+                "INSERT INTO matrix_accounts (name, homeserver, access_token, room_id)"
+                " VALUES ('room', 'https://hs.example', 'tok', '!r:hs.example')"
+            )
+            db.execute("INSERT INTO feeds (name, url) VALUES ('f', 'https://e.com/feed')")
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, filter_keywords, filter_mode,
+                                       content_warning, attach_image, render_html,
+                                       delivery_mode, enabled)
+                   VALUES (1, 'matrix', 1, '{{ content_html }}', 'public', '', 'exclude',
+                           '', 0, ?, 'instant', 1)""",
+                (render_html,),
+            )
+        with db_tmp.get_db() as db:
+            return db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+
+    def test_dispatch_uses_formatted_body_when_flag_set(self, db_tmp, monkeypatch):
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "matrix_send_message",
+            lambda *a, **kw: sent.append((a, kw)) or "evt",
+        )
+        echo = self._setup_matrix_echo(db_tmp, render_html=1)
+        item = {
+            "id": "i1", "title": "T", "link": "https://e.com/1", "summary": "",
+            "content": "Hi", "content_html": '<p>Hi <a href="https://e.com/x">x</a></p>',
+            "date": "", "image_url": "", "tags": [],
+        }
+        assert scheduler.process_echo(echo, item) is True
+        args, kwargs = sent[0]
+        body, formatted = args[3], kwargs["formatted"]
+        # Plain fallback is the structure-preserving text conversion.
+        assert "Hi x" in body and "<" not in body
+        # formatted_body is the sanitized rendered markup.
+        assert 'href="https://e.com/x"' in formatted
+        assert "<p>Hi" in formatted
+
+    def test_dispatch_plain_matrix_echo_unchanged(self, db_tmp, monkeypatch):
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "matrix_send_message",
+            lambda *a, **kw: sent.append((a, kw)) or "evt",
+        )
+        echo = self._setup_matrix_echo(db_tmp, render_html=0)
+        item = {
+            "id": "i1", "title": "T", "link": "https://e.com/1", "summary": "",
+            "content": "plain body", "content_html": "<p>plain body</p>",
+            "date": "", "image_url": "", "tags": [],
+        }
+        assert scheduler.process_echo(echo, item) is True
+        args, kwargs = sent[0]
+        # Legacy behavior: the rendered template output posts as-is, no
+        # formatted kwarg, no conversion.
+        assert args[3] == "<p>plain body</p>"
+        assert kwargs == {}
+
+    def test_route_clamps_flag_for_matrix(self, client):
+        with database.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES ('f', 'https://e.com/feed')")
+            db.execute(
+                "INSERT INTO matrix_accounts (name, homeserver, access_token, room_id)"
+                " VALUES ('room', 'https://hs.example', 'tok', '!r:hs')"
+            )
+        client.post("/api/echoes", data={
+            "feed_id": "1", "destination_type": "matrix", "matrix_account_id": "1",
+            "template": "t", "render_html": "true", "delivery_mode": "instant",
+        }, follow_redirects=False)
+        with database.get_db() as db:
+            row = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+        assert row["render_html"] == 1
+
+    def test_import_clamps_flag_for_matrix(self, db_tmp):
+        import import_export
+
+        payload = {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://a.example/rss"}],
+            "accounts": {
+                "matrix": [{
+                    "id": 1, "name": "r", "homeserver": "https://hs.example",
+                    "access_token": "tok", "room_id": "!r:hs",
+                }],
+            },
+            "echoes": [{
+                "feed_id": 1, "destination_type": "matrix", "destination_id": 1,
+                "template": "t", "visibility": "public", "enabled": 1,
+                "render_html": 1, "delivery_mode": "instant",
+            }],
+        }
+        with db_tmp.get_db() as db:
+            import import_export
+            import_export.import_data(db, 1, payload)
+            row = db.execute("SELECT render_html FROM echoes").fetchone()
+        assert row["render_html"] == 1

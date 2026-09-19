@@ -25,6 +25,8 @@ from feed_parser import (
     get_new_items,
     get_backdated_items,
     _parse_item_date,
+    html_to_text,
+    sanitize_html,
     truncate,
 )
 from filters import is_filtered, match_reason
@@ -1180,7 +1182,7 @@ def _echo_attach_image(echo) -> bool:
 
 
 def _echo_render_html(echo) -> bool:
-    """The echo's render_html flag (email destination), defaulting off."""
+    """The echo's render_html flag (email/Matrix destinations), defaulting off."""
     try:
         return bool(echo["render_html"])
     except (KeyError, IndexError):
@@ -2223,13 +2225,28 @@ def _send_matrix(
         return False
 
     try:
-        event_id = matrix_send_message(
-            base_url,
-            access_token,
-            room_id,
-            content,
-            matrix_transaction_id(echo["id"], item["id"]),
-        )
+        # render_html echoes carry markup: the rendered output becomes the
+        # formatted_body (re-sanitized at the send boundary — the template
+        # may also interpolate raw-text variables) and the plain fallback is
+        # the structure-preserving text conversion. Plain echoes keep the
+        # legacy escape-and-linkify behavior.
+        if _echo_render_html(echo):
+            event_id = matrix_send_message(
+                base_url,
+                access_token,
+                room_id,
+                html_to_text(content),
+                matrix_transaction_id(echo["id"], item["id"]),
+                formatted=sanitize_html(content),
+            )
+        else:
+            event_id = matrix_send_message(
+                base_url,
+                access_token,
+                room_id,
+                content,
+                matrix_transaction_id(echo["id"], item["id"]),
+            )
     except MatrixAuthError as e:
         # Token rejected: retries cannot help until the user reconnects.
         logger.error("Echo %s: Matrix token rejected: %s", echo["id"], e)

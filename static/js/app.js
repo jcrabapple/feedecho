@@ -350,6 +350,9 @@ function editEcho(echoId) {
                 <label>Matrix Room
                     <select name="matrix_account_id">${matrixOpts}</select>
                 </label>
+                <label>Render body as HTML
+                    <input type="checkbox" name="render_html" value="true"${renderHtml ? ' checked' : ''}>
+                </label>
             </div>
             <div class="form-row" id="edit-discord-fields-${echoId}" style="${discordStyle}">
                 <label>Discord Channel

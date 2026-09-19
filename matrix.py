@@ -451,13 +451,24 @@ def send_message(
     room_id: str,
     body: str,
     txn_id: str,
+    formatted: str = "",
 ) -> str:
-    """Send a text message, with an HTML body when the text contains links."""
+    """Send a text message, with an HTML body when the text contains links.
+
+    ``formatted`` is pre-rendered HTML (an echo with render_html set, whose
+    output embeds ingest-sanitized {{ content_html }}): it becomes the
+    ``formatted_body`` and the plain ``body`` stays the fallback text. When
+    empty, the legacy behavior applies — an HTML body is synthesized from the
+    plain text only when the text contains links.
+    """
     text = _truncate_body(body)
     if not text.strip():
         raise MatrixError("Cannot send an empty message to Matrix")
     content = {"msgtype": "m.text", "body": text}
-    if _URL_RE.search(text):
+    if formatted:
+        content["format"] = "org.matrix.custom.html"
+        content["formatted_body"] = _truncate_body(formatted)
+    elif _URL_RE.search(text):
         content["format"] = "org.matrix.custom.html"
         content["formatted_body"] = html_body(text)
     return send_event(base_url, access_token, room_id, content, txn_id)

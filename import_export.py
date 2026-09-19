@@ -610,8 +610,8 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 filter_mode,
                 str(echo.get("content_warning") or ""),
                 1 if echo.get("attach_image") else 0,
-                # Clamp like the connect route: instant email echoes only.
-                1 if echo.get("render_html") and dest_type == "email"
+                # Clamp like the connect route: instant email/Matrix echoes.
+                1 if echo.get("render_html") and dest_type in ("email", "matrix")
                 and delivery_mode == "instant" else 0,
                 delivery_mode,
                 drip,

@@ -169,6 +169,10 @@
                 {% endfor %}
             </select>
         </label>
+        <label>Render body as HTML
+            <input type="checkbox" name="render_html" value="true">
+            <span class="hint" style="margin: 0.2rem 0 0;">Send the rendered output as the room's formatted body — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links.</span>
+        </label>
     </div>
     <div class="form-row" id="discord-fields"{{ dest_hidden('discord') }}>
         <label>Discord Channel
@@ -270,7 +274,7 @@
                 {% if echo.attach_image %}
                 <br><span class="badge badge-info">IMG</span>
                 {% endif %}
-                {% if echo.destination_type == 'email' and echo.render_html %}
+                {% if echo.destination_type in ('email', 'matrix') and echo.render_html %}
                 <br><span class="badge badge-info">HTML</span>
                 {% endif %}
                 {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}

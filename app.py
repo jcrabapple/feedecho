@@ -5906,13 +5906,14 @@ async def add_echo(
         with get_db() as db:
             drip_limit = plans.clamp_drip_limit(drip_limit, _user_plan(db, current_user_id(request)))
 
-    # render_html applies only to instant email echoes: the HTML part comes
-    # from the rendered template (which carries ingest-sanitized
-    # {{ content_html }}). Digests stay text-only and non-email destinations
-    # speak plain text, so the flag clamps off there rather than erroring.
+    # render_html applies only to instant email/Matrix echoes: the rendered
+    # template (which may embed ingest-sanitized {{ content_html }}) becomes
+    # the email HTML part or the Matrix formatted_body. Digests stay
+    # text-only and other destinations speak plain text, so the flag clamps
+    # off there rather than erroring.
     is_render_html = (
         1 if render_html in ("1", "true", "on")
-        and destination_type == "email"
+        and destination_type in ("email", "matrix")
         and delivery_mode == "instant"
         else 0
     )
@@ -6122,13 +6123,14 @@ async def edit_echo(
         with get_db() as db:
             drip_limit = plans.clamp_drip_limit(drip_limit, _user_plan(db, current_user_id(request)))
 
-    # render_html applies only to instant email echoes: the HTML part comes
-    # from the rendered template (which carries ingest-sanitized
-    # {{ content_html }}). Digests stay text-only and non-email destinations
-    # speak plain text, so the flag clamps off there rather than erroring.
+    # render_html applies only to instant email/Matrix echoes: the rendered
+    # template (which may embed ingest-sanitized {{ content_html }}) becomes
+    # the email HTML part or the Matrix formatted_body. Digests stay
+    # text-only and other destinations speak plain text, so the flag clamps
+    # off there rather than erroring.
     is_render_html = (
         1 if render_html in ("1", "true", "on")
-        and destination_type == "email"
+        and destination_type in ("email", "matrix")
         and delivery_mode == "instant"
         else 0
     )

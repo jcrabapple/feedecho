@@ -621,6 +621,7 @@ def init_db_sqlite() -> None:
                 filter_mode TEXT NOT NULL DEFAULT 'exclude',
                 content_warning TEXT DEFAULT '',
                 attach_image INTEGER NOT NULL DEFAULT 0,
+                render_html INTEGER NOT NULL DEFAULT 0,
                 delivery_mode TEXT NOT NULL DEFAULT 'instant',
                 drip_limit INTEGER NOT NULL DEFAULT 0,
                 one_shot INTEGER NOT NULL DEFAULT 0,
@@ -647,6 +648,10 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "echoes", "deleted_at", "TIMESTAMP")
         _add_column_if_missing(db, "echoes", "one_shot", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "echoes", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
+        # v1.67.0: email echoes may render the body as HTML ({{ content_html }}).
+        _add_column_if_missing(
+            db, "echoes", "render_html", "INTEGER NOT NULL DEFAULT 0"
+        )
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS digest_items (
@@ -1368,6 +1373,7 @@ def init_db_postgres() -> None:
                 filter_mode TEXT NOT NULL DEFAULT 'exclude',
                 content_warning TEXT DEFAULT '',
                 attach_image INTEGER NOT NULL DEFAULT 0,
+                render_html INTEGER NOT NULL DEFAULT 0,
                 delivery_mode TEXT NOT NULL DEFAULT 'instant',
                 drip_limit INTEGER NOT NULL DEFAULT 0,
                 one_shot INTEGER NOT NULL DEFAULT 0,
@@ -1379,6 +1385,10 @@ def init_db_postgres() -> None:
         """)
         _add_column_if_missing(db, "echoes", "one_shot", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "echoes", "booster_enabled", "INTEGER NOT NULL DEFAULT 0")
+        # v1.67.0: email echoes may render the body as HTML ({{ content_html }}).
+        _add_column_if_missing(
+            db, "echoes", "render_html", "INTEGER NOT NULL DEFAULT 0"
+        )
         _add_column_if_missing(db, "echoes", "filter_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(
             db, "echoes", "filter_mode", "TEXT NOT NULL DEFAULT 'exclude'"

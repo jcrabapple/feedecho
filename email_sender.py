@@ -16,7 +16,7 @@ from email.mime.multipart import MIMEMultipart
 
 import settings
 from database import get_db
-from feed_parser import SSRFError, validate_outbound_url
+from feed_parser import SSRFError, html_to_text, validate_outbound_url
 from security import decrypt_secret
 from utils import rows_to_dict
 
@@ -71,14 +71,20 @@ def _normalize(settings: dict) -> dict | None:
     }
 
 
-def _render_html_body(body: str, images: list[dict]) -> str:
+def _render_html_body(body: str, images: list[dict], escape_body: bool = True) -> str:
     """HTML alternative with images embedded by Content-ID.
 
-    The template output is plain text, so it is escaped verbatim before
-    entering the HTML part; nothing else is trusted. Content-IDs use the
+    Default (escape_body=True) treats the template output as plain text and
+    escapes it verbatim before entering the HTML part; nothing else is
+    trusted. With escape_body=False the body IS the HTML (email echoes with
+    render_html set, whose templates embed the ingest-sanitized
+    {{ content_html }}); it is inserted as-is. Content-IDs use the
     image<index>@feedecho scheme written in _send_via.
     """
-    parts = [f'<div style="white-space: pre-wrap;">{html.escape(body)}</div>']
+    if escape_body:
+        parts = [f'<div style="white-space: pre-wrap;">{html.escape(body)}</div>']
+    else:
+        parts = [body]
     for i, image in enumerate(images):
         alt = html.escape((image.get("alt") or "").strip(), quote=True)
         parts.append(
@@ -98,13 +104,25 @@ def _mime_image_part(cid: str, image: dict) -> MIMEImage:
     return part
 
 
-def _send_via(cfg: dict, to_email: str, subject: str, body: str, images: list[dict] | None = None) -> None:
+def _send_via(
+    cfg: dict,
+    to_email: str,
+    subject: str,
+    body: str,
+    images: list[dict] | None = None,
+    render_html: bool = False,
+) -> None:
     """Send one email through the given SMTP config. Raises on failure.
 
     Without images the message is a plain multipart/alternative carrying the
     text body. With images it becomes multipart/related: the alternative
     gains an HTML part whose <img> tags reference inline image parts by
     Content-ID, so clients render the images without any remote requests.
+
+    render_html=True means the body is itself the HTML part (an email echo
+    with render_html set, embedding the ingest-sanitized {{ content_html }}).
+    The plain-text alternative is then derived from the HTML, and the escape
+    step is skipped; only ingest-sanitized markup reaches this path.
     """
     if settings.MULTI:
         # Re-validate the relay at dial time, not just save time. smtplib
@@ -145,13 +163,18 @@ def _send_via(cfg: dict, to_email: str, subject: str, body: str, images: list[di
     # this is defended regardless of caller.
     root["Subject"] = re.sub(r"[\r\n]+", " ", subject)
 
-    # Plain text version (template output is plain text)
-    alternative.attach(MIMEText(body, "plain"))
+    # Plain text version. With render_html the body is HTML source, so the
+    # plain alternative is the structure-preserving text conversion; without
+    # it the template output is already plain text.
+    alternative.attach(MIMEText(html_to_text(body) if render_html else body, "plain"))
 
-    if images:
-        alternative.attach(MIMEText(_render_html_body(body, images), "html"))
-        for i, image in enumerate(images):
-            root.attach(_mime_image_part(f"image{i}@feedecho", image))
+    if images or render_html:
+        alternative.attach(
+            MIMEText(_render_html_body(body, images, escape_body=not render_html), "html")
+        )
+        if images:
+            for i, image in enumerate(images):
+                root.attach(_mime_image_part(f"image{i}@feedecho", image))
 
     context = ssl.create_default_context()
     port = cfg["port"]
@@ -173,17 +196,24 @@ def _send_via(cfg: dict, to_email: str, subject: str, body: str, images: list[di
 
 
 def send_email(
-    to_email: str, subject: str, body: str, user_id: int = 1, images: list[dict] | None = None
+    to_email: str,
+    subject: str,
+    body: str,
+    user_id: int = 1,
+    images: list[dict] | None = None,
+    render_html: bool = False,
 ) -> dict:
     """Send a per-user email via the tenant's SMTP. Raises on failure.
 
     images is an optional list of {"data": bytes, "content_type": str,
-    "alt": str} dicts embedded inline in the message.
+    "alt": str} dicts embedded inline in the message. render_html=True sends
+    the body as the HTML alternative (instant email echoes with render_html
+    set); the body must then be ingest-sanitized markup.
     """
     settings = get_smtp_settings(user_id=user_id)
     if not settings:
         raise ValueError("SMTP not configured. Set SMTP settings first.")
-    _send_via(settings, to_email, subject, body, images=images)
+    _send_via(settings, to_email, subject, body, images=images, render_html=render_html)
     return {"success": True}
 
 

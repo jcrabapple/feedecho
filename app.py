@@ -5882,6 +5882,7 @@ async def add_echo(
     filter_mode: str = Form("exclude"),
     content_warning: str = Form(""),
     attach_image: str = Form(""),
+    render_html: str = Form(""),
     delivery_mode: str = Form("instant"),
     drip_limit: int = Form(0),
     enabled: str = Form(""),
@@ -5904,6 +5905,17 @@ async def add_echo(
     if settings.MULTI:
         with get_db() as db:
             drip_limit = plans.clamp_drip_limit(drip_limit, _user_plan(db, current_user_id(request)))
+
+    # render_html applies only to instant email echoes: the HTML part comes
+    # from the rendered template (which carries ingest-sanitized
+    # {{ content_html }}). Digests stay text-only and non-email destinations
+    # speak plain text, so the flag clamps off there rather than erroring.
+    is_render_html = (
+        1 if render_html in ("1", "true", "on")
+        and destination_type == "email"
+        and delivery_mode == "instant"
+        else 0
+    )
 
     _validate_echo_template(template)
 
@@ -5965,11 +5977,11 @@ async def add_echo(
         db.execute(
             """INSERT INTO echoes (feed_id, destination_type, destination_id, template, visibility,
                                    filter_keywords, filter_mode, content_warning, attach_image,
-                                   delivery_mode, drip_limit, enabled, user_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   render_html, delivery_mode, drip_limit, enabled, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             delivery_mode, drip_limit, is_enabled, uid),
+             is_render_html, delivery_mode, drip_limit, is_enabled, uid),
         )
     # Return to the originating surface. Allowlist rather than prefix checks:
     # the WHATWG URL parser treats backslashes as slashes, so a prefix check
@@ -6089,6 +6101,7 @@ async def edit_echo(
     filter_mode: str = Form("exclude"),
     content_warning: str = Form(""),
     attach_image: str = Form(""),
+    render_html: str = Form(""),
     delivery_mode: str = Form("instant"),
     drip_limit: int = Form(0),
     enabled: str = Form(""),
@@ -6108,6 +6121,17 @@ async def edit_echo(
     if settings.MULTI:
         with get_db() as db:
             drip_limit = plans.clamp_drip_limit(drip_limit, _user_plan(db, current_user_id(request)))
+
+    # render_html applies only to instant email echoes: the HTML part comes
+    # from the rendered template (which carries ingest-sanitized
+    # {{ content_html }}). Digests stay text-only and non-email destinations
+    # speak plain text, so the flag clamps off there rather than erroring.
+    is_render_html = (
+        1 if render_html in ("1", "true", "on")
+        and destination_type == "email"
+        and delivery_mode == "instant"
+        else 0
+    )
 
     _validate_echo_template(template)
 
@@ -6174,12 +6198,12 @@ async def edit_echo(
         db.execute(
             """UPDATE echoes SET feed_id = ?, destination_type = ?, destination_id = ?,
                template = ?, visibility = ?, filter_keywords = ?, filter_mode = ?,
-               content_warning = ?, attach_image = ?, delivery_mode = ?, drip_limit = ?,
+               content_warning = ?, attach_image = ?, render_html = ?, delivery_mode = ?, drip_limit = ?,
                enabled = ?
                WHERE id = ? AND user_id = ?""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             delivery_mode, drip_limit, is_enabled, echo_id, uid),
+             is_render_html, delivery_mode, drip_limit, is_enabled, echo_id, uid),
         )
         if (
             echo["booster_enabled"]

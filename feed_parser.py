@@ -627,7 +627,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
             "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
-            "content_html": sanitize_html(display_html) if display_html else "",
+            "content_html": prepare_content_html(display_html, entry.get("link", "")) if display_html else "",
             "content_text": html_to_text(display_html) if display_html else "",
             "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
@@ -668,7 +668,7 @@ def parse_json_feed(data: dict) -> dict:
             "link": entry.get("url", ""),
             "summary": entry.get("summary", ""),
             "content": strip_html(entry.get("content_html") or entry.get("content_text", "")),
-            "content_html": sanitize_html(content_html) if content_html else "",
+            "content_html": prepare_content_html(content_html, entry.get("url", "")) if content_html else "",
             "content_text": html_to_text(entry.get("content_html") or "") or entry.get("content_text", ""),
             "content_link": _extract_first_link(content_html, base_url=entry.get("url", "")),
             "author": author_name,
@@ -873,11 +873,50 @@ def strip_html(html_str: str) -> str:
 _HTML_ALLOWED_TAGS = {
     "p", "br", "a", "strong", "em", "b", "i", "u", "s",
     "code", "pre", "blockquote", "ul", "ol", "li", "img",
+    # Email-phase additions: structured articles and newsletters carry
+    # headings, tables, and figure blocks. Still presentational markup only —
+    # no forms, frames, embeds, or style vectors.
+    "h1", "h2", "h3", "h4", "h5", "h6", "hr",
+    "table", "thead", "tbody", "tr", "td", "th",
+    "dl", "dt", "dd", "figure", "figcaption", "span",
 }
 _HTML_ALLOWED_ATTRS = {
     "a": {"href", "title"},
     "img": {"src", "alt", "title"},
+    "td": {"colspan", "rowspan"},
+    "th": {"colspan", "rowspan", "scope"},
 }
+
+
+def _absoluteize_urls(html_str: str, base: str) -> str:
+    """Resolve relative href/src values in sanitized HTML against ``base``.
+
+    content_html flows into email parts and arbitrary webhook receivers where
+    a relative URL either breaks or resolves against the wrong origin. The
+    sanitizer guarantees only a[href] and img[src] carry URLs, so a targeted
+    substitution over the tag-attribute pairs is complete. Runs at ingest,
+    right after sanitization.
+    """
+    if not html_str or not base:
+        return html_str
+
+    def _resolve(match: re.Match) -> str:
+        attr, quote, url = match.group(1), match.group(2), match.group(3)
+        if not url or url.startswith(("http://", "https://", "#", "mailto:", "cid:")):
+            return match.group(0)
+        return f'{attr}={quote}{urljoin(base, url)}{quote}'
+
+    return re.sub(
+        r'\b(href|src)=(["\'])([^"\']*)\2',
+        _resolve,
+        html_str,
+    )
+
+
+def prepare_content_html(raw, base) -> str:
+    """Sanitize then resolve relative URLs — the full ingest pipeline."""
+    base = base if isinstance(base, str) else ""
+    return _absoluteize_urls(sanitize_html(raw), base)
 
 
 def sanitize_html(html_str) -> str:

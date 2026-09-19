@@ -272,6 +272,7 @@ function editEcho(echoId) {
     const filterMode = row.dataset.filterMode || 'exclude';
     const contentWarning = row.dataset.contentWarning || '';
     const attachImage = row.dataset.attachImage === '1';
+    const renderHtml = row.dataset.renderHtml === '1';
     const deliveryMode = row.dataset.deliveryMode || 'instant';
     const dripLimit = row.dataset.dripLimit || '0';
     const enabled = row.dataset.enabled === '1';
@@ -330,6 +331,9 @@ function editEcho(echoId) {
             <div class="form-row" id="edit-email-fields-${echoId}" style="${emailStyle}">
                 <label>Email Address
                     <select name="email_account_id">${emailOpts}</select>
+                </label>
+                <label>Render body as HTML
+                    <input type="checkbox" name="render_html" value="true"${renderHtml ? ' checked' : ''}>
                 </label>
             </div>
             <div class="form-row" id="edit-bluesky-fields-${echoId}" style="${blueskyStyle}">

@@ -34,7 +34,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Idempotent posting** — failed posts are retried, duplicates are prevented
 - **Auto-initialization** — feeds set their baseline on first fetch, no manual init needed
 - **Import/export** — back up or move your whole setup (feeds, echoes, and per-destination accounts) as one JSON file; import is idempotent and re-links echoes to the recreated rows
-- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, Matrix, Discord, and webhooks
+- **Email destination** — echo to email via SMTP in addition to Mastodon, Bluesky, micro.blog, Matrix, Discord, and webhooks, with optional full-HTML rendering (instant mode) and inline image embedding
 
 ## Tech Stack
 

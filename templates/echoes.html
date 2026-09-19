@@ -86,6 +86,10 @@
                 {% endfor %}
             </select>
         </label>
+        <label>Render body as HTML
+            <input type="checkbox" name="render_html" value="true">
+            <span class="hint" style="margin: 0.2rem 0 0;">Instant mode only. The email's HTML part is your template output as-is — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links. Digests stay text-only.</span>
+        </label>
     </div>
     <div class="form-row" id="bluesky-fields"{{ dest_hidden('bluesky') }}>
         <label>Bluesky Account
@@ -229,6 +233,7 @@
             data-filter-mode="{{ echo.filter_mode }}"
             data-content-warning="{{ echo.content_warning | e if echo.content_warning else '' }}"
             data-attach-image="{{ echo.attach_image }}"
+            data-render-html="{{ echo.render_html if echo.render_html is defined else 0 }}"
             data-delivery-mode="{{ echo.delivery_mode }}"
             data-drip-limit="{{ echo.drip_limit }}"
             data-enabled="{{ echo.enabled }}">
@@ -264,6 +269,9 @@
                 {% endif %}
                 {% if echo.attach_image %}
                 <br><span class="badge badge-info">IMG</span>
+                {% endif %}
+                {% if echo.destination_type == 'email' and echo.render_html %}
+                <br><span class="badge badge-info">HTML</span>
                 {% endif %}
                 {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
                 <br><span class="badge badge-info">DIGEST</span>

@@ -427,7 +427,7 @@ class TestEmailSenderMime:
         monkeypatch.setattr(
             email_sender,
             "_send_via",
-            lambda cfg, to, subject, body, images=None: calls.append(
+            lambda cfg, to, subject, body, images=None, render_html=False: calls.append(
                 (cfg, to, subject, body, images)
             ),
         )

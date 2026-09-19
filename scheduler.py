@@ -1179,6 +1179,14 @@ def _echo_attach_image(echo) -> bool:
         return False
 
 
+def _echo_render_html(echo) -> bool:
+    """The echo's render_html flag (email destination), defaulting off."""
+    try:
+        return bool(echo["render_html"])
+    except (KeyError, IndexError):
+        return False
+
+
 def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
     """Feed-provided alt text wins; AI generation is the fallback.
 
@@ -1519,6 +1527,7 @@ def _send_email_echo(
             body=content,
             user_id=echo["user_id"],
             images=images,
+            render_html=_echo_render_html(echo),
         )
     except Exception:
         logger.exception("Echo %s: email delivery failed", echo["id"])

@@ -191,6 +191,7 @@ class FeedItem(TypedDict, total=False):
     content: str
     content_text: str
     content_link: str
+    content_html: str
     author: str
     date: str
     tags: list[str]

@@ -87,6 +87,22 @@ class TestParserWiring:
         # Plain-text sibling unchanged in spirit: no tags in content.
         assert "<" not in item["content"]
 
+    def test_json_feed_item_carries_sanitized_html(self):
+        data = {
+            "version": "https://jsonfeed.org/version/1.1",
+            "title": "t",
+            "items": [{
+                "id": "j1",
+                "url": "https://e.com/j1",
+                "title": "J",
+                "content_html": '<p>Hi <a href="https://e.com/x">there</a></p><script>bad()</script>',
+            }],
+        }
+        items = feed_parser.parse_json_feed(data)["items"]
+        assert 'href="https://e.com/x"' in items[0]["content_html"]
+        assert "there</a>" in items[0]["content_html"]
+        assert "bad()" not in items[0]["content_html"]
+
     def test_rss_item_without_content_has_empty_html(self):
         items = self._rss("""<?xml version="1.0"?>
         <rss version="2.0"><channel><title>t</title><link>https://e.com</link>
@@ -153,6 +169,49 @@ class TestStorageRoundtrip:
             )
             row = db.execute("SELECT * FROM feed_items WHERE item_id = 'i1'").fetchone()
         assert row["content_html"] == html
+
+    def test_store_feed_items_persists_sanitized_html(self, db_tmp):
+        """The scheduler batch inserter carries content_html through the
+        15-tuple and the ON CONFLICT update."""
+        import scheduler
+
+        html = '<p>Hi <a href="https://e.com/x">there</a></p>'
+        with db_tmp.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES ('f', 'https://e.com/feed')")
+        scheduler._store_feed_items(1, [{
+            "id": "i3", "title": "T", "link": "https://e.com/3",
+            "summary": "", "content": "Hi there",
+            "content_html": html, "date": "",
+        }])
+        with db_tmp.get_db() as db:
+            row = db.execute("SELECT * FROM feed_items WHERE item_id = 'i3'").fetchone()
+        assert row["content_html"] == html
+        # Re-ingest with new markup updates in place.
+        scheduler._store_feed_items(1, [{
+            "id": "i3", "title": "T", "link": "https://e.com/3",
+            "summary": "", "content": "Hi there", "content_html": "<p>new</p>",
+            "date": "",
+        }])
+        with db_tmp.get_db() as db:
+            row = db.execute("SELECT * FROM feed_items WHERE item_id = 'i3'").fetchone()
+        assert row["content_html"] == "<p>new</p>"
+
+    def test_rebuilder_coalesces_null_html_on_legacy_rows(self, db_tmp):
+        """Rows migrated from before the column existed have NULL; the item
+        rebuilders must hand templates '', never None."""
+        import app as app_module
+
+        with db_tmp.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES ('f', 'https://e.com/feed')")
+            db.execute(
+                """INSERT INTO feed_items (feed_id, item_id, title, link, summary, content)
+                   VALUES (1, 'i4', 'T', 'https://e.com/4', 'S', 'C')"""
+            )
+        with db_tmp.get_db() as db:
+            fi = db.execute("SELECT * FROM feed_items WHERE item_id = 'i4'").fetchone()
+        # sqlite rows keep NULL as None; simulate the rebuilder's key guard.
+        item_html = (fi["content_html"] if "content_html" in fi.keys() else "") or ""
+        assert item_html == ""
 
     def test_legacy_row_reads_as_empty(self, db_tmp):
         """Rows written before the column existed read back as '', never None

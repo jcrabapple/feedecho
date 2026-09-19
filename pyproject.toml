@@ -15,6 +15,7 @@ dependencies = [
     "apscheduler>=3.10.4",
     "cryptography>=42.0.0",
     "pillow>=11.0.0",
+    "nh3>=0.2.20",
 ]
 
 [project.optional-dependencies]

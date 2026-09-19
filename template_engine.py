@@ -9,7 +9,9 @@ original regex engine supported keeps working unchanged, plus:
   - feed_name for the owning feed
 
 Supported flat variables: {{ title }}, {{ link }}, {{ content_link }},
-{{ summary }}, {{ content }}, {{ author }}, {{ date }}, {{ date_iso }},
+{{ summary }}, {{ content }}, {{ content_html }} (sanitized article HTML —
+renders in webhook bodies and other markup-aware destinations; shows raw
+tags in plain-text destinations), {{ author }}, {{ date }}, {{ date_iso }},
 {{ date_short }}, {{ tags }}, {{ hashtags }}, {{ image_url }}, {{ feed_name }}.
 
 Templates are sandboxed: attribute access on unsafe objects and method
@@ -134,6 +136,7 @@ def _build_context(item: dict, feed_name: str = "") -> dict:
         "summary": item.get("summary", ""),
         "content": item.get("content", ""),
         "content_link": item.get("content_link", ""),
+        "content_html": item.get("content_html") or "",
         "author": item.get("author", ""),
         "date": date_str,
         "date_iso": _format_date(date_str, "%Y-%m-%dT%H:%M:%S"),
@@ -189,6 +192,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ content_link }}", "desc": "First link inside the post content (link-blogs)"},
         {"var": "{{ summary }}", "desc": "Post summary/excerpt"},
         {"var": "{{ content }}", "desc": "Full post content (HTML cleaned)"},
+        {"var": "{{ content_html }}", "desc": "Full content as sanitized HTML (links/formatting kept; renders in webhook bodies, shows raw tags in plain-text destinations)"},
         {"var": "{{ author }}", "desc": "Author name"},
         {"var": "{{ date }}", "desc": "Publication date (raw)"},
         {"var": "{{ date_iso }}", "desc": "ISO 8601 date (2024-01-15T09:30:00)"},

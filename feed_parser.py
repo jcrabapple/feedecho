@@ -14,6 +14,7 @@ import logging
 import socket
 import threading
 import httpx
+import nh3
 import feedparser
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, urljoin, urlparse
@@ -626,6 +627,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
             "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
+            "content_html": sanitize_html(display_html) if display_html else "",
             "content_text": html_to_text(display_html) if display_html else "",
             "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
@@ -666,6 +668,7 @@ def parse_json_feed(data: dict) -> dict:
             "link": entry.get("url", ""),
             "summary": entry.get("summary", ""),
             "content": strip_html(entry.get("content_html") or entry.get("content_text", "")),
+            "content_html": sanitize_html(content_html) if content_html else "",
             "content_text": html_to_text(entry.get("content_html") or "") or entry.get("content_text", ""),
             "content_link": _extract_first_link(content_html, base_url=entry.get("url", "")),
             "author": author_name,
@@ -859,6 +862,42 @@ def strip_html(html_str: str) -> str:
     # Normalize whitespace
     html_str = re.sub(r"\s+", " ", html_str).strip()
     return html_str
+
+
+# Allowlist for {{ content_html }}: readable article markup only. Everything
+# else — scripts, styles, event handlers, iframes, forms, custom elements — is
+# stripped by nh3. Sanitized AT INGEST (parse time) so every consumer stores
+# and forwards the same safe value; consumers never need to remember to
+# re-sanitize. href/src are scheme-restricted to http/https by nh3's
+# url_schemes.
+_HTML_ALLOWED_TAGS = {
+    "p", "br", "a", "strong", "em", "b", "i", "u", "s",
+    "code", "pre", "blockquote", "ul", "ol", "li", "img",
+}
+_HTML_ALLOWED_ATTRS = {
+    "a": {"href", "title"},
+    "img": {"src", "alt", "title"},
+}
+
+
+def sanitize_html(html_str) -> str:
+    """Sanitize untrusted feed HTML down to safe article markup.
+
+    The allowlisted output is what {{ content_html }} delivers: formatting
+    and links survive, scripts/handlers/foreign schemes do not. Links gain
+    rel="noopener noreferrer" (nh3 default). Returns '' for empty input;
+    oversized input is already bounded by the feed-fetch byte cap.
+    """
+    if not isinstance(html_str, str) or not html_str:
+        # feedparser occasionally yields lists/None for content fields; treat
+        # anything non-string as absent.
+        return ""
+    return nh3.clean(
+        html_str,
+        tags=_HTML_ALLOWED_TAGS,
+        attributes=_HTML_ALLOWED_ATTRS,
+        url_schemes={"http", "https"},
+    )
 
 
 def html_to_text(html_str: str) -> str:

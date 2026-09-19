@@ -565,6 +565,7 @@ def init_db_sqlite() -> None:
                 content TEXT,
                 content_text TEXT,
                 content_link TEXT,
+                content_html TEXT,
                 author TEXT,
                 image_url TEXT,
                 image_alt TEXT,
@@ -590,6 +591,8 @@ def init_db_sqlite() -> None:
             ON feed_items(feed_id, is_read)
         """)
         _add_column_if_missing(db, "feed_items", "content_text", "TEXT")
+        # v1.66.0: sanitized HTML passthrough for {{ content_html }}.
+        _add_column_if_missing(db, "feed_items", "content_html", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_url", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_alt", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_urls", "TEXT")
@@ -1317,6 +1320,7 @@ def init_db_postgres() -> None:
                 content TEXT,
                 content_text TEXT,
                 content_link TEXT,
+                content_html TEXT,
                 author TEXT,
                 image_url TEXT,
                 image_alt TEXT,
@@ -1342,6 +1346,8 @@ def init_db_postgres() -> None:
             ON feed_items(feed_id, is_read)
         """)
         _add_column_if_missing(db, "feed_items", "content_text", "TEXT")
+        # v1.66.0: sanitized HTML passthrough for {{ content_html }}.
+        _add_column_if_missing(db, "feed_items", "content_html", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_url", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_alt", "TEXT")
         _add_column_if_missing(db, "feed_items", "image_urls", "TEXT")

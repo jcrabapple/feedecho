@@ -2170,6 +2170,7 @@ def queue_post_now(request: Request, post_id: int):
         "content": "",
         "content_text": "",
         "content_link": "",
+        "content_html": "",
         "author": "",
         "date": "",
         "image_url": "",
@@ -2184,6 +2185,7 @@ def queue_post_now(request: Request, post_id: int):
                     "link": fi["link"] or "",
                     "summary": fi["summary"] or "",
                     "content": fi["content"] or "",
+                    "content_html": fi["content_html"] if "content_html" in fi.keys() else "",
                     "image_url": fi["image_url"] or "",
                 })
 
@@ -5668,6 +5670,7 @@ def reader_compose(
         "summary": row["summary"] or "",
         "content": row["content"] or "",
         "content_text": row["content_text"] or "",
+        "content_html": (row["content_html"] if "content_html" in row.keys() else "") or "",
         "content_link": row["content_link"] or "",
         "author": row["author"] or "",
         "date": timestamp_str(row["published_at"]) if row["published_at"] else "",

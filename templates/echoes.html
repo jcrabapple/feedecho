@@ -368,6 +368,13 @@ function toggleDestFields() {
         const deliveryMode = document.querySelector('select[name="delivery_mode"]');
         dripFields.style.display = (deliveryMode && deliveryMode.value === 'digest') ? 'none' : '';
     }
+    // The render_html checkbox exists in BOTH the email and Matrix rows.
+    // Hidden checkboxes still submit, so a destination switch would leak the
+    // hidden row's state — disable every checkbox that is not visible.
+    document.querySelectorAll('input[name="render_html"]').forEach((cb) => {
+        const row = cb.closest('.form-row');
+        cb.disabled = !row || row.style.display === 'none';
+    });
 }
 toggleDestFields();
 </script>

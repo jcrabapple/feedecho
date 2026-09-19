@@ -460,6 +460,15 @@ function toggleEditDest(echoId) {
         const deliveryMode = document.querySelector(`#edit-digest-fields-${echoId} select[name="delivery_mode"]`);
         dripFields.style.display = (deliveryMode && deliveryMode.value === 'digest') ? 'none' : '';
     }
+    // render_html checkboxes live in BOTH the email and Matrix edit rows;
+    // hidden ones still submit, so disable them to prevent a hidden row's
+    // stale state from overriding the visible checkbox.
+    document.querySelectorAll(
+        `#edit-email-fields-${echoId} input[name="render_html"], #edit-matrix-fields-${echoId} input[name="render_html"]`
+    ).forEach((cb) => {
+        const row = cb.closest('.form-row');
+        cb.disabled = !row || row.style.display === 'none';
+    });
 }
 
 function cancelEdit(echoId) {

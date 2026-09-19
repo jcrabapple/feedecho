@@ -67,6 +67,9 @@ MATRIX_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "ima
 # Matrix has no hard body limit, but events over ~64 KiB are rejected by the
 # spec's event size limit (which counts the whole PDU). Truncate well below it.
 MAX_BODY_CHARS = 32_000
+# formatted_body shares the event with body + JSON overhead under Matrix's
+# 65,535-byte PDU limit, so it gets a tighter cap of its own.
+MAX_FORMATTED_BODY_CHARS = 20_000
 
 _ROOM_ID_RE = re.compile(r"^![^\s:]+:[^\s:/]+(:\d+)?$")
 _ROOM_ALIAS_RE = re.compile(r"^#[^\s:]+:[^\s:/]+(:\d+)?$")
@@ -462,12 +465,17 @@ def send_message(
     plain text only when the text contains links.
     """
     text = _truncate_body(body)
-    if not text.strip():
+    if not text.strip() and not formatted.strip():
         raise MatrixError("Cannot send an empty message to Matrix")
     content = {"msgtype": "m.text", "body": text}
     if formatted:
+        # The event JSON (body + formatted_body + overhead) must stay under
+        # Matrix's 65,535-byte PDU limit: the formatted cap is well below the
+        # plain cap so the two together cannot push the event over. A naive
+        # slice can sever a trailing tag — accepted as a backstop; the input
+        # is nh3-sanitized markup, so a severed tag cannot execute anything.
         content["format"] = "org.matrix.custom.html"
-        content["formatted_body"] = _truncate_body(formatted)
+        content["formatted_body"] = truncate_chars(formatted, MAX_FORMATTED_BODY_CHARS)
     elif _URL_RE.search(text):
         content["format"] = "org.matrix.custom.html"
         content["formatted_body"] = html_body(text)

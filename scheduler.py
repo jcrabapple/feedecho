@@ -2228,14 +2228,17 @@ def _send_matrix(
         # render_html echoes carry markup: the rendered output becomes the
         # formatted_body (re-sanitized at the send boundary — the template
         # may also interpolate raw-text variables) and the plain fallback is
-        # the structure-preserving text conversion. Plain echoes keep the
+        # the structure-preserving text conversion. Markup-only items (e.g.
+        # a bare linked image) convert to an empty string, so the rendered
+        # output itself backs the plain body up; Plain echoes keep the
         # legacy escape-and-linkify behavior.
         if _echo_render_html(echo):
+            plain = html_to_text(content).strip() or content
             event_id = matrix_send_message(
                 base_url,
                 access_token,
                 room_id,
-                html_to_text(content),
+                plain,
                 matrix_transaction_id(echo["id"], item["id"]),
                 formatted=sanitize_html(content),
             )

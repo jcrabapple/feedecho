@@ -15,6 +15,8 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
+import feedparser
+
 import database
 import feed_parser
 import scheduler
@@ -51,8 +53,22 @@ class TestSanitizeHtmlEmailGrade:
             '<p><a href="/post/1">x</a><img src="/img.png"></p>',
             "https://blog.example/posts/",
         )
-        assert 'href="https://blog.example/post/1"' in out
-        assert 'src="https://blog.example/img.png"' in out
+        # Full-element assertions: a doubled 'href=href=' bug would fail these.
+        assert (
+            '<a href="https://blog.example/post/1" rel="noopener noreferrer">x</a>' in out
+        )
+        assert '<img src="https://blog.example/img.png">' in out
+
+    def test_base_falls_back_to_feed_url(self):
+        """An item without its own link absolutizes against the feed URL."""
+        items = feed_parser.parse_rss_feed(
+            feedparser.parse("""<?xml version="1.0"?>
+            <rss version="2.0"><channel><title>t</title><link>https://e.com</link>
+            <description>d</description><item><title>One</title>
+            <description>&lt;p&gt;&lt;a href="/x"&gt;go&lt;/a&gt;&lt;/p&gt;</description>
+            </item></channel></rss>"""), "https://e.com/feed"
+            )["items"]
+        assert 'href="https://e.com/x"' in items[0]["content_html"]
 
     def test_absolute_urls_untouched(self):
         out = feed_parser.prepare_content_html(
@@ -389,3 +405,53 @@ class TestRouteClamping:
             row = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
         assert row["destination_type"] == "mastodon"
         assert row["render_html"] == 0
+
+
+class TestImportExportRenderHtml:
+    @staticmethod
+    def _export_payload(render_html_value):
+        return {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://a.example/rss"}],
+            "accounts": {
+                "email": [{"id": 1, "name": "e", "email": "t@example.com"}],
+            },
+            "echoes": [{
+                "feed_id": 1, "destination_type": "email", "destination_id": 1,
+                "template": "t", "visibility": "public", "enabled": 1,
+                "attach_image": 0, "render_html": render_html_value,
+                "delivery_mode": "instant",
+            }],
+        }
+
+    def test_render_html_survives_import(self, db_tmp):
+        import import_export
+
+        with database.get_db() as db:
+            summary = import_export.import_data(db, 1, self._export_payload(1))
+            assert summary["added_echoes"] == 1
+            row = db.execute("SELECT render_html FROM echoes").fetchone()
+        assert row["render_html"] == 1
+
+    def test_render_html_clamped_on_non_email_import(self, db_tmp):
+        import import_export
+
+        payload = self._export_payload(1)
+        payload["echoes"][0]["destination_type"] = "mastodon"
+        payload["accounts"]["mastodon"] = [{
+            "id": 1, "name": "m", "username": "u",
+            "instance": "https://mastodon.example", "access_token": "tok",
+        }]
+        with database.get_db() as db:
+            import_export.import_data(db, 1, payload)
+            row = db.execute("SELECT render_html FROM echoes").fetchone()
+        assert row["render_html"] == 0
+
+    def test_export_carries_render_html(self, db_tmp):
+        import import_export
+
+        with database.get_db() as db:
+            import_export.import_data(db, 1, self._export_payload(1))
+            exported = import_export.build_export(db, 1)
+        assert exported["echoes"][0]["render_html"] == 1

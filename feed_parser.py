@@ -909,7 +909,8 @@ def _absoluteize_urls(html_str: str, base: str) -> str:
         )
         if not url or url.startswith(("http://", "https://", "#", "mailto:", "cid:")):
             return match.group(0)
-        return f'{prefix}{attr}={quote}{urljoin(base, url)}{quote}'
+        # prefix already ends with 'href=' / 'src=' — only the value is replaced.
+        return f'{prefix}{quote}{urljoin(base, url)}{quote}'
 
     return re.sub(
         r'(<(?:a|img)\b[^>]*?\b(href|src)=)(["\'])([^"\']*)\3',

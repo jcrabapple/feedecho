@@ -163,20 +163,22 @@ def _send_via(
     # this is defended regardless of caller.
     root["Subject"] = re.sub(r"[\r\n]+", " ", subject)
 
-    # Plain text version. With render_html the body is HTML source, so the
-    # plain alternative is the structure-preserving text conversion; without
-    # it the template output is already plain text.
+    if render_html:
+        # The rendered body is user-authored template output that embeds
+        # ingest-sanitized {{ content_html }} — but templates can also
+        # interpolate raw-text variables ({{ title }}, {{ author }},
+        # {{ item.* }}), and autoescape is off. Sanitize the FINAL rendered
+        # markup at the send boundary so both the HTML part and the
+        # plain-text derivation conform to the allowlist regardless of what
+        # the template mixed in.
+        body = sanitize_html(body)
+
+    # Plain text version. With render_html the (sanitized) body is HTML
+    # source, so the plain alternative is the structure-preserving text
+    # conversion; without it the template output is already plain text.
     alternative.attach(MIMEText(html_to_text(body) if render_html else body, "plain"))
 
     if images or render_html:
-        if render_html:
-            # The rendered body is user-authored template output that embeds
-            # ingest-sanitized {{ content_html }} — but templates can also
-            # interpolate raw-text variables ({{ title }}, {{ author }},
-            # {{ item.* }}), and autoescape is off. Sanitize the FINAL
-            # rendered markup at the send boundary so the HTML part conforms
-            # to the allowlist regardless of what the template mixed in.
-            body = sanitize_html(body)
         alternative.attach(
             MIMEText(_render_html_body(body, images, escape_body=not render_html), "html")
         )

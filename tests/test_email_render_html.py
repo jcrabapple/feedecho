@@ -65,8 +65,35 @@ class TestSanitizeHtmlEmailGrade:
             '<a href="#section">s</a><a href="mailto:a@b.c">m</a>', "https://e.com/x"
         )
         assert 'href="#section"' in out
-        # mailto is outside the http/https scheme allowlist: the href goes.
-        assert "mailto" not in out
+        # mailto is in the scheme allowlist (newsletter author links).
+        assert 'href="mailto:a@b.c"' in out
+
+    def test_tfoot_and_caption_survive(self):
+        out = feed_parser.sanitize_html(
+            "<table><caption>c</caption><tfoot><tr><td>f</td></tr></tfoot></table>"
+        )
+        assert "<caption>c</caption>" in out
+        assert "tfoot" in out
+
+    def test_code_block_prose_not_absoluteized(self):
+        """`href="..."` inside code/text must NOT be rewritten — the regex is
+        anchored to <a>/<img> opening tags only."""
+        out = feed_parser.prepare_content_html(
+            '<pre><code>&lt;img src="/x.png"&gt;</code></pre>'
+            '<p>Use href="/api/v1" in requests</p>',
+            "https://e.com/",
+        )
+        assert 'src="https://e.com/x.png"' not in out
+        assert 'href="https://e.com/api/v1"' not in out
+
+    def test_hostile_base_scheme_disables_absolutization(self):
+        """urljoin against a javascript: base could smuggle schemes past the
+        allowlist; a non-http base disables rewriting entirely."""
+        out = feed_parser.prepare_content_html(
+            '<a href="/p">x</a>', "javascript:alert(1)"
+        )
+        assert 'href="/p"' in out
+        assert "javascript" not in out
 
     def test_no_base_leaves_relative_urls(self):
         out = feed_parser.prepare_content_html('<a href="/p">x</a>', "")
@@ -118,8 +145,10 @@ class TestSendViaRenderHtml:
         # Plain part is the structure-preserving text conversion.
         assert "Hi there" in plain.get_content()
         assert "<" not in plain.get_content()
-        # HTML part is the body verbatim, not escaped.
-        assert '<a href="https://e.com/x">there</a>' in html_part.get_content()
+        # HTML part is the body (re-sanitized at the boundary; nh3 annotates
+        # links with rel="noopener noreferrer").
+        assert 'href="https://e.com/x"' in html_part.get_content()
+        assert "there</a>" in html_part.get_content()
 
     def test_default_mode_still_escapes(self):
         from email_sender import _send_via
@@ -141,6 +170,63 @@ class TestSendViaRenderHtml:
         assert "text/html" not in types
         plain = next(p for p in msg.get_payload() if p.get_content_type() == "text/plain")
         assert "<p>not rendered</p>" in plain.get_content()
+
+    def test_send_boundary_sanitizes_hostile_interpolations(self):
+        """Templates mix raw-text variables ({{ title }}, {{ author }},
+        entity-unescaped by clean_text) into the rendered body; the send
+        boundary must sanitize the FINAL markup, not trust the template."""
+        from email_sender import _send_via
+
+        sent = []
+        with mock.patch("email_sender.smtplib.SMTP") as smtp_cls:
+            smtp = smtp_cls.return_value.__enter__.return_value
+            smtp.sendmail.side_effect = (
+                lambda from_addr, to_addrs, raw: sent.append(raw)
+            )
+            hostile = (
+                '<p>{{ content_html }}</p>'.replace("{{ content_html }}", "<p>ok</p>")
+                + '<img src=x onerror=alert(1)>'
+                + '<form action="/phish"><input name="pw"></form>'
+            )
+            _send_via(
+                self._smtp_cfg(), "to@example.com", "Subject", hostile, render_html=True
+            )
+
+        msg = _parse_message(sent[0])
+        html_part = next(
+            p for p in msg.get_payload() if p.get_content_type() == "text/html"
+        )
+        body = html_part.get_content()
+        assert "onerror" not in body
+        assert "<form" not in body
+        assert "<p>ok</p>" in body
+
+    def test_render_html_with_images_full_mime(self):
+        """render_html + attach_image: multipart/related with the raw body as
+        the HTML alternative and the images as inline cid parts."""
+        from email_sender import _send_via
+
+        sent = []
+        with mock.patch("email_sender.smtplib.SMTP") as smtp_cls:
+            smtp = smtp_cls.return_value.__enter__.return_value
+            smtp.sendmail.side_effect = (
+                lambda from_addr, to_addrs, raw: sent.append(raw)
+            )
+            _send_via(
+                self._smtp_cfg(), "to@example.com", "Subject",
+                "<p>article</p>", images=[{"data": b"fake", "content_type": "image/png", "alt": "p"}],
+                render_html=True,
+            )
+
+        msg = _parse_message(sent[0])
+        assert msg.get_content_type() == "multipart/related"
+        html_part = next(
+            p for p in msg.walk() if p.get_content_type() == "text/html"
+        )
+        assert "<p>article</p>" in html_part.get_content()
+        image_parts = [p for p in msg.walk() if p.get_content_type().startswith("image/")]
+        assert len(image_parts) == 1
+        assert image_parts[0]["Content-ID"] == "<image0@feedecho>"
 
     def test_render_html_with_images_keeps_cid_references(self):
         from email_sender import _render_html_body
@@ -263,4 +349,43 @@ class TestRouteClamping:
         })
         with database.get_db() as db:
             row = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+        assert row["render_html"] == 0
+
+    def test_edit_echo_sets_and_clears_flag(self, client):
+        with database.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES ('f', 'https://e.com/feed')")
+            db.execute("INSERT INTO email_accounts (name, email) VALUES ('e', 't@example.com')")
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token)"
+                " VALUES ('m', 'u', 'https://mastodon.example', 'tok')"
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, filter_keywords, filter_mode,
+                                       content_warning, attach_image, render_html,
+                                       delivery_mode, enabled)
+                   VALUES (1, 'email', 1, 't', 'public', '', 'exclude', '', 0, 0,
+                           'instant', 1)"""
+            )
+        base = {
+            "feed_id": "1", "destination_type": "email", "email_account_id": "1",
+            "template": "t", "delivery_mode": "instant",
+        }
+        client.post("/api/echoes/1/edit", data={**base, "render_html": "true"})
+        with database.get_db() as db:
+            row = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+        assert row["render_html"] == 1
+        # Turning the checkbox off clears it.
+        client.post("/api/echoes/1/edit", data={**base})
+        with database.get_db() as db:
+            row = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+        assert row["render_html"] == 0
+        # Switching the destination to mastodon clamps the flag off.
+        client.post("/api/echoes/1/edit", data={
+            **base, "render_html": "true", "destination_type": "mastodon",
+            "account_id": "1",
+        })
+        with database.get_db() as db:
+            row = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+        assert row["destination_type"] == "mastodon"
         assert row["render_html"] == 0

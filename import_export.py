@@ -91,7 +91,7 @@ _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paus
 _ECHO_COLS = [
     "feed_id", "destination_type", "destination_id", "template", "visibility",
     "enabled", "filter_keywords", "filter_mode", "content_warning",
-    "attach_image", "delivery_mode", "drip_limit",
+    "attach_image", "render_html", "delivery_mode", "drip_limit",
 ]
 
 _VALID_VISIBILITY = ("public", "unlisted", "private", "direct")
@@ -597,8 +597,8 @@ def import_data(db, uid: int, payload: dict) -> dict:
         db.execute(
             "INSERT INTO echoes (feed_id, destination_type, destination_id, template,"
             " visibility, enabled, filter_keywords, filter_mode, content_warning,"
-            " attach_image, delivery_mode, drip_limit, user_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " attach_image, render_html, delivery_mode, drip_limit, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 new_feed,
                 dest_type,
@@ -610,6 +610,9 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 filter_mode,
                 str(echo.get("content_warning") or ""),
                 1 if echo.get("attach_image") else 0,
+                # Clamp like the connect route: instant email echoes only.
+                1 if echo.get("render_html") and dest_type == "email"
+                and delivery_mode == "instant" else 0,
                 delivery_mode,
                 drip,
                 uid,

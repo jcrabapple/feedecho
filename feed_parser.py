@@ -627,7 +627,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "link": entry.get("link", ""),
             "summary": clean_text(entry.get("summary", "")),
             "content": strip_html(content_html) if entry.get("content") else clean_text(entry.get("summary", "")),
-            "content_html": prepare_content_html(display_html, entry.get("link", "")) if display_html else "",
+            "content_html": prepare_content_html(display_html, entry.get("link") or url) if display_html else "",
             "content_text": html_to_text(display_html) if display_html else "",
             "content_link": _extract_first_link(content_html, base_url=entry.get("link", "")),
             "author": entry.get("author", ""),
@@ -668,7 +668,7 @@ def parse_json_feed(data: dict) -> dict:
             "link": entry.get("url", ""),
             "summary": entry.get("summary", ""),
             "content": strip_html(entry.get("content_html") or entry.get("content_text", "")),
-            "content_html": prepare_content_html(content_html, entry.get("url", "")) if content_html else "",
+            "content_html": prepare_content_html(content_html, entry.get("url") or data.get("home_page_url", "")) if content_html else "",
             "content_text": html_to_text(entry.get("content_html") or "") or entry.get("content_text", ""),
             "content_link": _extract_first_link(content_html, base_url=entry.get("url", "")),
             "author": author_name,
@@ -877,7 +877,7 @@ _HTML_ALLOWED_TAGS = {
     # headings, tables, and figure blocks. Still presentational markup only —
     # no forms, frames, embeds, or style vectors.
     "h1", "h2", "h3", "h4", "h5", "h6", "hr",
-    "table", "thead", "tbody", "tr", "td", "th",
+    "table", "thead", "tbody", "tfoot", "caption", "tr", "td", "th",
     "dl", "dt", "dd", "figure", "figcaption", "span",
 }
 _HTML_ALLOWED_ATTRS = {
@@ -893,21 +893,26 @@ def _absoluteize_urls(html_str: str, base: str) -> str:
 
     content_html flows into email parts and arbitrary webhook receivers where
     a relative URL either breaks or resolves against the wrong origin. The
-    sanitizer guarantees only a[href] and img[src] carry URLs, so a targeted
-    substitution over the tag-attribute pairs is complete. Runs at ingest,
-    right after sanitization.
+    sanitizer guarantees the only URL-carrying attributes are a[href] and
+    img[src], so the substitution is anchored to those opening tags — plain
+    text and code blocks containing `href="..."` prose are never touched.
+    Runs at ingest, right after sanitization. ``base`` must itself be an
+    http(s) URL, or nothing is rewritten (urljoin against a hostile scheme
+    could smuggle non-http URLs past the sanitizer's scheme allowlist).
     """
-    if not html_str or not base:
+    if not html_str or not base or not base.startswith(("http://", "https://")):
         return html_str
 
     def _resolve(match: re.Match) -> str:
-        attr, quote, url = match.group(1), match.group(2), match.group(3)
+        prefix, attr, quote, url = (
+            match.group(1), match.group(2), match.group(3), match.group(4),
+        )
         if not url or url.startswith(("http://", "https://", "#", "mailto:", "cid:")):
             return match.group(0)
-        return f'{attr}={quote}{urljoin(base, url)}{quote}'
+        return f'{prefix}{attr}={quote}{urljoin(base, url)}{quote}'
 
     return re.sub(
-        r'\b(href|src)=(["\'])([^"\']*)\2',
+        r'(<(?:a|img)\b[^>]*?\b(href|src)=)(["\'])([^"\']*)\3',
         _resolve,
         html_str,
     )
@@ -935,7 +940,7 @@ def sanitize_html(html_str) -> str:
         html_str,
         tags=_HTML_ALLOWED_TAGS,
         attributes=_HTML_ALLOWED_ATTRS,
-        url_schemes={"http", "https"},
+        url_schemes={"http", "https", "mailto"},
     )
 
 

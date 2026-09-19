@@ -16,7 +16,7 @@ from email.mime.multipart import MIMEMultipart
 
 import settings
 from database import get_db
-from feed_parser import SSRFError, html_to_text, validate_outbound_url
+from feed_parser import SSRFError, html_to_text, sanitize_html, validate_outbound_url
 from security import decrypt_secret
 from utils import rows_to_dict
 
@@ -169,6 +169,14 @@ def _send_via(
     alternative.attach(MIMEText(html_to_text(body) if render_html else body, "plain"))
 
     if images or render_html:
+        if render_html:
+            # The rendered body is user-authored template output that embeds
+            # ingest-sanitized {{ content_html }} — but templates can also
+            # interpolate raw-text variables ({{ title }}, {{ author }},
+            # {{ item.* }}), and autoescape is off. Sanitize the FINAL
+            # rendered markup at the send boundary so the HTML part conforms
+            # to the allowlist regardless of what the template mixed in.
+            body = sanitize_html(body)
         alternative.attach(
             MIMEText(_render_html_body(body, images, escape_body=not render_html), "html")
         )

@@ -2842,7 +2842,7 @@ def _flush_queue() -> None:
                         "link": fi["link"] or "",
                         "summary": fi["summary"] or "",
                         "content": fi["content"] or "",
-                        "content_html": fi["content_html"] if "content_html" in fi.keys() else "",
+                        "content_html": (fi["content_html"] if "content_html" in fi.keys() else "") or "",
                         "image_url": fi["image_url"] or "",
                     })
 

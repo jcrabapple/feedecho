@@ -447,7 +447,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def _single(self, request: Request, call_next):
         path = request.url.path
-        # No shared secret configured: every viewer is the operator.
+        # No shared secret configured: every viewer is the operator — but
+        # only when the operator explicitly opted out via
+        # FEEDECHO_ALLOW_INSECURE=1. validate_config enforces that pairing at
+        # startup; this branch is the defense-in-depth backstop for an ASGI
+        # server started with lifespan events disabled (--lifespan off),
+        # which would skip validate_config entirely (gate SEC-01). Fail
+        # closed rather than fall back to open access.
+        if not settings.AUTH_TOKEN and not settings.ALLOW_INSECURE:
+            return Response(
+                "Authentication misconfigured: FEEDECHO_AUTH_TOKEN is not "
+                "set. Set it, or set FEEDECHO_ALLOW_INSECURE=1 to run "
+                "without authentication.",
+                status_code=500,
+            )
         if not settings.AUTH_TOKEN or self._token_matches(request):
             request.state.authed = True
             if path == "/login" and request.method == "GET":

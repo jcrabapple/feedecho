@@ -1,7 +1,7 @@
 [project]
 name = "feedecho"
 dynamic = [ "version" ]
-description = "Self-hosted RSS feed cross-poster — route feed items to Mastodon, Bluesky, or email"
+description = "Self-hosted RSS feed cross-poster — route feed items to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, generic webhooks, or email"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]

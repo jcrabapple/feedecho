@@ -7,7 +7,7 @@
 <div class="alert alert-error" role="alert">{{ error }}</div>
 {% endif %}
 
-<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, a generic webhook, or email) using a template.</p>
+<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, a generic webhook, or email) using a template.</p>
 
 {% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or telegram_accounts or webhook_accounts %}
 {% if not feeds or not has_destination %}

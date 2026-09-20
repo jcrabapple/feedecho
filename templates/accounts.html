@@ -47,6 +47,14 @@
 <div class="alert alert-success" role="status">Discord webhook deleted.</div>
 {% endif %}
 
+{% if request.query_params.get('status') == 'telegram_connected' %}
+<div class="alert alert-success" role="status">Telegram bot connected successfully.</div>
+{% endif %}
+
+{% if request.query_params.get('status') == 'telegram_deleted' %}
+<div class="alert alert-success" role="status">Telegram account deleted.</div>
+{% endif %}
+
 {% if request.query_params.get('status') == 'webhook_connected' %}
 <div class="alert alert-success" role="status">Webhook connected successfully.</div>
 {% endif %}
@@ -456,8 +464,61 @@
     </div>
 </details>
 
-{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts and not webhook_accounts %}
-<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, generic webhook, or add an email address above.</p>
+<details class="account-section"{% if telegram_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">Telegram</span>
+        <span class="account-count{% if telegram_accounts %} count-active{% endif %}">{% if telegram_accounts %}{{ telegram_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect Telegram</h2>
+            <p class="hint">Post feed items into a Telegram chat or channel via a bot. Create a bot with @BotFather (use /newbot and copy the API token), add the bot to the chat you want FeedEcho to post to (for channels, make it an admin), then paste the token and the chat ID here. The token is a secret — treat it like a password.</p>
+            <form method="post" action="/api/telegram-accounts" class="inline-form stacked">
+                <label for="telegram-bot-token">Bot token</label>
+                <input type="password" name="bot_token" id="telegram-bot-token" placeholder="123456789:AAE…" required autocomplete="off">
+                <label for="telegram-chat-id">Chat ID or @channelname</label>
+                <input type="text" name="chat_id" id="telegram-chat-id" placeholder="@mychannel or -1001234567890" required autocomplete="off">
+                <label for="telegram-name">Display name (optional)</label>
+                <input type="text" name="name" id="telegram-name" placeholder="Announcements channel">
+                <button type="submit">Connect Telegram Bot</button>
+            </form>
+        </section>
+
+        {% if telegram_accounts %}
+        <h2>Telegram Chats</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Chat ID</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in telegram_accounts %}
+                <tr>
+                    <td data-label="Name">{{ account.name }}</td>
+                    <td data-label="Chat ID"><code>{{ account.chat_id }}</code></td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('telegram', {{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/telegram-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this Telegram account? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
+
+{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts and not telegram_accounts and not webhook_accounts %}
+<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, Telegram chat, generic webhook, or add an email address above.</p>
 {% endif %}
 
 <script>

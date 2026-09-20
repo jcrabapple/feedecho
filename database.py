@@ -787,6 +787,25 @@ def init_db_sqlite() -> None:
             " ON discord_accounts(user_id, webhook_url_hash)"
         )
 
+        # One row per Telegram chat: the bot token is the credential, the
+        # chat id the target. UNIQUE(user_id, chat_id) makes reconnecting
+        # the same chat (e.g. after a token rotation) an in-place update
+        # instead of a duplicate row. The token is encrypted at rest.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                bot_token TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_user_chat"
+            " ON telegram_accounts(user_id, chat_id)"
+        )
+
         # One row per generic webhook endpoint: url is the target, headers a
         # JSON object of custom HTTP headers (credentials live there — never
         # rendered back). UNIQUE(user_id, url) makes reconnecting the same
@@ -826,7 +845,7 @@ def init_db_sqlite() -> None:
 
         # Owned tables carry user_id. Existing single-tenant databases
         # backfill to user 1 via the column default.
-        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts", "webhook_accounts"):
+        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts", "telegram_accounts", "webhook_accounts"):
             _add_column_if_missing(
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
@@ -1522,6 +1541,21 @@ def init_db_postgres() -> None:
         db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_user_hash"
             " ON discord_accounts(user_id, webhook_url_hash)"
+        )
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                bot_token TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_user_chat"
+            " ON telegram_accounts(user_id, chat_id)"
         )
 
         db.execute("""

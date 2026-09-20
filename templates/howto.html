@@ -2,7 +2,7 @@
 {% block title %}How To — FeedEcho{% endblock %}
 {% block content %}
 <h1>How To</h1>
-<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, Discord, email, or any webhook. Everything is built from three pieces: feeds, accounts, and echoes.</p>
+<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, or any webhook. Everything is built from three pieces: feeds, accounts, and echoes.</p>
 
 <section>
     <h2>1. Add a feed</h2>
@@ -56,6 +56,13 @@
         <li>In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL.</li>
         <li>Under <strong>Connect Discord</strong>, paste the webhook URL and an optional display name.</li>
         <li>Treat the webhook URL like a token — anyone who has it can post to that channel.</li>
+    </ol>
+    <h3>Telegram</h3>
+    <ol class="howto-steps">
+        <li>Create a bot with <a href="https://t.me/BotFather" rel="noopener noreferrer">@BotFather</a> (use /newbot and copy the API token).</li>
+        <li>Add the bot to the chat or channel you want FeedEcho to post to — for channels, make it an admin.</li>
+        <li>Under <strong>Connect Telegram</strong>, paste the bot token and the chat ID or <code>@channelname</code>, then click <strong>Connect</strong>. FeedEcho verifies the token and the chat without posting anything.</li>
+        <li>Use the <strong>Test</strong> button on the connected account to confirm it before relying on it.</li>
     </ol>
     <h3>Webhook</h3>
     <ol class="howto-steps">

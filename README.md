@@ -4,7 +4,7 @@
   <p><em>Your feeds, echoed everywhere.</em></p>
 </div>
 
-Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, generic webhooks, and email using configurable templates.
+Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, generic webhooks, and email using configurable templates.
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
@@ -18,16 +18,17 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **micro.blog support** — connect with a Micropub app token; FeedEcho discovers every blog the token can post to and posts with the item's image attached
 - **Matrix support** — connect a room with an access token; posts go in as `m.room.message` events with clickable links, uploaded images, and homeserver-side de-duplication on retries (optionally with full-HTML formatted bodies via the render_html echo flag)
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
+- **Telegram support** — connect a bot token + chat; posts land in the chat (public channels get a t.me link in post history)
 - **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, push services like brrr, or anything you run yourself (optional custom JSON body template per endpoint)
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ content_html }}` (sanitized HTML passthrough for markup-aware destinations), `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
-- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, and webhook endpoints
+- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, Telegram chats, and webhook endpoints
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Built-in feed reader** — read items in place instead of a third-party app: folders with OPML import/export, unread and starred tracking with CSV/JSON export of starred items, saved searches, a full-text view, and a compose desk that turns any item into a post without leaving FeedEcho
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
-- **Image attachments** — automatically attach the feed item's images: up to 4 per post on Mastodon and Bluesky, up to 4 inline on email, and the first image on Matrix, micro.blog, and Discord
+- **Image attachments** — automatically attach the feed item's images: up to 4 per post on Mastodon and Bluesky, up to 4 inline on email, and the first image on Matrix, micro.blog, Discord, and Telegram
 - **AI alt text** — optionally generate image descriptions via an OpenAI-compatible vision API
 - **Digest mode** — batch email deliveries into hourly digests instead of one email per item
 - **Mobile-responsive** — tables convert to cards, forms stack, 44px touch targets
@@ -153,10 +154,11 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 3. **Add a micro.blog blog** — Create an app token at [micro.blog/account/apps](https://micro.blog/account/apps), then paste it under Connect Micro.blog on `/accounts`. FeedEcho discovers every blog the token can post to and connects each one.
 4. **Add a Matrix room** — Copy the access token of the account that should post (Element: Settings → Help & About → Access Token), then enter the homeserver, token, and room ID or alias under Connect Matrix on `/accounts`. That account must already be in the room.
 5. **Add a Discord channel** — In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it under Connect Discord on `/accounts`.
-6. **Add a webhook** — Under Connect Webhook on `/accounts`, enter any HTTP endpoint and optional custom headers (one per line, `Authorization: Bearer ...`). Each item arrives as one JSON object.
-7. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
-8. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
-9. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
+6. **Add a Telegram chat** — Create a bot with @BotFather (`/newbot` and copy the API token), add the bot to the target chat (for channels, make it an admin), then paste the token and the chat ID or `@channelname` under Connect Telegram on `/accounts`.
+7. **Add a webhook** — Under Connect Webhook on `/accounts`, enter any HTTP endpoint and optional custom headers (one per line, `Authorization: Bearer ...`). Each item arrives as one JSON object.
+8. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
+9. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
+10. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
 ### Bluesky details
 
@@ -182,6 +184,15 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - Posts send the rendered template as the message content (truncated to Discord's 2000-character limit). When image attachments are on and the item has one, a single embed carries the title, link, and image — Discord fetches the embed image itself, so an unusable image simply renders the post without the picture.
 - Webhooks reply with no message ID and no guild link, so post history has no per-message URL for Discord. Content warnings and visibility settings are Mastodon-only and are ignored for Discord.
 - Deleted or revoked webhooks fail permanently until reconnected; Discord's 30-messages-per-minute rate limit is treated as a transient error and rides the normal retry pipeline.
+
+### Telegram details
+
+- Accounts connect via a **bot token** (from @BotFather) plus a chat ID or `@channelname`. The bot must already be in the target chat; connect time verifies the token (`getMe`) and the chat (`getChat`) without posting anything.
+- The token is encrypted at rest and never rendered back in the UI. Reconnecting the same chat updates the stored row instead of duplicating it.
+- Templates without `{{ content_html }}` send with no parse mode: Telegram auto-links URLs and hashtags, and raw prose can never break entity parsing. Templates embedding `{{ content_html }}` send as HTML, with the sanitized article reduced to Telegram's supported tags (links, bold/italic/underline/strikethrough, code, pre, blockquote); other markup degrades to text.
+- With image attachments on, the first image goes out as a photo with the text as the caption (Telegram's 1024-character caption cap); a failed image fetch degrades to a text-only message.
+- Public-channel posts get a `t.me` link in post history; private chats and groups have no public URL. Content warnings and visibility settings are Mastodon-only and are ignored for Telegram.
+- A rejected token or a chat the bot can no longer see fails permanently until reconnected; Telegram rate limits (429 with `retry_after`) are transient and ride the normal retry pipeline.
 
 ### Webhook details
 

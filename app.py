@@ -78,6 +78,15 @@ from discord import (
     normalize_discord_webhook_url as discord_normalize_webhook_url,
     test_connection as test_discord_connection,
 )
+import telegram
+from telegram import (
+    TelegramAuthError,
+    TelegramBadRequestError,
+    TelegramError,
+    TelegramNotFoundError,
+    connect as telegram_connect,
+    test_connection as test_telegram_connection,
+)
 from webhook import (
     CLEAR_BODY_SENTINEL as webhook_clear_body_sentinel,
     MAX_HEADERS_TEXT,
@@ -172,6 +181,7 @@ DESTINATION_TABLES_BY_TYPE = {
     "microblog": "microblog_accounts",
     "matrix": "matrix_accounts",
     "discord": "discord_accounts",
+    "telegram": "telegram_accounts",
     "webhook": "webhook_accounts",
 }
 DESTINATION_TABLES = tuple(DESTINATION_TABLES_BY_TYPE.values())
@@ -180,6 +190,7 @@ DESTINATION_LIMITS = {
     "mastodon": 500,
     "bluesky": 300,
     "discord": 2000,
+    "telegram": 2000,
     "matrix": None,
     "email": None,
     "microblog": None,
@@ -1201,6 +1212,12 @@ def _get_all_accounts(user_id: int = 1):
             " WHERE user_id = ? ORDER BY name",
             (user_id,),
         ).fetchall()
+        # bot_token is the credential — never selected for display.
+        telegram_rows = db.execute(
+            "SELECT id, name, chat_id, created_at FROM telegram_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        ).fetchall()
         # Webhook rows: URL shown without query/fragment (secret tokens live
         # there) and headers shown by NAME only — values are credentials.
         webhook_rows = []
@@ -1221,14 +1238,14 @@ def _get_all_accounts(user_id: int = 1):
                     "created_at": row["created_at"],
                 }
             )
-    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows
+    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows
 
 
 def _shout_destinations(user_id: int):
     """One option per connected account, encoded ``type:id`` for the reader's
     Compose/Shout picker. Labels carry the type so a destination is unambiguous.
     Includes per-destination character/grapheme limit."""
-    (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, webhook_rows) = _get_all_accounts(user_id)
+    (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows) = _get_all_accounts(user_id)
     out = []
     for row in mastodon:
         out.append({"value": f"mastodon:{row['id']}", "label": f"Mastodon · {row['name']}", "limit": DESTINATION_LIMITS.get("mastodon")})
@@ -1242,6 +1259,8 @@ def _shout_destinations(user_id: int):
         out.append({"value": f"matrix:{row['id']}", "label": f"Matrix · {row['name']}", "limit": DESTINATION_LIMITS.get("matrix")})
     for row in discord_rows:
         out.append({"value": f"discord:{row['id']}", "label": f"Discord · {row['name']}", "limit": DESTINATION_LIMITS.get("discord")})
+    for row in telegram_rows:
+        out.append({"value": f"telegram:{row['id']}", "label": f"Telegram · {row['name']}", "limit": DESTINATION_LIMITS.get("telegram")})
     for row in webhook_rows:
         out.append({"value": f"webhook:{row['id']}", "label": f"Webhook · {row['name']}", "limit": DESTINATION_LIMITS.get("webhook")})
     return out
@@ -1257,6 +1276,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         microblog_accounts,
         matrix_accounts,
         discord_accounts,
+        telegram_accounts,
         webhook_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
@@ -1269,6 +1289,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         microblog_accounts=microblog_accounts,
         matrix_accounts=matrix_accounts,
         discord_accounts=discord_accounts,
+        telegram_accounts=telegram_accounts,
         webhook_accounts=webhook_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
@@ -1305,6 +1326,9 @@ async def dashboard(request: Request):
         discord_accounts = db.execute(
             "SELECT COUNT(*) as c FROM discord_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
+        telegram_accounts = db.execute(
+            "SELECT COUNT(*) as c FROM telegram_accounts WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
         webhook_accounts = db.execute(
             "SELECT COUNT(*) as c FROM webhook_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
@@ -1321,6 +1345,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'telegram' THEN tg.name
                      WHEN e.destination_type = 'webhook' THEN wh.name
                    END as destination_name
             FROM echoes e
@@ -1331,6 +1356,7 @@ async def dashboard(request: Request):
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
             LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
@@ -1344,6 +1370,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'telegram' THEN tg.name
                      WHEN e.destination_type = 'webhook' THEN wh.name
                    END as account_name,
                    CASE
@@ -1353,6 +1380,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
                      WHEN e.destination_type = 'discord' THEN dc.channel_id
+                     WHEN e.destination_type = 'telegram' THEN tg.chat_id
                      WHEN e.destination_type = 'webhook' THEN wh.url
                    END as instance
             FROM posted_items pi
@@ -1364,6 +1392,7 @@ async def dashboard(request: Request):
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
             LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
@@ -1379,6 +1408,7 @@ async def dashboard(request: Request):
                 + microblog_accounts
                 + matrix_accounts
                 + discord_accounts
+                + telegram_accounts
                 + webhook_accounts
             ),
             "feeds": len(feeds),
@@ -1560,6 +1590,8 @@ def _admin_usage(db) -> list:
               WHERE mx.user_id = u.id) +
             (SELECT COUNT(*) FROM discord_accounts dc
               WHERE dc.user_id = u.id) +
+            (SELECT COUNT(*) FROM telegram_accounts tg
+              WHERE tg.user_id = u.id) +
             (SELECT COUNT(*) FROM webhook_accounts wh
               WHERE wh.user_id = u.id) AS destinations,
             (SELECT COUNT(*) FROM posted_items pi
@@ -2370,6 +2402,7 @@ async def accounts_page(request: Request):
         microblog_accounts,
         matrix_accounts,
         discord_accounts,
+        telegram_accounts,
         webhook_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
@@ -2381,6 +2414,7 @@ async def accounts_page(request: Request):
                   microblog_accounts=microblog_accounts,
                   matrix_accounts=matrix_accounts,
                   discord_accounts=discord_accounts,
+                  telegram_accounts=telegram_accounts,
                   webhook_accounts=webhook_accounts,
                   smtp_configured=smtp_configured,
                   smtp_settings=smtp_settings,
@@ -2448,6 +2482,11 @@ def _echoes_page_context(db, uid: int) -> dict:
         " WHERE user_id = ? ORDER BY name",
         (uid,),
     ).fetchall()
+    telegram_accounts = db.execute(
+        "SELECT id, name, chat_id FROM telegram_accounts"
+        " WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
     webhook_accounts = db.execute(
         "SELECT id, name FROM webhook_accounts"
         " WHERE user_id = ? ORDER BY name",
@@ -2462,6 +2501,7 @@ def _echoes_page_context(db, uid: int) -> dict:
         "microblog_accounts": microblog_accounts,
         "matrix_accounts": matrix_accounts,
         "discord_accounts": discord_accounts,
+        "telegram_accounts": telegram_accounts,
         "webhook_accounts": webhook_accounts,
     }
 
@@ -2510,6 +2550,7 @@ _HISTORY_ACCOUNT_LABEL_SQL = """CASE
                      WHEN e.destination_type = 'microblog' THEN mb.name
                      WHEN e.destination_type = 'matrix' THEN mx.name
                      WHEN e.destination_type = 'discord' THEN dc.name
+                     WHEN e.destination_type = 'telegram' THEN tg.name
                      WHEN e.destination_type = 'webhook' THEN wh.name
                    END"""
 
@@ -2520,6 +2561,7 @@ _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
                      WHEN e.destination_type = 'microblog' THEN mb.uid
                      WHEN e.destination_type = 'matrix' THEN mx.homeserver
                      WHEN e.destination_type = 'discord' THEN dc.channel_id
+                     WHEN e.destination_type = 'telegram' THEN tg.chat_id
                      WHEN e.destination_type = 'webhook' THEN wh.url
                    END"""
 
@@ -2530,6 +2572,7 @@ _HISTORY_DESTINATION_JOINS_SQL = """
             LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+            LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
             LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id"""
 
 
@@ -3354,6 +3397,7 @@ def _hard_delete_user(db, uid: int) -> None:
         "microblog_accounts",
         "matrix_accounts",
         "discord_accounts",
+        "telegram_accounts",
         "webhook_accounts",
     ):
         db.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
@@ -3987,6 +4031,97 @@ def delete_discord_account(request: Request, account_id: int):
             (account_id, uid),
         )
     return RedirectResponse(url="/accounts?status=discord_deleted", status_code=303)
+
+
+@app.post("/api/telegram-accounts")
+def add_telegram_account(
+    request: Request,
+    bot_token: str = Form(...),
+    chat_id: str = Form(...),
+    name: str = Form(""),
+):
+    """Verify a Telegram bot token + chat pair and store one account row.
+
+    Synchronous route (threadpool-offloaded): the verification calls are
+    blocking HTTPS. Reconnecting the same chat updates the stored row
+    (token rotation, name refresh) instead of duplicating it.
+    """
+    try:
+        info = telegram_connect(bot_token, chat_id)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+    except TelegramAuthError as e:
+        return _render_accounts_error(request, str(e))
+    except TelegramNotFoundError as e:
+        return _render_accounts_error(request, str(e))
+    except TelegramError as e:
+        logger.warning("Telegram connect failed: %s", e)
+        return _render_accounts_error(request, str(e))
+    except Exception:
+        logger.exception("Telegram account verification failed")
+        return _render_accounts_error(
+            request, "Could not verify the Telegram bot. Try again."
+        )
+
+    display_name = name.strip()[:100] or info["name"]
+
+    with get_db() as db:
+        uid = current_user_id(request)
+        existing = db.execute(
+            "SELECT id FROM telegram_accounts"
+            " WHERE user_id = ? AND chat_id = ?",
+            (uid, info["chat_id"]),
+        ).fetchone()
+        if not existing:
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
+        db.execute(
+            """
+            INSERT INTO telegram_accounts
+                (name, bot_token, chat_id, user_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                name = excluded.name,
+                bot_token = excluded.bot_token
+            """,
+            (display_name, security.encrypt_secret(info["bot_token"]),
+             info["chat_id"], uid),
+        )
+    return RedirectResponse(url="/accounts?status=telegram_connected", status_code=303)
+
+
+@app.post("/api/telegram-accounts/{account_id}/test")
+def test_telegram_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM telegram_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not account:
+        raise HTTPException(status_code=404, detail="Telegram account not found")
+    success, message = test_telegram_connection(
+        security.decrypt_secret(account["bot_token"]), account["chat_id"]
+    )
+    return {"success": success, "message": message}
+
+
+@app.post("/api/telegram-accounts/{account_id}/delete")
+def delete_telegram_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "telegram", account_id):
+            return _render_accounts_error(
+                request,
+                "This Telegram account is used by echoes. Delete or reassign those echoes first.",
+            )
+        db.execute(
+            "DELETE FROM telegram_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
+    return RedirectResponse(url="/accounts?status=telegram_deleted", status_code=303)
 
 
 # ── API: Webhook Accounts ───────────────────────────────────────────────────
@@ -5875,6 +6010,7 @@ async def add_echo(
     microblog_account_id: int = Form(None),
     matrix_account_id: int = Form(None),
     discord_account_id: int = Form(None),
+    telegram_account_id: int = Form(None),
     webhook_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
@@ -5945,6 +6081,10 @@ async def add_echo(
         destination_id = discord_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="discord_account_id required for discord destination")
+    elif destination_type == "telegram":
+        destination_id = telegram_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="telegram_account_id required for telegram destination")
     elif destination_type == "webhook":
         destination_id = webhook_account_id
         if not destination_id:
@@ -6095,6 +6235,7 @@ async def edit_echo(
     microblog_account_id: int = Form(None),
     matrix_account_id: int = Form(None),
     discord_account_id: int = Form(None),
+    telegram_account_id: int = Form(None),
     webhook_account_id: int = Form(None),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
@@ -6161,6 +6302,10 @@ async def edit_echo(
         destination_id = discord_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="discord_account_id required for discord destination")
+    elif destination_type == "telegram":
+        destination_id = telegram_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="telegram_account_id required for telegram destination")
     elif destination_type == "webhook":
         destination_id = webhook_account_id
         if not destination_id:

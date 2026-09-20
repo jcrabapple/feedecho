@@ -613,36 +613,21 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         margin-left: 0;
         min-width: 0;
     }
+    /* Tabs wrap to a second row instead of scrolling off-screen: every
+       destination is visible at first paint. (v1.26.3 shipped a horizontally
+       scrolling strip + edge fade; an external review in 2026-09 found it
+       still read as clipped — History/Settings/How To hidden behind an
+       undiscoverable swipe — so the strip was replaced with a wrap. The
+       fade cue is gone with it: nothing scrolls, nothing needs a cue.) */
     .nav-links {
         margin-left: 0;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        overflow-y: hidden;
-        scrollbar-width: none;
-        overscroll-behavior-x: contain;
-        -webkit-overflow-scrolling: touch;
-    }
-    .nav-links::-webkit-scrollbar { display: none; }
-    /* With the scrollbar hidden, a fully-filled first screen (e.g. exactly
-       6 tabs fitting the viewport) gave zero visual indication that
-       History/Settings/How To existed further right — reachable only by
-       an undiscoverable swipe. This fade is a static "more content" cue
-       (it doesn't disappear once scrolled to the end — a scroll-position
-       -aware version is a reasonable follow-up, but this alone fixes the
-       "looks complete when it isn't" problem). UX audit finding 2
-       (2026-09-08). */
-    .nav-links-wrap::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        width: 28px;
-        pointer-events: none;
-        background: linear-gradient(to right, transparent, var(--surface));
+        flex-wrap: wrap;
+        overflow-x: visible;
+        row-gap: 2px;
     }
     .nav-links a {
-        flex: 0 0 auto;
+        flex: 0 0 auto;                /* natural width: rows pack left like
+                                          wrapped text, no full-width orphan */
         min-height: 44px;              /* touch target */
         display: inline-flex;
         align-items: center;

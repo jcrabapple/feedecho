@@ -95,14 +95,26 @@ def _format_date(date_str: str | None, fmt: str) -> str:
 
 
 def _format_hashtags(tags) -> str:
-    """Format a list of tags as hashtag string."""
+    """Format a list of tags as hashtag string.
+
+    Tags that differ only by punctuation or case are equivalent after
+    cleaning (#opensource for both "open source" and "Open-Source"), so
+    dedupe case-insensitively on the cleaned form, preserving first-seen
+    order.
+    """
     if not tags:
         return ""
     hashtags = []
+    seen = set()
     for tag in tags:
         clean = re.sub(r"[^a-zA-Z0-9]", "", str(tag))
-        if clean:
-            hashtags.append(f"#{clean}")
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        hashtags.append(f"#{clean}")
     return " ".join(hashtags)
 
 

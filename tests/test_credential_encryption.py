@@ -1,11 +1,12 @@
-"""S3 — third-party credentials encrypted at rest (multi mode only).
+"""S3 — third-party credentials encrypted at rest (any mode, key-gated).
 
 Fernet (cryptography) under FEEDECHO_CREDENTIAL_KEY encrypts the stored value
-of every third-party credential (Mastodon/Bluesky/Matrix/micro.blog/Discord
-tokens, SMTP passwords, vision API keys, OAuth client secrets). Single mode
-stores plaintext (the operator owns the DB); multi mode with no key stores
-plaintext (a startup warning fires). Legacy plaintext rows decrypt to
-themselves, so a mixed DB keeps working.
+of every third-party credential (Mastodon/Bluesky/Matrix/micro.blog/Discord/
+Telegram tokens, SMTP passwords, vision API keys, OAuth client secrets).
+Multi mode requires the key at startup; single mode treats it as optional
+hardening for copied backups (v1.69.0 — before that single mode always
+stored plaintext). Either mode with no key stores plaintext. Legacy
+plaintext rows decrypt to themselves, so a mixed DB keeps working.
 """
 
 import pytest
@@ -49,9 +50,22 @@ class TestEncryptDecrypt:
         _reset_fernet_cache(monkeypatch)
         assert security.encrypt_secret("same") != security.encrypt_secret("same")
 
-    def test_single_mode_is_noop(self, monkeypatch):
+    def test_single_mode_with_key_roundtrips(self, monkeypatch):
+        # v1.69.0: single mode honors CREDENTIAL_KEY (optional hardening for
+        # copied backups). Before that this was a plaintext no-op.
         monkeypatch.setattr(settings_mod, "MULTI", False)
         monkeypatch.setattr(settings_mod, "CREDENTIAL_KEY", TEST_KEY)
+        _reset_fernet_cache(monkeypatch)
+        token = security.encrypt_secret("plaintext")
+        assert token != "plaintext"
+        assert token.startswith("gAAAA")
+        assert security.decrypt_secret(token) == "plaintext"
+        # Legacy plaintext rows written before the key was set still read.
+        assert security.decrypt_secret("plaintext") == "plaintext"
+
+    def test_single_mode_no_key_is_noop(self, monkeypatch):
+        monkeypatch.setattr(settings_mod, "MULTI", False)
+        monkeypatch.setattr(settings_mod, "CREDENTIAL_KEY", "")
         _reset_fernet_cache(monkeypatch)
         assert security.encrypt_secret("plaintext") == "plaintext"
         assert security.decrypt_secret("plaintext") == "plaintext"

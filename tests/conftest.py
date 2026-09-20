@@ -25,6 +25,19 @@ import database
 import scheduler
 
 
+@pytest.fixture(autouse=True)
+def _allow_insecure_for_tests(monkeypatch):
+    """Opt every test out of the single-mode startup auth gate.
+
+    Since v1.69.0 validate_config() refuses to boot single mode without
+    FEEDECHO_AUTH_TOKEN unless FEEDECHO_ALLOW_INSECURE=1. Most tests never
+    set a token but DO run the lifespan (any `with TestClient(app)`), so
+    they would all trip the gate. Tests that exercise the gate itself
+    override this with their own monkeypatch.
+    """
+    monkeypatch.setattr("settings.ALLOW_INSECURE", True)
+
+
 @pytest.fixture()
 def db_tmp(monkeypatch):
     """Point the DB layer at a fresh temp file per test."""

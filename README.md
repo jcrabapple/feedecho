@@ -100,7 +100,8 @@ docker run -d --name feedecho \
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `FEEDECHO_AUTH_TOKEN` | yes (for any real deployment) | Shared-secret login for the web UI. If unset, auth is **disabled** — only safe on localhost. |
+| `FEEDECHO_AUTH_TOKEN` | yes | Shared-secret login for the web UI. **The app refuses to start without it** unless you set `FEEDECHO_ALLOW_INSECURE=1` (no auth at all — only sane behind your own authenticated reverse proxy). |
+| `FEEDECHO_ALLOW_INSECURE` | no | Set to `1` to boot single-user mode with no `FEEDECHO_AUTH_TOKEN` and no authentication. Logs a loud warning at startup. |
 | `FEEDECHO_CALLBACK_URL` | for Mastodon OAuth | Public callback URL, e.g. `https://feedecho.example.com/oauth/callback`. Must match the URL reachable by your browser. Derived from `FEEDECHO_BASE_URL` when unset. |
 | `FEEDECHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. |
 | `FEEDECHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDECHO_BASE_URL`, then to the project repo. |
@@ -283,10 +284,10 @@ This prevents pointing FeedEcho at cloud metadata endpoints, internal services, 
 
 ### Web UI authentication
 
-FeedEcho supports optional shared-secret authentication via the `FEEDECHO_AUTH_TOKEN` environment variable:
+FeedEcho uses shared-secret authentication via the `FEEDECHO_AUTH_TOKEN` environment variable:
 
 - **If set**: all requests must include the token as either a cookie (set by the login page at `/login`) or an `X-Auth-Token` header (for API/programmatic access). Unauthenticated browser requests are redirected to `/login`; API requests get 401.
-- **If unset**: auth is disabled (original behavior). The app is open to anyone who can reach the port.
+- **If unset**: the app **refuses to start**. A bare `docker run` or source install binds `0.0.0.0`, and starting unauthenticated there would expose the full UI to anyone who can reach the port. To run without auth on purpose (behind your own authenticated reverse proxy, or on a private bind), set `FEEDECHO_ALLOW_INSECURE=1` — the app then boots with a startup warning and auth fully disabled.
 
 Only the endpoints that require unauthenticated access (OAuth callback, health check, static assets) are exempt from auth — everything else requires the session or token.
 
@@ -298,7 +299,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 
 ### Secrets handling
 
-- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, and OAuth client secrets** are scoped credentials — revoke any of them at the source platform without touching your main passwords. At rest they are encrypted (Fernet) whenever the app runs in multi-tenant mode with `FEEDECHO_CREDENTIAL_KEY` set; in single-tenant mode they are stored plaintext because you own the database and the encryption key would live beside it.
+- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, Telegram bot tokens, Discord webhook URLs, and OAuth client secrets** are scoped credentials — revoke any of them at the source platform without touching your main passwords. At rest they are encrypted (Fernet) whenever `FEEDECHO_CREDENTIAL_KEY` is set — required in multi-tenant mode, optional in single-tenant mode, where it keeps copied database backups from being credential dumps. Keep the key stable once set: rows encrypted under it are unreadable without it (reconnect the affected accounts if you lose it). Without a key, single-tenant mode stores credentials plaintext because you own the database and the encryption key would live beside it.
 - **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
 - The `FEEDECHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
@@ -313,13 +314,15 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 ### Network
 
 - All outbound HTTP uses httpx with bounded timeouts (30 s by default, 60 s for Mastodon media uploads). FeedEcho makes requests to: the feed URL and any images in it (user-provided), the APIs of the destinations you connect — Mastodon instances, Bluesky's AppView/PDS/PLC directory, micro.blog's Micropub endpoints, your Matrix homeserver, Discord and generic webhook URLs (all user-provided) — and the SMTP server (admin-configured). No telemetry, no phone-home, no analytics.
-- Even without `FEEDECHO_AUTH_TOKEN`, FeedEcho is designed to run behind a reverse proxy or tunnel (Cloudflare Tunnel, nginx, etc.) with access control at the network layer. The built-in auth is a lightweight fallback for when a reverse proxy isn't available.
+- With `FEEDECHO_ALLOW_INSECURE=1` (no `FEEDECHO_AUTH_TOKEN`), FeedEcho is designed to run behind a reverse proxy or tunnel (Cloudflare Tunnel, nginx, etc.) with access control at the network layer. The built-in auth is the default; the flag exists for operators who enforce access at the network layer instead.
 
 ### Configuration
 
 | Environment variable | Purpose | Default |
 |---------------------|---------|---------|
-| `FEEDECHO_AUTH_TOKEN` | Shared-secret auth token (enables login page + API auth, also signs OAuth state) | Unset (auth disabled) |
+| `FEEDECHO_AUTH_TOKEN` | Shared-secret auth token (enables login page + API auth, also signs OAuth state) | Unset — startup refused unless `FEEDECHO_ALLOW_INSECURE=1` |
+| `FEEDECHO_ALLOW_INSECURE` | Boot single-user mode with no auth at all | Unset (auth required) |
+| `FEEDECHO_CREDENTIAL_KEY` | Fernet key encrypting third-party credentials at rest | Unset (plaintext in single mode; required in multi mode) |
 | `FEEDECHO_CALLBACK_URL` | Public URL for OAuth callback | `<FEEDECHO_BASE_URL>/oauth/callback`, else `https://feedecho.example.com/oauth/callback` |
 | `FEEDECHO_APP_WEBSITE` | Website registered with the Mastodon OAuth app (the link on posts) | `FEEDECHO_BASE_URL`, else `https://github.com/jcrabapple/feedecho` |
 | `FEEDECHO_DB_PATH` | Path to SQLite database | `./feedecho.db` |
@@ -372,7 +375,7 @@ If using OAuth, set `FEEDECHO_CALLBACK_URL` to your public URL:
 
 ```bash
 export FEEDECHO_CALLBACK_URL="https://feedecho.yourdomain.com/oauth/callback"
-export FEEDECHO_AUTH_TOKEN="your-secret-token"  # optional: enable web UI auth
+export FEEDECHO_AUTH_TOKEN="your-secret-token"  # required unless FEEDECHO_ALLOW_INSECURE=1
 ```
 
 ## Hosted version

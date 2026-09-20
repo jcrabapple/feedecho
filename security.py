@@ -2,10 +2,12 @@
 
 Passwords use scrypt (hashlib), session cookies are HMAC-signed stateless
 tokens, and third-party credentials (Mastodon/Bluesky/Matrix/micro.blog/
-Discord tokens, SMTP passwords, vision API keys, OAuth client secrets) are
-encrypted at rest with Fernet (cryptography) in multi mode only. Single mode
-stores credentials plaintext: the operator owns the database and gains nothing
-from encrypting against themselves.
+Discord/Telegram tokens, SMTP passwords, vision API keys, OAuth client
+secrets) are encrypted at rest with Fernet (cryptography) whenever
+FEEDECHO_CREDENTIAL_KEY is set. Multi mode requires that key at startup;
+single mode treats it as optional — without it credentials stay plaintext
+(the operator owns the database), with it copied DB backups stop being
+credential dumps.
 """
 
 import base64
@@ -191,7 +193,7 @@ def read_session(token: str | bytes, ignore_expiry: bool = False) -> dict | None
         return None
 
 
-# ── Credential encryption (Fernet, multi mode only) ──────────────────────────
+# ── Credential encryption (Fernet; required in multi, optional in single) ────
 
 
 _credential_fernet = None
@@ -219,14 +221,13 @@ def _fernet():
 def encrypt_secret(value: str) -> str:
     """Encrypt a third-party credential for at-rest storage.
 
-    Only encrypts in multi mode with FEEDECHO_CREDENTIAL_KEY set. Single
-    mode returns the value unchanged (the operator owns the DB). An unset
-    key in multi mode returns the value unchanged (a startup warning fires
-    through settings.validate_config).
+    Encrypts whenever FEEDECHO_CREDENTIAL_KEY is set, in either mode: multi
+    mode requires the key at startup, single mode treats it as optional
+    hardening for copied backups. An unset key returns the value unchanged
+    (multi mode without a real database warns at startup through
+    settings.validate_config; single mode stores plaintext by default).
     """
     if not value:
-        return value
-    if not settings.MULTI:
         return value
     fernet = _fernet()
     if fernet is None:
@@ -242,10 +243,11 @@ def decrypt_secret(value: str) -> str:
     tokens (rows written before encryption shipped, or a key rotation that
     renders the token unreadable) are returned unchanged, so a mixed
     plaintext/encrypted DB keeps working. Re-encrypts on the next write.
+    With no key configured the value passes through untouched — an operator
+    who REMOVES the key after encrypting rows gets ciphertext handed to the
+    destination (confusing 401s), so keep the key stable once set.
     """
     if not value:
-        return value
-    if not settings.MULTI:
         return value
     fernet = _fernet()
     if fernet is None:

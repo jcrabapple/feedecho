@@ -358,7 +358,9 @@ def _has_tag_body_char(tag: str) -> bool:
     return False
 
 
-def build_facets(text: str) -> list[dict]:
+def build_facets(
+    text: str, extra_links: list[tuple[int, int, str]] | None = None
+) -> list[dict]:
     """Find URLs and hashtags in post text and build richtext facets.
 
     Byte offsets are relative to the UTF-8 encoding of the text, as required
@@ -368,12 +370,47 @@ def build_facets(text: str) -> list[dict]:
     non-punctuation character. Truncation artifacts are dropped ("…" inside a
     match), and a tag candidate overlapping a URL range is skipped so facets
     never overlap.
+
+    extra_links: optional (char_start, char_end, uri) spans recovered from
+    rich rendering ({{ content_html }} anchors, see template_engine
+    .render_template_rich). They take precedence: URL and tag detection skip
+    any candidate overlapping an extra span, and spans beyond the text
+    (truncated away) are dropped.
     """
     encoded = text.encode("utf-8")
 
     # (char_start, char_end, facet) — overlap checks run in character space;
     # byte offsets are derived from character positions per final match.
     found: list[tuple[int, int, dict]] = []
+
+    # Seed with rich-render link spans. Offsets computed from the text
+    # itself are always valid decodes, so no truncation guard is needed;
+    # spans past the end (content truncated away) are dropped here.
+    extra_spans: list[tuple[int, int]] = []
+    for char_start, char_end, uri in extra_links or []:
+        if not (0 <= char_start < char_end <= len(text)) or not uri:
+            continue
+        # Overlapping extra spans would produce overlapping facets, which
+        # Bluesky's record validation rejects. The converter cannot emit
+        # them (anchors never nest), so treat overlap as a caller bug and
+        # keep the first span.
+        if any(char_start < end and start < char_end for start, end in extra_spans):
+            continue
+        byte_start = len(text[:char_start].encode("utf-8"))
+        byte_end = len(text[:char_end].encode("utf-8"))
+        found.append(
+            (
+                char_start,
+                char_end,
+                {
+                    "index": {"byteStart": byte_start, "byteEnd": byte_end},
+                    "features": [
+                        {"$type": _FACET_LINK_TYPE, "uri": uri},
+                    ],
+                },
+            )
+        )
+        extra_spans.append((char_start, char_end))
 
     for match in _URL_RE.finditer(text):
         uri = match.group(0)
@@ -395,6 +432,11 @@ def build_facets(text: str) -> list[dict]:
         # If the text was truncated mid-URL, the byte range won't decode back
         # to the full URI — drop the facet instead of linkifying a broken URL.
         if byte_end > len(encoded) or encoded[byte_start:byte_end].decode("utf-8") != uri:
+            continue
+
+        # A rich-render anchor already covers this range — keep its facet.
+        span_end = char_start + len(uri)
+        if any(char_start < end and start < span_end for start, end in extra_spans):
             continue
 
         found.append(

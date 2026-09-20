@@ -97,7 +97,7 @@ from notify import (
     record_failure,
     record_success,
 )
-from template_engine import render_template
+from template_engine import render_template, render_template_rich
 import alt_text
 import images
 from utils import FeedItem
@@ -939,6 +939,7 @@ def _render_and_dispatch(
     """
     echo_id = echo["id"]
     item_id = item["id"]
+    destination_type = echo["destination_type"]
 
     if override_content is not None:
         content = override_content
@@ -953,7 +954,18 @@ def _render_and_dispatch(
             return gave_up
     else:
         try:
-            content = render_template(echo["template"], item, feed_name=feed_name)
+            if destination_type == "bluesky":
+                # Rich render: content_html anchors become visible text plus
+                # link spans the Bluesky sender merges into facets. Stored
+                # as _rich_links on a copied item; the drip path (override
+                # content) has no spans and falls back to bare-URL facets.
+                content, rich_links = render_template_rich(
+                    echo["template"], dict(item), feed_name=feed_name
+                )
+                item = dict(item)  # type: ignore[assignment]
+                item["_rich_links"] = rich_links  # type: ignore[typeddict-unknown-key]
+            else:
+                content = render_template(echo["template"], item, feed_name=feed_name)
         except Exception as e:
             logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
             gave_up = _fail_post(
@@ -968,7 +980,6 @@ def _render_and_dispatch(
         gave_up = _fail_post(posted_id, claim_token, echo_id, "Rendered content was empty")
         return gave_up
 
-    destination_type = echo["destination_type"]
     if destination_type == "webhook":
         return _send_webhook(echo, item, content, feed_name, echo["destination_id"], posted_id, claim_token)
 
@@ -1926,7 +1937,21 @@ def _send_bluesky(
         text = truncate_graphemes(
             content or "", MAX_POST_GRAPHEMES, max_bytes=MAX_POST_BYTES
         )
-        facets = build_facets(text)
+        # Link spans from the rich render (content_html anchors) survive only
+        # if fully inside the truncated text; partial spans are dropped. The
+        # drip path (override content) has no spans and relies on bare-URL
+        # detection alone.
+        # Truncation always appends "…" as the final character — a span
+        # reaching the last character covers the ellipsis and maps onto
+        # text that was never part of the anchor, so it's dropped. Anchors
+        # containing a literal "…" elsewhere keep their facet.
+        limit = len(text) - 1 if len(text) < len(content or "") else len(text)
+        rich_links = [
+            (start, end, uri)
+            for start, end, uri in (item.get("_rich_links") or [])
+            if end <= limit
+        ]
+        facets = build_facets(text, extra_links=rich_links)
     except Exception:
         logger.exception("Echo %s: Bluesky content preparation failed", echo["id"])
         return _fail_post(

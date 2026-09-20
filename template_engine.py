@@ -10,9 +10,10 @@ original regex engine supported keeps working unchanged, plus:
 
 Supported flat variables: {{ title }}, {{ link }}, {{ content_link }},
 {{ summary }}, {{ content }}, {{ content_html }} (sanitized article HTML —
-renders in webhook bodies and other markup-aware destinations; shows raw
-tags in plain-text destinations), {{ author }}, {{ date }}, {{ date_iso }},
-{{ date_short }}, {{ tags }}, {{ hashtags }}, {{ image_url }}, {{ feed_name }}.
+renders in webhook bodies and other markup-aware destinations; on Bluesky
+it converts to clean text whose article links become clickable facets), {{ author }},
+{{ date }}, {{ date_iso }}, {{ date_short }}, {{ tags }}, {{ hashtags }},
+{{ image_url }}, {{ feed_name }}.
 
 Templates are sandboxed: attribute access on unsafe objects and method
 calls are blocked (use filters instead of methods), and templates cannot
@@ -21,6 +22,7 @@ reach the filesystem, imports, or Python builtins.
 
 import re
 from datetime import datetime
+from html.parser import HTMLParser
 
 from jinja2 import TemplateSyntaxError
 from jinja2.exceptions import SecurityError
@@ -139,10 +141,18 @@ def _normalize(template: str) -> str:
     return _EXPRESSION_RE.sub(_fix_expression, template)
 
 
-def _build_context(item: dict, feed_name: str = "") -> dict:
-    """Build the Jinja2 context from a feed item dict."""
+def _build_context(item: dict, feed_name: str = "", rich: bool = False) -> dict:
+    """Build the Jinja2 context from a feed item dict.
+
+    With ``rich=True`` (facet-aware destinations), ``content_html`` is
+    converted to plain text where each http(s) anchor becomes its visible
+    text wrapped in private-use marker pairs, and every other string field —
+    including the embedded ``item`` dict — is scrubbed of that marker range,
+    so only the converter can emit markers and feed content cannot forge a
+    link facet.
+    """
     date_str = item.get("date", "")
-    return {
+    context = {
         "title": item.get("title", ""),
         "link": item.get("link", ""),
         "summary": item.get("summary", ""),
@@ -160,6 +170,18 @@ def _build_context(item: dict, feed_name: str = "") -> dict:
         # Full item dict for power users: {{ item.title }}, {{ item['link'] }}
         "item": item,
     }
+    if rich:
+        converted = _html_to_rich(item.get("content_html") or "")
+        context["content_html"] = converted
+        context["item"] = {
+            key: _scrub_pua(value) for key, value in item.items()
+        }
+        context["item"]["content_html"] = converted
+        for key, value in context.items():
+            if key in ("content_html", "item"):
+                continue
+            context[key] = _scrub_pua(value)
+    return context
 
 
 def render_template(template: str, item: dict, feed_name: str = "") -> str:
@@ -187,6 +209,199 @@ def render_template(template: str, item: dict, feed_name: str = "") -> str:
     return result
 
 
+# ── Rich rendering (facet-aware plain-text destinations) ─────────────────────
+#
+# Private-use-area markers wrap anchors recovered from content_html during
+# rich rendering. Only _html_to_rich may emit them: render_template_rich
+# scrubs the whole marker range from every other context field, so hostile
+# feed content cannot forge a marker pair (which would linkify arbitrary
+# text to an arbitrary URL — a phishing upgrade over the bare-URL facets
+# build_facets already creates).
+_RICH_START = "\ue000"
+_RICH_SEP = "\ue001"
+_RICH_END = "\ue002"
+_PUA_RE = re.compile("[\ue000-\ue00f]")
+_RICH_LINK_RE = re.compile(
+    re.escape(_RICH_START) + r"(.*?)" + re.escape(_RICH_SEP)
+    + r"(.*?)" + re.escape(_RICH_END),
+    re.DOTALL,
+)
+
+
+def _scrub_pua(value):
+    """Recursively strip the marker range from strings in nested structures.
+
+    Lists (item["tags"], item["image_urls"]), dicts, and nested combinations
+    all get scrubbed, so a hostile feed cannot smuggle marker codepoints into
+    the rendered output through {{ tags | join(' ') }}, {{ item.tags[0] }}, etc.
+    """
+    if isinstance(value, str):
+        return _PUA_RE.sub("", value)
+    if isinstance(value, list):
+        return [_scrub_pua(entry) for entry in value]
+    if isinstance(value, dict):
+        return {key: _scrub_pua(entry) for key, entry in value.items()}
+    return value
+
+
+class _RichHTMLParser(HTMLParser):
+    """Convert sanitized HTML to text, wrapping http(s) anchors in markers.
+
+    Mirrors feed_parser.html_to_text's output shape (block closes and <br>
+    become newlines, <li> a bullet, whitespace normalized) so a rich render
+    reads like the plain-text conversion users already expect. Anchors whose
+    href is http(s) render as ``<MARK>text<SEP>url<END>``; other anchors
+    (mailto, relative — the sanitizer already strips foreign schemes) keep
+    their text only.
+    """
+
+    _BLOCK = {
+        "p", "div", "section", "article", "blockquote", "pre",
+        "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol",
+        "table", "tr", "figure", "figcaption",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out: list[str] = []
+        self._href: str | None = None
+        self._anchor: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("br", "hr"):
+            # Inside an anchor the newline belongs to the anchor text, not
+            # the surrounding document — otherwise the marker pair would
+            # only wrap the text after the break.
+            if self._href is not None:
+                self._anchor.append("\n")
+            else:
+                self.out.append("\n")
+        elif tag == "li":
+            if self._href is not None:
+                self._anchor.append("\n• ")
+            else:
+                self.out.append("\n• ")
+        elif tag == "a":
+            self._href = dict(attrs).get("href")
+            self._anchor = []
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            text = re.sub(r"\s+", " ", "".join(self._anchor)).strip()
+            href = (self._href or "").strip()
+            if text and href and href.startswith(("http://", "https://")):
+                text = _PUA_RE.sub("", text)
+                href = _PUA_RE.sub("", href)
+                if text and href:
+                    self.out.append(_RICH_START + text + _RICH_SEP + href + _RICH_END)
+            elif text:
+                self.out.append(_PUA_RE.sub("", text))
+            self._href = None
+            self._anchor = []
+        elif tag in self._BLOCK:
+            self.out.append("\n")
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._anchor.append(data)
+        else:
+            self.out.append(_PUA_RE.sub("", data))
+
+    def close(self):
+        super().close()
+        # An anchor left open at EOF (defensive: nh3 balances tags at ingest)
+        # still flushes its collected text instead of dropping it.
+        if self._href is not None or self._anchor:
+            text = re.sub(r"\s+", " ", "".join(self._anchor)).strip()
+            if text:
+                self.out.append(_PUA_RE.sub("", text))
+            self._href = None
+            self._anchor = []
+
+
+def _html_to_rich(html_str: str) -> str:
+    """Sanitized article HTML -> plain text with marker-wrapped anchors."""
+    if not isinstance(html_str, str) or not html_str:
+        return ""
+    parser = _RichHTMLParser()
+    parser.feed(html_str)
+    parser.close()
+    text = "".join(parser.out)
+    lines = [re.sub(r"[ \t\r\f\v]+", " ", ln).strip() for ln in text.split("\n")]
+    out: list[str] = []
+    blank = True
+    for ln in lines:
+        if not ln:
+            if blank:
+                continue
+            out.append("")
+            blank = True
+            continue
+        out.append(ln)
+        blank = False
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
+def _extract_rich_links(rendered: str) -> tuple[str, list[tuple[int, int, str]]]:
+    """Strip marker pairs from a rendered string, recovering link spans.
+
+    Returns (text, links) where links are (char_start, char_end, uri)
+    pointing at the anchor text's position in the returned text.
+    """
+    parts: list[str] = []
+    links: list[tuple[int, int, str]] = []
+    length = 0
+    last = 0
+    for match in _RICH_LINK_RE.finditer(rendered):
+        chunk = rendered[last:match.start()]
+        parts.append(chunk)
+        length += len(chunk)
+        anchor_text, uri = match.group(1), match.group(2)
+        links.append((length, length + len(anchor_text), uri))
+        parts.append(anchor_text)
+        length += len(anchor_text)
+        last = match.end()
+    parts.append(rendered[last:])
+    text = "".join(parts)
+    if _PUA_RE.search(text):
+        # A template filter sliced through a marker pair (e.g.
+        # {{ content_html | truncate(50) }}), leaving dangling markers. The
+        # surviving spans' positions are no longer trustworthy and the
+        # markers must never leak into visible post text: scrub everything
+        # and fall back to bare-URL facet detection only. A cut between the
+        # separator and the end marker also leaves the URL tail attached to
+        # visible text — strip that residue before the marker characters.
+        text = re.sub(_RICH_SEP + r"[^\ue000-\ue00f]*", "", text)
+        text = _PUA_RE.sub("", text)
+        return text, []
+    return text, links
+
+
+def render_template_rich(
+    template: str, item: dict, feed_name: str = ""
+) -> tuple[str, list[tuple[int, int, str]]]:
+    """Render for a facet-aware plain-text destination (Bluesky).
+
+    Like render_template, but ``content_html`` converts to plain text where
+    each http(s) anchor becomes its visible text, recovered as a link span
+    into the returned text. Other variables render identically to
+    render_template. Returns (text, links) with links as
+    (char_start, char_end, uri).
+
+    Raises the same exceptions as render_template.
+    """
+    context = _build_context(item, feed_name, rich=True)
+    result = env.from_string(_normalize(template or "")).render(**context)
+    if len(result) > _MAX_OUTPUT:
+        raise SecurityError(
+            f"Template output is {len(result)} chars, over the "
+            f"{_MAX_OUTPUT}-char cap"
+        )
+    return _extract_rich_links(result)
+
+
 def validate_template(template: str) -> None:
     """Raise TemplateSyntaxError if the template cannot be parsed.
 
@@ -204,7 +419,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ content_link }}", "desc": "First link inside the post content (link-blogs)"},
         {"var": "{{ summary }}", "desc": "Post summary/excerpt"},
         {"var": "{{ content }}", "desc": "Full post content (HTML cleaned)"},
-        {"var": "{{ content_html }}", "desc": "Full content as sanitized HTML (links/formatting kept; renders in webhook bodies, shows raw tags in plain-text destinations)"},
+        {"var": "{{ content_html }}", "desc": "Full content as sanitized HTML (links/formatting kept; renders in webhook bodies; on Bluesky becomes clean text with clickable article links)"},
         {"var": "{{ author }}", "desc": "Author name"},
         {"var": "{{ date }}", "desc": "Publication date (raw)"},
         {"var": "{{ date_iso }}", "desc": "ISO 8601 date (2024-01-15T09:30:00)"},

@@ -1,9 +1,11 @@
-"""Mobile navbar redesign tests (Kimi K3-designed two-row header).
+"""Mobile navbar tests (two-row header; wrapped tab rows since v1.69.1).
 
-Pattern: row 1 = brand + theme toggle + avatar account menu; row 2 = full-width
-horizontally scrollable tab strip with 44px touch targets. The account
-email/logout collapse into a zero-JS <details> menu on mobile; desktop keeps
-the inline email + logout. Sticky positioning is retained deliberately.
+Pattern: row 1 = brand + theme toggle + avatar account menu; the tabs then
+wrap onto as many full-width rows as needed (44px touch targets) so every
+destination is visible at first paint — the v1.26.3 scroll strip + edge
+fade read as clipped (external review, 2026-09). The account email/logout
+collapse into a zero-JS <details> menu on mobile; desktop keeps the inline
+email + logout. Sticky positioning is retained deliberately.
 """
 
 import re
@@ -30,7 +32,10 @@ def _blocks():
 
 def _nav_block() -> str:
     for _, body in _blocks():
-        if ".nav-links" in body and "overflow-x: auto" in body:
+        # The structural nav block is the one carrying the wrap container's
+        # order rule — a bare ".nav-links-wrap" substring could match a
+        # comment in an unrelated media block and bind the tests vacuously.
+        if ".nav-links-wrap" in body and re.search(r"order\s*:\s*4\b", body):
             return body
     raise AssertionError("mobile navbar block not found")
 
@@ -47,22 +52,36 @@ class TestMobileNavStructure:
         assert re.search(r"\.nav-links-wrap\s*\{[^}]*order: 4", block, re.S)
         assert re.search(r"\.nav-links-wrap\s*\{[^}]*flex: 1 1 100%", block, re.S)
 
-    def test_tab_strip_scrolls_horizontally(self):
+    def test_tabs_wrap_instead_of_scrolling(self):
+        """External review (2026-09): the scroll strip still read as clipped —
+        History/Settings/How To sat behind an undiscoverable swipe. Tabs now
+        wrap to a second row so every destination is visible at first paint."""
         block = _nav_block()
         links_rule = re.search(r"\.nav-links\s*\{([^}]*)\}", block).group(1)
-        assert "overflow-x: auto" in links_rule
-        assert "flex-wrap: nowrap" in links_rule, "tabs must stay on one line, not wrap"
-        assert "scrollbar-width: none" in links_rule
+        assert "flex-wrap: wrap" in links_rule
+        assert "nowrap" not in links_rule
+        assert "overflow-x: auto" not in links_rule
 
-    def test_nav_links_wrap_has_scroll_edge_fade(self):
-        """UX audit finding 2 (2026-09-08): a hidden scrollbar with zero other
-        cue meant History/Settings/How To could sit off-screen with nothing
-        indicating more tabs exist. .nav-links-wrap positions a fade at the
-        visible edge, fixed regardless of the inner strip's scroll offset."""
-        block = _nav_block()
-        wrap_rule = re.search(r"\.nav-links-wrap\s*\{([^}]*)\}", block, re.S).group(1)
-        assert "position: relative" in wrap_rule
-        assert re.search(r"\.nav-links-wrap::after\s*\{[^}]*position: absolute", block, re.S)
+    def test_no_scroll_edge_fade_remains(self):
+        """The fade was a cue for hidden scroll content; with wrapping there
+        is no scroll, so the cue (and its always-on false-positive paint,
+        the deferred v1.51.2 LOW) is gone with it. Repo-wide absence: a
+        regression re-adding it in ANY block must fail here."""
+        assert ".nav-links-wrap::after" not in STYLE_CSS
+
+    def test_billing_anchor_clears_the_taller_sticky_header(self):
+        """Wrapped tabs make the sticky header ~200px at 320px; the
+        pending-card flow redirects to /settings#billing, which must not
+        land hidden under it. Finder is decoupled from the nav block: the
+        rule must live in SOME max-width:640px block (which also proves
+        desktop is unaffected by construction)."""
+        for _, body in _blocks():
+            if "#billing" in body:
+                assert re.search(
+                    r"#billing\s*\{\s*scroll-margin-top:\s*2\d\dpx", body
+                )
+                return
+        raise AssertionError("#billing scroll-margin rule missing from mobile")
 
     def test_touch_targets_are_44px(self):
         block = _nav_block()
@@ -115,4 +134,4 @@ class TestNavTemplate:
         assert BASE_HTML.count('action="/logout"') == 2
 
     def test_cache_buster_bumped(self):
-        assert 'style.css?v=59' in BASE_HTML
+        assert 'style.css?v=60' in BASE_HTML

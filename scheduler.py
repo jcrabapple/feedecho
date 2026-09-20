@@ -1941,13 +1941,15 @@ def _send_bluesky(
         # if fully inside the truncated text; partial spans are dropped. The
         # drip path (override content) has no spans and relies on bare-URL
         # detection alone.
+        # Truncation always appends "…" as the final character — a span
+        # reaching the last character covers the ellipsis and maps onto
+        # text that was never part of the anchor, so it's dropped. Anchors
+        # containing a literal "…" elsewhere keep their facet.
+        limit = len(text) - 1 if len(text) < len(content or "") else len(text)
         rich_links = [
             (start, end, uri)
             for start, end, uri in (item.get("_rich_links") or [])
-            # Truncated text ends with "…" (truncate_graphemes) — a span
-            # reaching into the cut covers the ellipsis and maps onto text
-            # that was never part of the anchor, so drop it too.
-            if end <= len(text) and "…" not in text[start:end]
+            if end <= limit
         ]
         facets = build_facets(text, extra_links=rich_links)
     except Exception:

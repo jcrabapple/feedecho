@@ -126,6 +126,23 @@ class TestRenderTemplateRich:
             for start, end, _uri in links:
                 assert text[start:end]
 
+    def test_slice_into_url_strips_url_tail(self):
+        """Gate follow-up: a cut inside the URL portion leaves the URL text
+        attached to visible output — the residue strip removes it."""
+        from template_engine import (
+            _RICH_END,
+            _RICH_SEP,
+            _RICH_START,
+            _extract_rich_links,
+        )
+
+        pair = _RICH_START + "link" + _RICH_SEP + "https://ex.com/aaaaaaaaaa" + _RICH_END
+        cut = ("word " * 10 + pair)[: ("word " * 10 + pair).index(_RICH_SEP) + 8]
+        text, links = _extract_rich_links(cut)
+        assert links == []
+        assert "https://" not in text
+        assert "\ue001" not in text
+
     def test_href_whitespace_stripped(self):
         """L1 (gate): whitespace around href must not kill or corrupt the facet."""
         from template_engine import render_template_rich
@@ -316,6 +333,44 @@ class TestBlueskyRichSendWiring:
             if f["features"][0]["$type"].endswith("#link")
         ]
         assert link_facets == []
+
+    def test_span_at_truncation_boundary_dropped_before_ellipsis_kept(
+        self, db_tmp, bl_echo, monkeypatch
+    ):
+        """Gate follow-up: truncation appends '…' as the final char, so a
+        span ending exactly at len(text) covers the ellipsis and is dropped,
+        while a span ending one char earlier survives. An intact anchor
+        containing a literal '…' elsewhere keeps its facet."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler,
+            "create_post",
+            lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"},
+        )
+        self._stub_session(monkeypatch)
+        content = "x" * 320  # truncated to 300 graphemes ending with "…"
+
+        def _facets(span):
+            sent.clear()
+            item = {"id": "i", "_rich_links": [(*span, "https://ex.com/a")]}
+            scheduler._send_bluesky(bl_echo, item, content, 1, 1, "tok")
+            return sent[0].get("facets") or []
+
+        # Span ending exactly at len(text) covers the ellipsis: dropped.
+        assert _facets((250, 300)) == []
+        # Span ending one char earlier: kept.
+        kept = _facets((250, 299))
+        assert len(kept) == 1
+
+        # Intact (untruncated) text with a literal ellipsis inside the
+        # anchor: the facet survives.
+        sent.clear()
+        intact = "Read more… and then some"
+        item = {"id": "i", "_rich_links": [(0, len(intact), "https://ex.com/a")]}
+        scheduler._send_bluesky(bl_echo, item, intact, 1, 1, "tok")
+        assert len(sent[0]["facets"]) == 1
 
     def test_dispatch_renders_content_html_into_facets(self, db_tmp, bl_echo, monkeypatch):
         """Full wiring: process_echo with a content_html template."""

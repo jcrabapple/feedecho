@@ -358,8 +358,12 @@ def _extract_rich_links(rendered: str) -> tuple[str, list[tuple[int, int, str]]]
         # {{ content_html | truncate(50) }}), leaving dangling markers. The
         # surviving spans' positions are no longer trustworthy and the
         # markers must never leak into visible post text: scrub everything
-        # and fall back to bare-URL facet detection only.
-        return _PUA_RE.sub("", text), []
+        # and fall back to bare-URL facet detection only. A cut between the
+        # separator and the end marker also leaves the URL tail attached to
+        # visible text — strip that residue before the marker characters.
+        text = re.sub(_RICH_SEP + r"[^\ue000-\ue00f]*", "", text)
+        text = _PUA_RE.sub("", text)
+        return text, []
     return text, links
 
 

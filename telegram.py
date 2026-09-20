@@ -31,13 +31,14 @@ never interpolated into error messages.
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import re
 from html.parser import HTMLParser
 
 import httpx
 
-from feed_parser import SSRFError, pinned_request
+from feed_parser import SSRFError, pinned_request, html_to_text
 from utils import (
     DEFAULT_REQUEST_TIMEOUT,
     DestinationAuthError,
@@ -114,13 +115,18 @@ def _raise_for_status(response, action: str) -> None:
             "Telegram rejected this bot token (401)."
             " Check the token from @BotFather and connect again."
         )
+    if response.status_code == 404:
+        # Telegram 404s on /bot<token>/... when the token is not recognized
+        # (our method names are fixed, so the URL can't otherwise 404).
+        raise TelegramAuthError(
+            "Telegram does not recognize this bot token (404)."
+            " Check the token from @BotFather and connect again."
+        )
     if response.status_code == 400 and "chat not found" in detail.lower():
         raise TelegramNotFoundError(
             "Telegram could not find that chat. Add the bot to the chat"
             " (and, for channels, make it an admin) before connecting."
         )
-    if response.status_code == 404:
-        raise TelegramNotFoundError("Telegram API endpoint not found.")
     if response.status_code == 400:
         raise TelegramBadRequestError(
             f"Telegram refused the {action} (HTTP 400)"
@@ -146,8 +152,11 @@ def _post_json(token: str, method: str, payload: dict) -> dict:
         )
     except (httpx.HTTPError, SSRFError) as e:
         # httpx exception text embeds the request URL, which carries the
-        # bot token — never interpolate it into logs or user messages.
-        raise TelegramError(f"Could not reach Telegram ({type(e).__name__})") from e
+        # bot token — raise with the cause detached (`from None`) so no
+        # traceback formatter can ever surface the request URL.
+        raise TelegramError(
+            f"Could not reach Telegram ({type(e).__name__})"
+        ) from None
     _raise_for_status(resp, method)
     try:
         data = resp.json()
@@ -198,17 +207,27 @@ def get_me(token: str) -> dict:
 def get_chat(token: str, chat_id: str) -> dict:
     """GET getChat — proves the bot can see the target chat.
 
-    Returns ``{chat_title, chat_username}`` (either may be empty for
-    private chats).
+    Returns ``{chat_id, chat_title, chat_username}`` where ``chat_id`` is
+    Telegram's canonical numeric id (as a string). Storing the canonical id
+    keeps one row per chat even when the user connects via ``@publicname``
+    and the username later changes.
     """
     result = _post_json(token, "getChat", {"chat_id": chat_id})
     title = result.get("title") or ""
     username = result.get("username") or ""
-    return {"chat_title": str(title), "chat_username": str(username)}
+    return {
+        "chat_id": str(result.get("id") or chat_id),
+        "chat_title": str(title),
+        "chat_username": str(username),
+    }
 
 
 def connect(raw_token: str, raw_chat_id: str) -> dict:
     """Verify a token/chat pair and return everything needed to store it.
+
+    The stored ``chat_id`` is Telegram's canonical numeric id, so the same
+    chat connected via ``@publicname`` and via its number is one row, and a
+    later channel rename cannot break delivery.
 
     Raises ValueError for malformed input, TelegramAuthError for a bad
     token, TelegramNotFoundError for a chat the bot cannot see, and
@@ -221,7 +240,7 @@ def connect(raw_token: str, raw_chat_id: str) -> dict:
     label = chat["chat_title"] or chat["chat_username"] or chat_id
     return {
         "bot_token": token,
-        "chat_id": chat_id,
+        "chat_id": chat["chat_id"],
         "name": f"{me['name']} → {label}"[:200],
         **chat,
     }
@@ -230,23 +249,39 @@ def connect(raw_token: str, raw_chat_id: str) -> dict:
 class _TelegramHTMLReducer(HTMLParser):
     """Reduce sanitized HTML to Telegram's supported tag subset.
 
-    Allowed tags pass through (``a`` keeps only its href); any other tag is
-    dropped but its text survives, so ``img``, headings, tables, and lists
-    from content_html degrade to readable text instead of a 400.
+    ``convert_charrefs`` stays ON (entities decode once here) and every text
+    node is re-escaped with ``html.escape``: Telegram's parser requires raw
+    ``&``, ``<``, ``>`` OUTSIDE supported tags to be escaped, and feed text
+    like "Rock & Roll" or "Q&A" is everywhere. Without the re-escape, any
+    ampersand in an article would 400 the whole send as a permanent failure.
+
+    Allowed tags pass through (``a`` keeps only its href, re-escaped); any
+    other tag is dropped but its text survives, so ``img``, headings,
+    tables, and lists from content_html degrade to readable text instead of
+    a 400. Block boundaries emit newlines so paragraphs don't mash together.
+    An ``<a>`` whose href is not http(s) emits NO tag at all — Telegram
+    400s on ``<a>`` without an href — the text just degrades to plain.
     """
+
+    _BLOCK = {
+        "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5",
+        "h6", "li", "ul", "ol", "table", "tr", "figure", "figcaption",
+    }
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.out: list[str] = []
+        # Whether an <a> open tag was actually emitted (href http(s)) — its
+        # matching </a> may only be emitted when the opening tag was.
+        self._a_open = False
 
     def handle_starttag(self, tag, attrs):
         if tag == "a":
-            href = (dict(attrs).get("href") or "")
+            href = (dict(attrs).get("href") or "").strip()
             # Only http(s) hrefs; anything else degrades to plain text.
             if href.startswith(("http://", "https://")):
-                self.out.append(f'<a href="{href}">')
-            else:
-                self.out.append("<a>")
+                self.out.append(f'<a href="{_html.escape(href, quote=True)}">')
+                self._a_open = True
         elif tag in ("b", "strong"):
             self.out.append("<b>")
         elif tag in ("i", "em"):
@@ -257,11 +292,19 @@ class _TelegramHTMLReducer(HTMLParser):
             self.out.append("<u>")
         elif tag in _HTML_TAGS:
             self.out.append(f"<{tag}>")
-        # Anything else (img, p, div, h1-6, table, ...) is dropped.
+        elif tag == "br":
+            self.out.append("\n")
+        elif tag in self._BLOCK:
+            # Unsupported block container: keep the text, add the break so
+            # paragraphs/lists don't mash into one word-salad line.
+            self.out.append("\n")
+        # Anything else (img, ...) is dropped entirely.
 
     def handle_endtag(self, tag):
         if tag == "a":
-            self.out.append("</a>")
+            if self._a_open:
+                self.out.append("</a>")
+                self._a_open = False
         elif tag in ("b", "strong"):
             self.out.append("</b>")
         elif tag in ("i", "em"):
@@ -272,9 +315,11 @@ class _TelegramHTMLReducer(HTMLParser):
             self.out.append("</u>")
         elif tag in _HTML_TAGS:
             self.out.append(f"</{tag}>")
+        elif tag in self._BLOCK:
+            self.out.append("\n")
 
     def handle_data(self, data):
-        self.out.append(data)
+        self.out.append(_html.escape(data, quote=False))
 
 
 def _reduce_html(html_str: str) -> str:
@@ -284,22 +329,27 @@ def _reduce_html(html_str: str) -> str:
     return "".join(parser.out)
 
 
-def prepare_text(rendered: str, rich: bool = False) -> str:
-    """Prepare a rendered template for sendMessage.
+def build_message(rendered: str, rich: bool, cap: int) -> tuple[str, str | None]:
+    """Prepare a rendered template for one Telegram send.
+
+    Returns ``(text, parse_mode)``.
 
     rich=True (template embeds content_html): reduce the sanitized HTML to
-    Telegram's tag subset and send as parse_mode=HTML. rich=False: send the
-    text with no parse_mode — Telegram auto-links URLs and hashtags and raw
-    prose can never break entity parsing. Truncated to the message cap.
+    Telegram's tag subset and send as parse_mode=HTML — but only if the
+    reduced text fits the cap. If it doesn't, fall back to plain text
+    (``html_to_text``, then truncate): naive slicing of HTML can sever a
+    tag mid-flight, and Telegram 400s permanently on unclosed tags. Plain
+    text needs no parse mode and Telegram auto-links URLs and hashtags.
+
+    rich=False: send the raw rendered text with no parse_mode — raw prose
+    ("Rock & Roll", "<3") can never break entity parsing.
     """
-    text = _reduce_html(rendered or "") if rich else (rendered or "")
-    return truncate_chars(text, MAX_MESSAGE_CHARS)
-
-
-def prepare_caption(rendered: str, rich: bool = False) -> str:
-    """Same as prepare_text but under the sendPhoto caption cap."""
-    text = _reduce_html(rendered or "") if rich else (rendered or "")
-    return truncate_chars(text, MAX_CAPTION_CHARS)
+    if rich:
+        html_text = _reduce_html(rendered or "")
+        if len(html_text) <= cap:
+            return html_text, "HTML"
+        return truncate_chars(html_to_text(rendered or ""), cap), None
+    return truncate_chars(rendered or "", cap), None
 
 
 def message_url(result: dict) -> str:
@@ -333,8 +383,9 @@ def send_photo(
     data: dict = {"chat_id": chat_id}
     if caption:
         data["caption"] = caption
-    if parse_mode:
-        data["parse_mode"] = parse_mode
+        # parse_mode only matters when there IS a caption to parse.
+        if parse_mode:
+            data["parse_mode"] = parse_mode
     try:
         resp = pinned_request(
             "POST", _api_url(token, "sendPhoto"), timeout=REQUEST_TIMEOUT,
@@ -342,7 +393,10 @@ def send_photo(
             files={"photo": ("image", photo_bytes, mime)},
         )
     except (httpx.HTTPError, SSRFError) as e:
-        raise TelegramError(f"Could not reach Telegram ({type(e).__name__})") from e
+        # See _post_json: the request URL carries the bot token.
+        raise TelegramError(
+            f"Could not reach Telegram ({type(e).__name__})"
+        ) from None
     _raise_for_status(resp, "photo send")
     try:
         body = resp.json()

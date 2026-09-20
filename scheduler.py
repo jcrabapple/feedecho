@@ -99,13 +99,14 @@ from notify import (
 )
 import telegram
 from telegram import (
+    MAX_CAPTION_CHARS,
+    MAX_MESSAGE_CHARS,
     TelegramAuthError,
     TelegramBadRequestError,
     TelegramError,
     TelegramNotFoundError,
+    build_message as telegram_build_message,
     message_url as telegram_message_url,
-    prepare_caption as telegram_prepare_caption,
-    prepare_text as telegram_prepare_text,
     send_message as telegram_send_message,
     send_photo as telegram_send_photo,
 )
@@ -2455,17 +2456,18 @@ def _send_telegram(
 
     try:
         if photo is not None:
+            caption, caption_mode = telegram_build_message(
+                content or "", rich=rich, cap=MAX_CAPTION_CHARS
+            )
             result = telegram_send_photo(
                 bot_token, chat_id, photo[0], photo[1],
-                caption=telegram_prepare_caption(content or "", rich=rich),
-                parse_mode="HTML" if rich else None,
+                caption=caption, parse_mode=caption_mode,
             )
         else:
-            result = telegram_send_message(
-                bot_token, chat_id,
-                telegram_prepare_text(content or "", rich=rich),
-                parse_mode="HTML" if rich else None,
+            text, parse_mode = telegram_build_message(
+                content or "", rich=rich, cap=MAX_MESSAGE_CHARS
             )
+            result = telegram_send_message(bot_token, chat_id, text, parse_mode)
     except (TelegramAuthError, TelegramNotFoundError, TelegramBadRequestError) as e:
         # Bad tokens, chats the bot is no longer in, and rejected payloads
         # cannot heal on retry: permanent until the user reconnects or

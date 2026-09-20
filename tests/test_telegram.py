@@ -43,16 +43,23 @@ class TestNormalizeChatId:
 
 
 class TestConnect:
-    def test_returns_token_chat_and_label(self, monkeypatch):
+    def test_returns_canonical_chat_id_and_label(self, monkeypatch):
         import telegram
 
         monkeypatch.setattr(telegram, "get_me", lambda t: {"name": "FeedEcho Bot"})
         monkeypatch.setattr(
             telegram, "get_chat",
-            lambda t, c: {"chat_title": "My Channel", "chat_username": "mychannel"},
+            lambda t, c: {
+                "chat_id": "-1001234567890",
+                "chat_title": "My Channel",
+                "chat_username": "mychannel",
+            },
         )
         info = telegram.connect("123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "@mychannel")
-        assert info["chat_id"] == "@mychannel"
+        # The stored chat_id is Telegram's canonical numeric id, not the
+        # @publicname the user typed — a channel rename can't break delivery
+        # and reconnecting via the number can't duplicate the row.
+        assert info["chat_id"] == "-1001234567890"
         assert info["chat_title"] == "My Channel"
         assert "FeedEcho Bot" in info["name"]
 
@@ -63,35 +70,57 @@ class TestConnect:
             telegram.connect("garbage", "@mychannel")
 
 
-class TestPrepareText:
+class TestBuildMessage:
     def test_plain_mode_keeps_raw_prose(self):
-        from telegram import prepare_text
-        text = prepare_text("Loved it <3 a & b https://ex.com/a")
+        import telegram
+
+        text, parse_mode = telegram.build_message(
+            "Loved it <3 a & b https://ex.com/a", rich=False, cap=4096
+        )
+        assert parse_mode is None
         assert text == "Loved it <3 a & b https://ex.com/a"
 
-    def test_rich_mode_reduces_to_supported_tags(self):
-        from telegram import prepare_text
-        html = ('<h1>Title</h1><p><a href="https://ex.com/a">link</a>'
+    def test_rich_mode_reduces_to_supported_tags_and_escapes_entities(self):
+        import telegram
+
+        html = ('<h1>Q &amp; A</h1><p><a href="https://ex.com/a?x=1&amp;y=2">link</a>'
                 "<b>bold</b><img src=\"https://x/y.jpg\">tail</p>")
-        text = prepare_text(html, rich=True)
-        assert "Title" in text
-        assert '<a href="https://ex.com/a">' in text
-        assert "<b>" in text
+        text, parse_mode = telegram.build_message(html, rich=True, cap=4096)
+        assert parse_mode == "HTML"
+        # Entities re-escaped for Telegram's strict parser.
+        assert "Q &amp; A" in text
+        assert '<a href="https://ex.com/a?x=1&amp;y=2">' in text
+        assert "<b>bold</b>" in text
         assert "<img" not in text and "<h1>" not in text
         assert "tail" in text
 
-    def test_rich_mode_drops_non_http_href(self):
-        from telegram import prepare_text
-        text = prepare_text('<a href="javascript:alert(1)">x</a>', rich=True)
-        assert "javascript" not in text and ">x<" in text
+    def test_rich_mode_drops_non_http_anchor_without_bare_tag(self):
+        import telegram
 
-    def test_plain_truncated_to_4096(self):
-        from telegram import prepare_text
-        assert len(prepare_text("x" * 5000)) == 4096
+        text, parse_mode = telegram.build_message(
+            '<p>Mail <a href="mailto:a@b.c">me</a>.</p>', rich=True, cap=4096
+        )
+        assert parse_mode == "HTML"
+        # No <a> without href (Telegram 400s), no stray </a>.
+        assert "<a>" not in text and "</a>" not in text
+        assert "Mail me." in text.replace("\n", "") or "Mail\nme." in text
 
-    def test_caption_truncated_to_1024(self):
-        from telegram import prepare_caption
-        assert len(prepare_caption("x" * 5000)) == 1024
+    def test_over_cap_rich_falls_back_to_plain_text(self):
+        """H-2 (gate): slicing HTML can sever a tag; over the cap the send
+        degrades to plain text, which truncates safely."""
+        import telegram
+
+        html = "<p>" + ("word " * 200) + '<a href="https://ex.com/a">link</a></p>'
+        text, parse_mode = telegram.build_message(html, rich=True, cap=1024)
+        assert parse_mode is None
+        assert 0 < len(text) <= 1024
+        assert "<" not in text and ">" not in text
+
+    def test_plain_truncated_to_cap(self):
+        import telegram
+
+        text, _ = telegram.build_message("x" * 5000, rich=False, cap=4096)
+        assert len(text) == 4096
 
 
 class TestSendMessage:

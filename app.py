@@ -190,7 +190,7 @@ DESTINATION_LIMITS = {
     "mastodon": 500,
     "bluesky": 300,
     "discord": 2000,
-    "telegram": 2000,
+    "telegram": 4096,
     "matrix": None,
     "email": None,
     "microblog": None,
@@ -2437,6 +2437,7 @@ def _echoes_page_context(db, uid: int) -> dict:
                  WHEN e.destination_type = 'microblog' THEN mb.name
                  WHEN e.destination_type = 'matrix' THEN mx.name
                  WHEN e.destination_type = 'discord' THEN dc.name
+                 WHEN e.destination_type = 'telegram' THEN tg.name
                  WHEN e.destination_type = 'webhook' THEN wh.name
                END as destination_name,
                a.booster_enabled as dest_booster_enabled
@@ -2448,6 +2449,7 @@ def _echoes_page_context(db, uid: int) -> dict:
         LEFT JOIN microblog_accounts mb ON e.destination_type = 'microblog' AND e.destination_id = mb.id AND mb.user_id = e.user_id
         LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
         LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
+        LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
         LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
         WHERE e.deleted_at IS NULL AND e.user_id = ?
         ORDER BY e.created_at DESC

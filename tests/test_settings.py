@@ -111,9 +111,77 @@ class TestValidateConfig:
             settings, "CREDENTIAL_KEY", kwargs.get("key", "")
         )
 
-    def test_single_mode_never_raises(self, monkeypatch):
+    def test_single_mode_without_token_raises(self, monkeypatch):
+        # The startup auth gate (v1.69.0): a bare `docker run` used to boot
+        # fully unauthenticated on 0.0.0.0. Now it fails closed.
+        import pytest
+
         monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", None)
+        monkeypatch.setattr(settings, "ALLOW_INSECURE", False)
+        with pytest.raises(RuntimeError, match="FEEDECHO_AUTH_TOKEN"):
+            settings.validate_config()
+
+    def test_single_mode_with_token_passes(self, monkeypatch):
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "tok")
+        monkeypatch.setattr(settings, "ALLOW_INSECURE", False)
         settings.validate_config()  # must not raise
+
+    def test_single_mode_insecure_opt_out_passes_and_warns(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", None)
+        monkeypatch.setattr(settings, "ALLOW_INSECURE", True)
+        with caplog.at_level("WARNING", logger="feedecho"):
+            settings.validate_config()  # must not raise
+        assert any(
+            "authentication is DISABLED" in r.message for r in caplog.records
+        )
+
+    def test_lifespan_gate_refuses_boot_end_to_end(self, monkeypatch):
+        # SEC-02: prove the gate is wired into the ASGI lifespan, not just
+        # the validate_config unit — a TestClient boot must raise.
+        import pytest
+        from fastapi.testclient import TestClient
+
+        import app as app_module
+
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", None)
+        monkeypatch.setattr(settings, "ALLOW_INSECURE", False)
+        with pytest.raises(RuntimeError, match="FEEDECHO_AUTH_TOKEN"):
+            with TestClient(app_module.app):
+                pass
+
+    def test_middleware_fail_closed_without_lifespan(self, monkeypatch):
+        # SEC-01: with lifespan events skipped (no validate_config), a
+        # no-token + no-flag request must 500, not sail through as operator.
+        from fastapi.testclient import TestClient
+
+        import app as app_module
+
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", None)
+        monkeypatch.setattr(settings, "ALLOW_INSECURE", False)
+        c = TestClient(app_module.app)  # no `with` = no lifespan run
+        r = c.get("/")
+        assert r.status_code == 500
+        assert "FEEDECHO_AUTH_TOKEN" in r.text
+
+    def test_single_mode_invalid_credential_key_raises(self, monkeypatch):
+        # The Fernet format check runs in both modes (hoisted out of the
+        # multi branch in v1.69.0, when single mode gained optional
+        # credential encryption).
+        import pytest
+
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "tok")
+        monkeypatch.setattr(settings, "ALLOW_INSECURE", False)
+        monkeypatch.setattr(settings, "CREDENTIAL_KEY", "not-a-valid-key")
+        with pytest.raises(RuntimeError, match="not a valid Fernet key"):
+            settings.validate_config()
 
     def test_multi_without_url_raises(self, monkeypatch):
         self._set_multi(monkeypatch, secret="x" * 40, key=_VALID_KEY)

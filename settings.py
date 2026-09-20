@@ -109,12 +109,17 @@ APP_WEBSITE = (
 ADMIN_EMAIL = env("ADMIN_EMAIL", "")
 SESSION_SECRET = env("SESSION_SECRET", "")
 # Fernet key for encrypting third-party credentials (Mastodon/Bluesky/Matrix/
-# micro.blog/Discord tokens, SMTP passwords, vision API keys, OAuth client
-# secrets) at rest. Multi mode only; single mode stores them plaintext (the
-# operator owns the DB). Generate with `python -c "from cryptography.fernet
+# micro.blog/Discord/Telegram tokens, SMTP passwords, vision API keys, OAuth
+# client secrets) at rest. Required in multi mode (validate_config refuses to
+# boot without it); optional in single mode, where it protects copied backups
+# of the database. Generate with `python -c "from cryptography.fernet
 # import Fernet; print(Fernet.generate_key().decode())"`.
 CREDENTIAL_KEY = env("CREDENTIAL_KEY", "")
 ALLOW_SQLITE_FALLBACK = env("ALLOW_SQLITE_FALLBACK", "") == "1"
+# Explicit opt-out of the single-mode auth requirement: boot with no
+# FEEDECHO_AUTH_TOKEN and no authentication at all. Only sane behind the
+# operator's own authenticated reverse proxy or on a private bind.
+ALLOW_INSECURE = env("ALLOW_INSECURE", "") == "1"
 # Force the Secure flag on session cookies when TLS terminates in front
 # of the app (Caddy/nginx proxy): the request scheme then reads http
 # even though the client connection is https.
@@ -301,14 +306,48 @@ READER_MAX_STARRED_PER_FEED = _env_int("READER_MAX_STARRED_PER_FEED", 0)
 
 
 def validate_config() -> None:
-    """Fail fast on misconfigured multi mode. Called from app startup.
+    """Fail fast on misconfiguration. Called from app startup.
 
-    Single mode never raises — it keeps the original permissive behavior.
+    Single mode refuses to boot without FEEDECHO_AUTH_TOKEN unless the
+    operator explicitly opts out with FEEDECHO_ALLOW_INSECURE=1 — a bare
+    `docker run` used to start fully unauthenticated while binding 0.0.0.0.
+    Multi mode requires DATABASE_URL / SESSION_SECRET / STATE_SECRET /
+    CREDENTIAL_KEY. A set-but-invalid CREDENTIAL_KEY is rejected in BOTH
+    modes.
     """
     # Runs in both modes: a self-hoster on the legacy names deserves the
     # rename notice even though nothing else here applies to single mode.
     warn_legacy_env()
+    if CREDENTIAL_KEY:
+        # A set-but-invalid key would otherwise only crash on the first
+        # encrypt/decrypt (mid-request, as a 500). Fail fast at startup.
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(CREDENTIAL_KEY.encode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(
+                "FEEDECHO_CREDENTIAL_KEY is not a valid Fernet key "
+                f"({exc}). Generate one with: python -c "
+                "\"from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())\""
+            )
     if not MULTI:
+        if not AUTH_TOKEN:
+            if not ALLOW_INSECURE:
+                raise RuntimeError(
+                    "FEEDECHO_AUTH_TOKEN is not set: the web UI and API "
+                    "would be open to anyone who can reach the port. Set "
+                    "FEEDECHO_AUTH_TOKEN to a long random string, or set "
+                    "FEEDECHO_ALLOW_INSECURE=1 to run without authentication "
+                    "(only sane behind your own authenticated reverse proxy "
+                    "or on a private bind)."
+                )
+            logging.getLogger("feedecho").warning(
+                "FEEDECHO_AUTH_TOKEN is unset and FEEDECHO_ALLOW_INSECURE=1: "
+                "authentication is DISABLED — anyone who can reach this "
+                "port has full access."
+            )
         return
     if not DATABASE_URL and not ALLOW_SQLITE_FALLBACK:
         raise RuntimeError(
@@ -368,17 +407,3 @@ def validate_config() -> None:
             "SMTP passwords, vision API keys) are stored in PLAINTEXT. Set "
             "it to a Fernet key to encrypt them at rest."
         )
-    else:
-        # A set-but-invalid key would otherwise only crash on the first
-        # encrypt/decrypt (mid-request, as a 500). Fail fast at startup.
-        try:
-            from cryptography.fernet import Fernet
-
-            Fernet(CREDENTIAL_KEY.encode("utf-8"))
-        except Exception as exc:
-            raise RuntimeError(
-                "FEEDECHO_CREDENTIAL_KEY is not a valid Fernet key "
-                f"({exc}). Generate one with: python -c "
-                "\"from cryptography.fernet import Fernet; "
-                "print(Fernet.generate_key().decode())\""
-            )

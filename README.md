@@ -223,7 +223,7 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ hashtags }}` | Feed tags as #hashtags |
 | `{{ image_url }}` | First image URL from the item |
 | `{{ content_link }}` | First outbound link inside the item's content (link-blogs) |
-| `{{ content_html }}` | Full content as sanitized HTML — links, formatting, and images kept; scripts/handlers/foreign schemes stripped at ingest. Renders in webhook bodies, email HTML parts (render_html echo flag), and Matrix formatted bodies; plain-text destinations (Mastodon, Bluesky) show the raw tags, so use `{{ content }}` there |
+| `{{ content_html }}` | Full content as sanitized HTML — links, formatting, and images kept; scripts/handlers/foreign schemes stripped at ingest. Renders in webhook bodies, email HTML parts (render_html echo flag), and Matrix formatted bodies. On Bluesky it converts to clean text with clickable link facets for article links. On Mastodon it embeds as HTML (Mastodon renders a safe subset); other plain-text destinations show the raw tags, so use `{{ content }}` there |
 | `{{ feed_name }}` | Name of the source feed |
 
 Legacy spellings `{{ date:iso }}` and `{{ date:short }}` keep working.

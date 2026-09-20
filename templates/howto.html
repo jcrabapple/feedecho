@@ -79,7 +79,7 @@
                 <li><strong>Content warning</strong> — for Mastodon, adds a spoiler label and marks posts sensitive.</li>
                 <li><strong>Attach image</strong> — include the item's images with the post where the destination supports media uploads (up to 4 on Mastodon and Bluesky; email embeds up to 4 inline; Matrix, micro.blog, and Discord use the first).</li>
                 <li><strong>Render body as HTML</strong> — email destinations, instant mode only: the email's HTML part is your template output as-is. Combine with {% raw %}<code>{{ content_html }}</code>{% endraw %} in the template to keep the article's formatting and links. Digests stay text-only.</li>
-                <li><strong>Links and hashtags</strong> — URLs in the post text stay clickable and <code>#hashtags</code> become real, searchable tags on Mastodon and Bluesky.</li>
+                <li><strong>Links and hashtags</strong> — URLs in the post text stay clickable and <code>#hashtags</code> become real, searchable tags on Mastodon and Bluesky. On Bluesky, {% raw %}<code>{{ content_html }}</code>{% endraw %} also renders as clean text: links inside the article become clickable Bluesky links instead of raw HTML tags.</li>
                 <li><strong>Drip limit</strong> — cap the echo at N posts per hour; extra items wait in a queue and release as the window slides. 0 = off.</li>
                 <li><strong>Digest</strong> — email destinations only; batches items into one email per hour instead of sending per item.</li>
             </ul>

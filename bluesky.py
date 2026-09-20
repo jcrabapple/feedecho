@@ -390,6 +390,12 @@ def build_facets(
     for char_start, char_end, uri in extra_links or []:
         if not (0 <= char_start < char_end <= len(text)) or not uri:
             continue
+        # Overlapping extra spans would produce overlapping facets, which
+        # Bluesky's record validation rejects. The converter cannot emit
+        # them (anchors never nest), so treat overlap as a caller bug and
+        # keep the first span.
+        if any(char_start < end and start < char_end for start, end in extra_spans):
+            continue
         byte_start = len(text[:char_start].encode("utf-8"))
         byte_end = len(text[:char_end].encode("utf-8"))
         found.append(

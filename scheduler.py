@@ -1944,7 +1944,10 @@ def _send_bluesky(
         rich_links = [
             (start, end, uri)
             for start, end, uri in (item.get("_rich_links") or [])
-            if end <= len(text)
+            # Truncated text ends with "…" (truncate_graphemes) — a span
+            # reaching into the cut covers the ellipsis and maps onto text
+            # that was never part of the anchor, so drop it too.
+            if end <= len(text) and "…" not in text[start:end]
         ]
         facets = build_facets(text, extra_links=rich_links)
     except Exception:

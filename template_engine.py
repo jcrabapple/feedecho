@@ -162,15 +162,13 @@ def _build_context(item: dict, feed_name: str = "", rich: bool = False) -> dict:
         converted = _html_to_rich(item.get("content_html") or "")
         context["content_html"] = converted
         context["item"] = {
-            key: (_PUA_RE.sub("", value) if isinstance(value, str) else value)
-            for key, value in item.items()
+            key: _scrub_pua(value) for key, value in item.items()
         }
         context["item"]["content_html"] = converted
         for key, value in context.items():
-            if key in ("content_html", "item", "tags"):
+            if key in ("content_html", "item"):
                 continue
-            if isinstance(value, str):
-                context[key] = _PUA_RE.sub("", value)
+            context[key] = _scrub_pua(value)
     return context
 
 
@@ -218,6 +216,22 @@ _RICH_LINK_RE = re.compile(
 )
 
 
+def _scrub_pua(value):
+    """Recursively strip the marker range from strings in nested structures.
+
+    Lists (item["tags"], item["image_urls"]), dicts, and nested combinations
+    all get scrubbed, so a hostile feed cannot smuggle marker codepoints into
+    the rendered output through {{ tags | join(' ') }}, {{ item.tags[0] }}, etc.
+    """
+    if isinstance(value, str):
+        return _PUA_RE.sub("", value)
+    if isinstance(value, list):
+        return [_scrub_pua(entry) for entry in value]
+    if isinstance(value, dict):
+        return {key: _scrub_pua(entry) for key, entry in value.items()}
+    return value
+
+
 class _RichHTMLParser(HTMLParser):
     """Convert sanitized HTML to text, wrapping http(s) anchors in markers.
 
@@ -243,9 +257,18 @@ class _RichHTMLParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         if tag in ("br", "hr"):
-            self.out.append("\n")
+            # Inside an anchor the newline belongs to the anchor text, not
+            # the surrounding document — otherwise the marker pair would
+            # only wrap the text after the break.
+            if self._href is not None:
+                self._anchor.append("\n")
+            else:
+                self.out.append("\n")
         elif tag == "li":
-            self.out.append("\n• ")
+            if self._href is not None:
+                self._anchor.append("\n• ")
+            else:
+                self.out.append("\n• ")
         elif tag == "a":
             self._href = dict(attrs).get("href")
             self._anchor = []
@@ -253,7 +276,7 @@ class _RichHTMLParser(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "a":
             text = re.sub(r"\s+", " ", "".join(self._anchor)).strip()
-            href = self._href
+            href = (self._href or "").strip()
             if text and href and href.startswith(("http://", "https://")):
                 text = _PUA_RE.sub("", text)
                 href = _PUA_RE.sub("", href)
@@ -271,6 +294,17 @@ class _RichHTMLParser(HTMLParser):
             self._anchor.append(data)
         else:
             self.out.append(_PUA_RE.sub("", data))
+
+    def close(self):
+        super().close()
+        # An anchor left open at EOF (defensive: nh3 balances tags at ingest)
+        # still flushes its collected text instead of dropping it.
+        if self._href is not None or self._anchor:
+            text = re.sub(r"\s+", " ", "".join(self._anchor)).strip()
+            if text:
+                self.out.append(_PUA_RE.sub("", text))
+            self._href = None
+            self._anchor = []
 
 
 def _html_to_rich(html_str: str) -> str:
@@ -318,7 +352,15 @@ def _extract_rich_links(rendered: str) -> tuple[str, list[tuple[int, int, str]]]
         length += len(anchor_text)
         last = match.end()
     parts.append(rendered[last:])
-    return "".join(parts), links
+    text = "".join(parts)
+    if _PUA_RE.search(text):
+        # A template filter sliced through a marker pair (e.g.
+        # {{ content_html | truncate(50) }}), leaving dangling markers. The
+        # surviving spans' positions are no longer trustworthy and the
+        # markers must never leak into visible post text: scrub everything
+        # and fall back to bare-URL facet detection only.
+        return _PUA_RE.sub("", text), []
+    return text, links
 
 
 def render_template_rich(

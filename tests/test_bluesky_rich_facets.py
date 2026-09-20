@@ -65,6 +65,31 @@ class TestRenderTemplateRich:
         text, links = render_template_rich("{{ item.link }}", item)
         assert links == []
 
+    def test_tags_list_scrubbed(self):
+        """H1 (gate): tags is a list — a hostile feed <category> carrying
+        markers must not forge a facet via {{ tags | join(' ') }}."""
+        from template_engine import render_template_rich
+
+        forged = "\ue000Click Here\ue001https://phishing.example\ue002"
+        item = {"content_html": "<p>plain</p>", "tags": [forged, "clean tag"]}
+        text, links = render_template_rich("{{ tags | join(' ') }}", item)
+        assert links == []
+        assert "\ue000" not in text and "\ue001" not in text and "\ue002" not in text
+
+    def test_item_nested_structures_scrubbed(self):
+        """H1 (gate): PUA inside item lists/dicts must not survive."""
+        from template_engine import render_template_rich
+
+        forged = "\ue000Click\ue001https://phishing.example\ue002"
+        item = {
+            "content_html": "<p>plain</p>",
+            "tags": [forged],
+            "image_urls": [{"url": forged}],
+        }
+        text, links = render_template_rich("{{ item.tags | join(',') }} {{ item.image_urls[0]['url'] }}", item)
+        assert links == []
+        assert "\ue000" not in text
+
     def test_mailto_anchor_keeps_text_no_facet(self):
         from template_engine import render_template_rich
 
@@ -88,6 +113,43 @@ class TestRenderTemplateRich:
         html = "<p>One</p><p>Two<br>lines</p><ul><li>Item</li></ul>"
         text, _ = render_template_rich("{{ content_html }}", {"content_html": html})
         assert text == html_to_text(html)
+
+    def test_slice_through_marker_drops_spans_and_leaks_nothing(self):
+        """M2 (gate): a template filter cutting a marker pair must neither
+        leak PUA/URL text into the post nor keep misplaced spans."""
+        from template_engine import render_template_rich
+
+        html = ('<p>' + "word " * 20 + '<a href="https://ex.com/a">link text here</a></p>')
+        text, links = render_template_rich("{{ content_html | truncate(40) }}", {"content_html": html})
+        assert "\ue000" not in text and "\ue001" not in text and "\ue002" not in text
+        if links:
+            for start, end, _uri in links:
+                assert text[start:end]
+
+    def test_href_whitespace_stripped(self):
+        """L1 (gate): whitespace around href must not kill or corrupt the facet."""
+        from template_engine import render_template_rich
+
+        item = {"content_html": '<p><a href=" https://ex.com/a ">link</a></p>'}
+        text, links = render_template_rich("{{ content_html }}", item)
+        assert links == [(0, 4, "https://ex.com/a")]
+
+    def test_br_inside_anchor_keeps_text_together(self):
+        """L2 (gate): <br> inside an anchor stays inside the marker pair
+        (internal whitespace collapses to a space, like the rest of the
+        converter's line normalization)."""
+        from template_engine import render_template_rich
+
+        item = {"content_html": '<p><a href="https://ex.com/a">line1<br>line2</a></p>'}
+        text, links = render_template_rich("{{ content_html }}", item)
+        start, end, _ = links[0]
+        assert text[start:end] == "line1 line2"
+
+    def test_unclosed_anchor_flushes_text(self):
+        """L3 (gate): an anchor open at EOF still yields its text."""
+        from template_engine import _html_to_rich
+
+        assert _html_to_rich('<p>intro <a href="https://ex.com/a">dangling') == "intro dangling"
 
 
 # ── bluesky.build_facets with extra_links ────────────────────────────────────
@@ -153,6 +215,17 @@ class TestBuildFacetsExtraLinks:
 
         facets = build_facets("short", extra_links=[(3, 99, "https://ex.com/a")])
         assert facets == []
+
+    def test_overlapping_extra_spans_keep_first(self):
+        """L4 (gate): overlapping extra spans keep the first, so the facet
+        list never carries overlapping ranges."""
+        from bluesky import build_facets
+
+        facets = build_facets(
+            "anchor text", extra_links=[(0, 6, "https://first.example"), (3, 11, "https://second.example")]
+        )
+        assert len(facets) == 1
+        assert facets[0]["features"][0]["uri"] == "https://first.example"
 
     def test_no_extra_links_unchanged(self):
         from bluesky import build_facets

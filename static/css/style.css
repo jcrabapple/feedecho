@@ -640,6 +640,10 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         outline-offset: -2px;
         border-radius: 6px;
     }
+    /* The wrapped tab rows make the sticky header up to ~200px tall at
+       320px; the pending-card redirect targets /settings#billing, which
+       would land hidden under it. */
+    #billing { scroll-margin-top: 220px; }
 
     /* Account: inline email/logout are desktop-only; on mobile they collapse
        into a no-JS <details> menu. */

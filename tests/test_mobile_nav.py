@@ -32,7 +32,10 @@ def _blocks():
 
 def _nav_block() -> str:
     for _, body in _blocks():
-        if ".nav-links-wrap" in body:
+        # The structural nav block is the one carrying the wrap container's
+        # order rule — a bare ".nav-links-wrap" substring could match a
+        # comment in an unrelated media block and bind the tests vacuously.
+        if ".nav-links-wrap" in body and "order: 4" in body:
             return body
     raise AssertionError("mobile navbar block not found")
 
@@ -62,9 +65,16 @@ class TestMobileNavStructure:
     def test_no_scroll_edge_fade_remains(self):
         """The fade was a cue for hidden scroll content; with wrapping there
         is no scroll, so the cue (and its always-on false-positive paint,
-        the deferred v1.51.2 LOW) is gone with it."""
+        the deferred v1.51.2 LOW) is gone with it. Repo-wide absence: a
+        regression re-adding it in ANY block must fail here."""
+        assert ".nav-links-wrap::after" not in STYLE_CSS
+
+    def test_billing_anchor_clears_the_taller_sticky_header(self):
+        """Wrapped tabs make the sticky header ~200px at 320px; the
+        pending-card flow redirects to /settings#billing, which must not
+        land hidden under it."""
         block = _nav_block()
-        assert ".nav-links-wrap::after" not in block
+        assert re.search(r"#billing\s*\{\s*scroll-margin-top:\s*2\d\dpx", block)
 
     def test_touch_targets_are_44px(self):
         block = _nav_block()

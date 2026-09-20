@@ -40,8 +40,8 @@ class TestAccountsPageSections:
         r = multi_client.get("/accounts")
         assert r.status_code == 200
         body = r.text
-        assert body.count('<details class="account-section') == 7
-        for title in ("Mastodon", "Email", "Bluesky", "Micro.blog", "Matrix", "Discord", "Webhook"):
+        assert body.count('<details class="account-section') == 8
+        for title in ("Mastodon", "Email", "Bluesky", "Micro.blog", "Matrix", "Discord", "Telegram", "Webhook"):
             assert f'class="account-section-title">{title}</span>' in body
 
     def test_sections_collapsed_when_no_accounts(self, multi_client):
@@ -109,7 +109,7 @@ class TestAccountsPageSections:
         # carries the `stacked` modifier so labels sit above full-width inputs.
         r = multi_client.get("/accounts")
         assert r.status_code == 200
-        assert r.text.count('class="inline-form stacked"') == 8
+        assert r.text.count('class="inline-form stacked"') == 9
         # No connect form may remain plain inline.
         assert 'class="inline-form"' not in r.text
 

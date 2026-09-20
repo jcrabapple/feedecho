@@ -97,6 +97,19 @@ from notify import (
     record_failure,
     record_success,
 )
+import telegram
+from telegram import (
+    MAX_CAPTION_CHARS,
+    MAX_MESSAGE_CHARS,
+    TelegramAuthError,
+    TelegramBadRequestError,
+    TelegramError,
+    TelegramNotFoundError,
+    build_message as telegram_build_message,
+    message_url as telegram_message_url,
+    send_message as telegram_send_message,
+    send_photo as telegram_send_photo,
+)
 from template_engine import render_template, render_template_rich
 import alt_text
 import images
@@ -2419,6 +2432,96 @@ def _send_discord(
     return _finalize_success(posted_id, claim_token, echo["id"], post_url="")
 
 
+def _send_telegram(
+    echo,
+    item: FeedItem,
+    content: str,
+    account_id: int,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Dispatch one rendered item to a Telegram chat via the Bot API.
+
+    Templates without {{ content_html }} send with no parse_mode (Telegram
+    auto-links URLs and hashtags; raw prose can never break entity parsing).
+    Templates embedding {{ content_html }} send as parse_mode=HTML after the
+    sanitized HTML is reduced to Telegram's supported tag subset.
+
+    When image attachments are on and the item has one, the message goes out
+    as sendPhoto with the text as caption (1024-char cap); a failed image
+    fetch degrades to a text-only message. A bad token (401) is permanent
+    until the user reconnects; rate limits and 5xx ride the transient retry
+    pipeline.
+    """
+    account, fail_result = _destination_account(
+        "telegram_accounts", account_id, echo, posted_id, claim_token,
+        "Telegram account", user_scoped=True,
+    )
+    if account is None:
+        return fail_result
+
+    bot_token = decrypt_secret(account["bot_token"])
+    chat_id = account["chat_id"]
+    rich = "content_html" in (echo["template"] or "")
+
+    attach_image = _echo_attach_image(echo)
+    photo: tuple[bytes, str] | None = None
+    if attach_image:
+        entries = _item_image_entries(item, limit=1)
+        if entries:
+            image_result = fetch_image(entries[0]["url"])
+            if image_result:
+                photo = image_result
+
+    # Telegram work has no slow multi-image pipeline that could lapse the
+    # lease, but the claim is still re-validated so this path keeps the same
+    # contract as the other senders.
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Telegram"):
+        return False
+
+    try:
+        if photo is not None:
+            caption, caption_mode = telegram_build_message(
+                content or "", rich=rich, cap=MAX_CAPTION_CHARS
+            )
+            result = telegram_send_photo(
+                bot_token, chat_id, photo[0], photo[1],
+                caption=caption, parse_mode=caption_mode,
+            )
+        else:
+            text, parse_mode = telegram_build_message(
+                content or "", rich=rich, cap=MAX_MESSAGE_CHARS
+            )
+            result = telegram_send_message(bot_token, chat_id, text, parse_mode)
+    except (TelegramAuthError, TelegramNotFoundError, TelegramBadRequestError) as e:
+        # Bad tokens, chats the bot is no longer in, and rejected payloads
+        # cannot heal on retry: permanent until the user reconnects or
+        # fixes the template.
+        logger.error("Echo %s: Telegram delivery refused: %s", echo["id"], e)
+        return _fail_post(
+            posted_id,
+            claim_token,
+            echo["id"],
+            f"Telegram delivery refused: {e}",
+            permanent=True,
+        )
+    except TelegramError as e:
+        logger.exception("Echo %s: Telegram post failed", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"Telegram delivery failed: {e}"
+        )
+    except Exception:
+        logger.exception("Echo %s: Telegram post failed unexpectedly", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], "Telegram delivery failed"
+        )
+
+    # Public-channel messages get a t.me link; private chats/groups do not.
+    return _finalize_success(
+        posted_id, claim_token, echo["id"], post_url=telegram_message_url(result)
+    )
+
+
 def _send_webhook(
     echo,
     item: FeedItem,
@@ -2514,6 +2617,7 @@ _DESTINATION_HANDLERS: dict[str, Callable[[dict, FeedItem, str, int, int, str], 
     "microblog": _send_microblog,
     "matrix": _send_matrix,
     "discord": _send_discord,
+    "telegram": _send_telegram,
 }
 
 

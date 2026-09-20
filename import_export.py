@@ -52,6 +52,7 @@ _ACCOUNTS = [
         "matrix_user_id", "room_id", "room_alias",
     ], ("homeserver", "room_id")),
     ("discord", "discord_accounts", ["name", "webhook_url", "webhook_url_hash", "channel_id"], ("webhook_url_hash",)),
+    ("telegram", "telegram_accounts", ["name", "bot_token", "chat_id"], ("chat_id",)),
     ("webhook", "webhook_accounts", ["name", "url", "headers", "body_template"], ("url",)),
 ]
 
@@ -68,6 +69,7 @@ _CREDENTIAL_COLS = {
     "microblog": {"token"},
     "matrix": {"access_token"},
     "discord": {"webhook_url"},
+    "telegram": {"bot_token"},
 }
 
 # Required columns per account section: NOT NULL in the schema (database.py)
@@ -83,6 +85,7 @@ _REQUIRED_ACCOUNT_FIELDS = {
     "microblog": ("name", "uid", "token"),
     "matrix": ("name", "homeserver", "access_token", "room_id"),
     "discord": ("name", "webhook_url"),
+    "telegram": ("name", "bot_token", "chat_id"),
     "webhook": ("name", "url"),
 }
 

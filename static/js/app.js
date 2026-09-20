@@ -287,6 +287,7 @@ function editEcho(echoId) {
     const microblogOpts = document.getElementById('microblog-options').innerHTML.trim();
     const matrixOpts = document.getElementById('matrix-options').innerHTML.trim();
     const discordOpts = document.getElementById('discord-options').innerHTML.trim();
+    const telegramOpts = document.getElementById('telegram-options').innerHTML.trim();
     const webhookOpts = document.getElementById('webhook-options').innerHTML.trim();
 
     const mastoStyle = destType === 'mastodon' ? '' : 'display:none';
@@ -295,6 +296,7 @@ function editEcho(echoId) {
     const microblogStyle = destType === 'microblog' ? '' : 'display:none';
     const matrixStyle = destType === 'matrix' ? '' : 'display:none';
     const discordStyle = destType === 'discord' ? '' : 'display:none';
+    const telegramStyle = destType === 'telegram' ? '' : 'display:none';
     const webhookStyle = destType === 'webhook' ? '' : 'display:none';
 
     row.innerHTML = `<td colspan="5">
@@ -311,6 +313,7 @@ function editEcho(echoId) {
                         ${microblogOpts ? '<option value="microblog"' + (destType === 'microblog' ? ' selected' : '') + '>Micro.blog Blog</option>' : ''}
                         ${matrixOpts ? '<option value="matrix"' + (destType === 'matrix' ? ' selected' : '') + '>Matrix Room</option>' : ''}
                         ${discordOpts ? '<option value="discord"' + (destType === 'discord' ? ' selected' : '') + '>Discord Channel</option>' : ''}
+                        ${telegramOpts ? '<option value="telegram"' + (destType === 'telegram' ? ' selected' : '') + '>Telegram Chat</option>' : ''}
                         ${webhookOpts ? '<option value="webhook"' + (destType === 'webhook' ? ' selected' : '') + '>Webhook</option>' : ''}
                     </select>
                 </label>
@@ -357,6 +360,11 @@ function editEcho(echoId) {
             <div class="form-row" id="edit-discord-fields-${echoId}" style="${discordStyle}">
                 <label>Discord Channel
                     <select name="discord_account_id">${discordOpts}</select>
+                </label>
+            </div>
+            <div class="form-row" id="edit-telegram-fields-${echoId}" style="${telegramStyle}">
+                <label>Telegram Chat
+                    <select name="telegram_account_id">${telegramOpts}</select>
                 </label>
             </div>
             <div class="form-row" id="edit-webhook-fields-${echoId}" style="${webhookStyle}">
@@ -431,6 +439,8 @@ function editEcho(echoId) {
     if (matrixSelect) matrixSelect.value = destId;
     const discordSelect = row.querySelector('select[name="discord_account_id"]');
     if (discordSelect) discordSelect.value = destId;
+    const telegramSelect = row.querySelector('select[name="telegram_account_id"]');
+    if (telegramSelect) telegramSelect.value = destId;
     const webhookSelect = row.querySelector('select[name="webhook_account_id"]');
     if (webhookSelect) webhookSelect.value = destId;
 
@@ -452,6 +462,7 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-microblog-fields-${echoId}`).style.display = destType === 'microblog' ? '' : 'none';
     document.getElementById(`edit-matrix-fields-${echoId}`).style.display = destType === 'matrix' ? '' : 'none';
     document.getElementById(`edit-discord-fields-${echoId}`).style.display = destType === 'discord' ? '' : 'none';
+    document.getElementById(`edit-telegram-fields-${echoId}`).style.display = destType === 'telegram' ? '' : 'none';
     document.getElementById(`edit-webhook-fields-${echoId}`).style.display = destType === 'webhook' ? '' : 'none';
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';

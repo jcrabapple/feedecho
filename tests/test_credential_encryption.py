@@ -182,6 +182,23 @@ class TestCredentialEncryptedAtRest:
         assert rows[0]["webhook_url"].startswith("gAAAA")
         assert security.decrypt_secret(rows[0]["webhook_url"]) == url
 
+    def test_telegram_token_encryption(self, multi_client, monkeypatch):
+        app_module, c = multi_client
+        monkeypatch.setattr(app_module, "telegram_connect", lambda t, ch: {
+            "bot_token": t, "chat_id": ch, "name": "Bot → Chat",
+            "chat_title": "Chat", "chat_username": "",
+        })
+        token = "123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        c.post("/api/telegram-accounts", data={
+            "bot_token": token, "chat_id": "-1001234567890",
+        })
+        with get_db() as db:
+            row = db.execute(
+                "SELECT bot_token FROM telegram_accounts WHERE user_id = 42"
+            ).fetchone()
+        assert row["bot_token"].startswith("gAAAA")
+        assert security.decrypt_secret(row["bot_token"]) == token
+
 
 class TestImportExportEncryption:
     def _setup(self, monkeypatch, tmp_path):

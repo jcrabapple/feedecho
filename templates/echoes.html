@@ -9,7 +9,7 @@
 
 <p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, a generic webhook, or email) using a template.</p>
 
-{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or webhook_accounts %}
+{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or telegram_accounts or webhook_accounts %}
 {% if not feeds or not has_destination %}
 <p class="empty-state">
     You'll need
@@ -49,6 +49,9 @@
                 {% if discord_accounts %}
                 <option value="discord">Discord Channel</option>
                 {% endif %}
+                {% if telegram_accounts %}
+                <option value="telegram">Telegram Chat</option>
+                {% endif %}
                 {% if webhook_accounts %}
                 <option value="webhook">Webhook</option>
                 {% endif %}
@@ -59,7 +62,7 @@
    first in the same if-chain below. Its field row must start visible and the
    rest hidden server-side: hiding only via the inline script flashes the
    Mastodon row on every load and leaves it wrong with JS disabled. #}
-{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('webhook' if webhook_accounts else '')))))) %}
+{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('telegram' if telegram_accounts else ('webhook' if webhook_accounts else ''))))))) %}
 {% macro dest_hidden(dest) %}{% if dest != first_dest %} style="display: none;"{% endif %}{% endmacro %}
 <div class="form-row" id="mastodon-fields"{{ dest_hidden('mastodon') }}>
     <label>Mastodon Account
@@ -183,6 +186,15 @@
             </select>
         </label>
     </div>
+    <div class="form-row" id="telegram-fields"{{ dest_hidden('telegram') }}>
+        <label>Telegram Chat
+            <select name="telegram_account_id">
+                {% for account in telegram_accounts %}
+                <option value="{{ account.id }}">{{ account.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
     <div class="form-row" id="webhook-fields"{{ dest_hidden('webhook') }}>
         <label>Webhook
             <select name="webhook_account_id">
@@ -257,6 +269,8 @@
                         <span class="badge badge-info">Matrix</span>
                         {% elif echo.destination_type == 'discord' %}
                         <span class="badge badge-info">Discord</span>
+                        {% elif echo.destination_type == 'telegram' %}
+                        <span class="badge badge-info">Telegram</span>
                         {% elif echo.destination_type == 'webhook' %}
                         <span class="badge badge-info">Webhook</span>
                         {% endif %}
@@ -284,7 +298,7 @@
                 <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
                 {% endif %}
             </td>
-            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord', 'webhook') else echo.visibility }}</td>
+            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord', 'telegram', 'webhook') else echo.visibility }}</td>
             <td data-label="Status">
                 {% if echo.enabled %}
                 <span class="badge badge-success">Enabled</span>
@@ -347,6 +361,10 @@
     {% for a in discord_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
 
+<script id="telegram-options" type="text/html">
+    {% for a in telegram_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+</script>
+
 <script id="webhook-options" type="text/html">
     {% for a in webhook_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
@@ -360,6 +378,7 @@ function toggleDestFields() {
     document.getElementById('microblog-fields').style.display = destType === 'microblog' ? '' : 'none';
     document.getElementById('matrix-fields').style.display = destType === 'matrix' ? '' : 'none';
     document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
+    document.getElementById('telegram-fields').style.display = destType === 'telegram' ? '' : 'none';
     document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
     const digestFields = document.getElementById('digest-fields');
     if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';

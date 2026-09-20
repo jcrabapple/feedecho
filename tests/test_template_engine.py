@@ -49,6 +49,12 @@ class TestRenderTemplate:
         assert "#CProgramming" in result
         assert "#webdev" in result
 
+    def test_hashtags_dedupes_equivalent_tags(self):
+        template = "{{ hashtags }}"
+        item = {"tags": ["open source", "open-source", "AI", "ai", "AI/ML"]}
+        result = render_template(template, item)
+        assert result == "#opensource #AI #AIML"
+
     def test_no_hashtags_when_empty(self):
         template = "{{ title }} {{ hashtags }}"
         item = {"title": "My Post", "tags": []}

@@ -35,7 +35,7 @@ def _nav_block() -> str:
         # The structural nav block is the one carrying the wrap container's
         # order rule — a bare ".nav-links-wrap" substring could match a
         # comment in an unrelated media block and bind the tests vacuously.
-        if ".nav-links-wrap" in body and "order: 4" in body:
+        if ".nav-links-wrap" in body and re.search(r"order\s*:\s*4\b", body):
             return body
     raise AssertionError("mobile navbar block not found")
 
@@ -72,9 +72,16 @@ class TestMobileNavStructure:
     def test_billing_anchor_clears_the_taller_sticky_header(self):
         """Wrapped tabs make the sticky header ~200px at 320px; the
         pending-card flow redirects to /settings#billing, which must not
-        land hidden under it."""
-        block = _nav_block()
-        assert re.search(r"#billing\s*\{\s*scroll-margin-top:\s*2\d\dpx", block)
+        land hidden under it. Finder is decoupled from the nav block: the
+        rule must live in SOME max-width:640px block (which also proves
+        desktop is unaffected by construction)."""
+        for _, body in _blocks():
+            if "#billing" in body:
+                assert re.search(
+                    r"#billing\s*\{\s*scroll-margin-top:\s*2\d\dpx", body
+                )
+                return
+        raise AssertionError("#billing scroll-margin rule missing from mobile")
 
     def test_touch_targets_are_44px(self):
         block = _nav_block()

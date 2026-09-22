@@ -82,6 +82,25 @@ class TestFeedEdit:
         )
         assert _get_feed()["last_item_id"] is None
 
+    def test_url_change_clears_conditional_validators(self, client, temp_db):
+        _seed(cursor="item-5")
+        with get_db() as db:
+            db.execute(
+                "UPDATE feeds SET etag = '\"old\"',"
+                " last_modified = 'Mon, 01 Jan 2024 00:00:00 GMT' WHERE id = 1"
+            )
+        client.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Test Feed",
+                "url": "https://example.com/different.xml",
+                "poll_interval": "15",
+            },
+        )
+        feed = _get_feed()
+        assert feed["etag"] is None, "validators from the old URL must not survive a URL change"
+        assert feed["last_modified"] is None
+
     def test_same_url_preserves_cursor(self, client, temp_db):
         _seed(cursor="item-5")
         client.post(

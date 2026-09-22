@@ -408,7 +408,7 @@ class TestPostgresMigration:
                     " WHERE table_name = 'feeds'"
                 ).fetchall()
             }
-        for expected in ("lease_token", "lease_expires_at", "paused", "deleted_at"):
+        for expected in ("lease_token", "lease_expires_at", "paused", "deleted_at", "etag", "last_modified"):
             assert expected in columns, f"feeds.{expected} not backfilled on PG"
 
     def test_echoes_legacy_columns_backfilled_on_pg(self, pg_env):

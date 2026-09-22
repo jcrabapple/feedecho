@@ -468,12 +468,26 @@ def pinned_request(
         client.close()
 
 
-def fetch_feed(url: str) -> dict:
+def fetch_feed(
+    url: str,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+) -> dict:
     """Fetch and parse a feed URL. Returns dict with feed metadata and items.
 
     Validates the initial URL and every redirect hop for SSRF protection,
     pinning each hop's connection to the IP validated for that hop (B2: the
     second DNS lookup a naive fetch performs is the rebinding window).
+
+    When ``etag`` / ``last_modified`` are supplied they are sent as
+    ``If-None-Match`` / ``If-Modified-Since``. A 304 then returns
+    ``{"not_modified": True, "items": [], ...}`` with the current validators
+    echoed back, and a 200 returns the parsed feed with ``etag`` and
+    ``last_modified`` keys carrying the fresh validators (or None). Without
+    validators the fetch is unconditional and the result carries ``etag`` /
+    ``last_modified`` from the response for the caller to store.
+
     Raises SSRFError if any URL (initial or redirect) points to a
     private/internal address.
     Raises httpx.HTTPError on network failure.
@@ -481,10 +495,16 @@ def fetch_feed(url: str) -> dict:
     validate_outbound_url(url)
 
     headers = {"User-Agent": USER_AGENT}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+
+    meta: dict = {}
     try:
         client, backend = ssrf_client([url])
         try:
-            content, content_type = _fetch_with_redirect_validation(
+            content, content_type, meta = _fetch_with_redirect_validation(
                 client, url, headers, MAX_FEED_SIZE, backend=backend
             )
         finally:
@@ -497,26 +517,54 @@ def fetch_feed(url: str) -> dict:
         # with ALPN suppressed; the edge then serves plain HTTP/1.1.
         client, backend = ssrf_client([url], no_alpn=True)
         try:
-            content, content_type = _fetch_with_redirect_validation(
+            content, content_type, meta = _fetch_with_redirect_validation(
                 client, url, headers, MAX_FEED_SIZE, backend=backend
             )
         finally:
             client.close()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (403, 429) and settings.FALLBACK_PROXY_URL:
-            content, content_type = _fetch_via_fallback_proxy(url, headers, MAX_FEED_SIZE)
+            # The fallback proxy fetches the origin itself; its response
+            # headers describe the proxy, not the origin, so conditional
+            # validators must not be sent through it nor stored from it.
+            proxy_headers = {
+                k: v for k, v in headers.items()
+                if k.lower() not in ("if-none-match", "if-modified-since")
+            }
+            content, content_type, _ = _fetch_via_fallback_proxy(
+                url, proxy_headers, MAX_FEED_SIZE
+            )
+            meta = {}
         else:
             raise
+
+    # A 304 means the feed is byte-for-byte the representation our stored
+    # validators already describe: no parsing, no items, keep the validators
+    # (preferring any fresh ones the response carried).
+    if meta.get("status") == 304:
+        return {
+            "not_modified": True,
+            "title": "",
+            "url": url,
+            "type": "rss",
+            "items": [],
+            "etag": meta.get("etag") or etag,
+            "last_modified": meta.get("last_modified") or last_modified,
+        }
 
     # JSON Feed. The path (not the full URL) decides: query strings like
     # /feed.json?token=... are common on private feeds, and such URLs often
     # also omit a JSON content-type, so both signals must use the path.
     if "json" in content_type or urlparse(url).path.endswith(".json"):
-        return parse_json_feed(json.loads(content))
+        result = parse_json_feed(json.loads(content))
+    else:
+        # RSS/Atom via feedparser
+        parsed = feedparser.parse(content)
+        result = parse_rss_feed(parsed, url)
 
-    # RSS/Atom via feedparser
-    parsed = feedparser.parse(content)
-    return parse_rss_feed(parsed, url)
+    result["etag"] = meta.get("etag")
+    result["last_modified"] = meta.get("last_modified")
+    return result
 
 
 def _fetch_with_redirect_validation(
@@ -525,7 +573,7 @@ def _fetch_with_redirect_validation(
     headers: dict,
     max_bytes: int = MAX_FEED_SIZE,
     backend: "PinningNetworkBackend | None" = None,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, dict]:
     """Fetch a URL with a hard size cap, validating every redirect hop.
 
     Prevents SSRF via redirect: an attacker can host a public feed that
@@ -539,11 +587,17 @@ def _fetch_with_redirect_validation(
     hostile feed or image could make the worker hold the whole body in memory
     before the cap rejected it.
 
-    Returns (body, content-type). Raises ValueError when the cap is exceeded.
+    Returns (body, content-type, meta) where meta carries the final hop's
+    ``status``, ``etag``, and ``last_modified`` response headers. Raises
+    ValueError when the cap is exceeded.
     """
     for _ in range(MAX_REDIRECTS + 1):
         with client.stream("GET", url, headers=headers) as response:
-            if response.is_redirect:
+            # httpx treats every 3xx as is_redirect (304 included), but a 304
+            # has no Location header and is NOT a hop we can follow. It must
+            # fall through to the meta capture below so the caller can
+            # short-circuit on "not modified".
+            if response.is_redirect and response.status_code != 304:
                 location = response.headers.get("location")
                 if not location:
                     raise ValueError("Redirect response had no Location header")
@@ -556,7 +610,11 @@ def _fetch_with_redirect_validation(
                 url = next_url
                 continue
 
-            response.raise_for_status()
+            # raise_for_status() raises for ANY non-2xx, including 304 (a 3xx
+            # is not is_success), so skip it explicitly for 304: a not-modified
+            # response is a success, not an error, and carries no body.
+            if response.status_code != 304:
+                response.raise_for_status()
             declared = response.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > max_bytes:
                 raise ValueError(
@@ -571,7 +629,12 @@ def _fetch_with_redirect_validation(
                         f"Response too large: exceeded {max_bytes} bytes"
                     )
                 chunks.append(chunk)
-            return b"".join(chunks), response.headers.get("content-type", "")
+            meta = {
+                "status": response.status_code,
+                "etag": response.headers.get("etag"),
+                "last_modified": response.headers.get("last-modified"),
+            }
+            return b"".join(chunks), response.headers.get("content-type", ""), meta
 
     raise ValueError(f"Too many redirects (max {MAX_REDIRECTS})")
 
@@ -581,7 +644,7 @@ def _fetch_via_fallback_proxy(
     headers: dict,
     max_bytes: int = MAX_FEED_SIZE,
     timeout: float = 30,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, dict]:
     """Fetch an outbound URL through the configured fallback proxy worker.
 
     Triggered when a direct fetch receives HTTP 403 or 429 (e.g. edge WAF blocks
@@ -1333,14 +1396,14 @@ def fetch_image(url: str) -> tuple[bytes, str] | None:
         try:
             client, backend = ssrf_client([url])
             try:
-                content, raw_type = _fetch_with_redirect_validation(
+                content, raw_type, _meta = _fetch_with_redirect_validation(
                     client, url, headers, MAX_IMAGE_SIZE, backend=backend
                 )
             finally:
                 client.close()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (403, 429) and settings.FALLBACK_PROXY_URL:
-                content, raw_type = _fetch_via_fallback_proxy(url, headers, MAX_IMAGE_SIZE)
+                content, raw_type, _meta = _fetch_via_fallback_proxy(url, headers, MAX_IMAGE_SIZE)
             else:
                 raise
         content_type = raw_type.split(";")[0].strip()

@@ -35,7 +35,7 @@ class TestFallbackProxy:
             calls.append(url)
             if "proxy.example.com" in url:
                 assert headers.get("X-FeedEcho-Proxy-Secret") == "test-secret"
-                return (proxy_feed_xml, "application/rss+xml")
+                return (proxy_feed_xml, "application/rss+xml", {})
             raise httpx.HTTPStatusError("Forbidden", request=direct_response.request, response=direct_response)
 
         monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)
@@ -60,7 +60,7 @@ class TestFallbackProxy:
 
         def _fake_fetch(client, url, headers, max_bytes=0, backend=None):
             if "proxy.example.com" in url:
-                return (proxy_feed_xml, "application/rss+xml")
+                return (proxy_feed_xml, "application/rss+xml", {})
             raise httpx.HTTPStatusError("Rate limited", request=direct_response.request, response=direct_response)
 
         monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)
@@ -97,7 +97,7 @@ class TestFallbackProxy:
 
         def _fake_fetch(client, url, headers, max_bytes=0, backend=None):
             if "proxy.example.com" in url:
-                return (fake_jpeg, "image/jpeg")
+                return (fake_jpeg, "image/jpeg", {})
             raise httpx.HTTPStatusError("Forbidden", request=direct_response.request, response=direct_response)
 
         monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)
@@ -107,3 +107,34 @@ class TestFallbackProxy:
         content, content_type = res
         assert content == fake_jpeg
         assert content_type == "image/jpeg"
+
+    def test_fetch_feed_proxy_fallback_strips_conditional_headers(self, monkeypatch):
+        monkeypatch.setattr(
+            settings, "FALLBACK_PROXY_URL", "https://proxy.example.com"
+        )
+        monkeypatch.setattr(settings, "FALLBACK_PROXY_SECRET", "test-secret")
+
+        direct_response = httpx.Response(403, request=httpx.Request("GET", "https://origin.example/rss"))
+        proxy_feed_xml = b'<?xml version="1.0"?><rss version="2.0"><channel><title>Proxied</title></channel></rss>'
+
+        seen_proxy_headers = {}
+
+        def _fake_fetch(client, url, headers, max_bytes=0, backend=None):
+            if "proxy.example.com" in url:
+                seen_proxy_headers.update(headers)
+                return (proxy_feed_xml, "application/rss+xml", {"status": 200, "etag": '"proxy-etag"', "last_modified": None})
+            raise httpx.HTTPStatusError("Forbidden", request=direct_response.request, response=direct_response)
+
+        monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)
+
+        result = feed_parser.fetch_feed(
+            "https://origin.example/rss",
+            etag='"orig-etag"',
+            last_modified="Mon, 01 Jan 2024 00:00:00 GMT",
+        )
+        # The proxy must not receive our origin validators (cross-origin
+        # metadata leak), and its response validators must not be adopted.
+        assert "If-None-Match" not in seen_proxy_headers
+        assert "If-Modified-Since" not in seen_proxy_headers
+        assert result["etag"] is None
+        assert result["last_modified"] is None

@@ -23,7 +23,7 @@ MINIMAL_RSS = (
     "</channel></rss>"
 ).encode()
 
-CONTENT = (MINIMAL_RSS, "application/xml")
+CONTENT = (MINIMAL_RSS, "application/xml", {"status": 200, "etag": None, "last_modified": None})
 
 
 class _FakeClientFactory:

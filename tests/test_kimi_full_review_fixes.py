@@ -503,7 +503,7 @@ class TestJsonFeedDetection:
             feed_parser,
             "_fetch_with_redirect_validation",
             lambda client, u, headers, max_bytes, backend=None: (
-                b'{"version": "https://jsonfeed.org/version/1"}', "text/plain"
+                b'{"version": "https://jsonfeed.org/version/1"}', "text/plain", {}
             ),
         )
         # text/plain + .json-with-query path: only the path check can catch it.
@@ -517,7 +517,7 @@ class TestJsonFeedDetection:
             feed_parser,
             "_fetch_with_redirect_validation",
             lambda client, u, headers, max_bytes, backend=None: (
-                b"<rss></rss>", "text/xml"
+                b"<rss></rss>", "text/xml", {}
             ),
         )
         result = feed_parser.fetch_feed("https://example.com/feed")

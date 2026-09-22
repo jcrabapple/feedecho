@@ -35,7 +35,7 @@ class TestFallbackProxy:
             calls.append(url)
             if "proxy.example.com" in url:
                 assert headers.get("X-FeedEcho-Proxy-Secret") == "test-secret"
-                return (proxy_feed_xml, "application/rss+xml")
+                return (proxy_feed_xml, "application/rss+xml", {})
             raise httpx.HTTPStatusError("Forbidden", request=direct_response.request, response=direct_response)
 
         monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)
@@ -60,7 +60,7 @@ class TestFallbackProxy:
 
         def _fake_fetch(client, url, headers, max_bytes=0, backend=None):
             if "proxy.example.com" in url:
-                return (proxy_feed_xml, "application/rss+xml")
+                return (proxy_feed_xml, "application/rss+xml", {})
             raise httpx.HTTPStatusError("Rate limited", request=direct_response.request, response=direct_response)
 
         monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)
@@ -97,7 +97,7 @@ class TestFallbackProxy:
 
         def _fake_fetch(client, url, headers, max_bytes=0, backend=None):
             if "proxy.example.com" in url:
-                return (fake_jpeg, "image/jpeg")
+                return (fake_jpeg, "image/jpeg", {})
             raise httpx.HTTPStatusError("Forbidden", request=direct_response.request, response=direct_response)
 
         monkeypatch.setattr(feed_parser, "_fetch_with_redirect_validation", _fake_fetch)

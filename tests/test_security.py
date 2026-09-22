@@ -175,13 +175,14 @@ class TestSSRFRedirectProtection:
             self._stream_ctx(final),
         ]
 
-        body, content_type = _fetch_with_redirect_validation(
+        body, content_type, meta = _fetch_with_redirect_validation(
             client,
             "https://8.8.8.8/feed.xml",
             {},
         )
         assert body == b"<rss></rss>"
         assert content_type == "application/rss+xml"
+        assert meta["status"] == 200
 
     def test_body_over_the_cap_is_abandoned(self):
         """The cap is enforced while streaming, not after buffering.

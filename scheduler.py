@@ -295,6 +295,27 @@ def _clear_feed_error(feed_id: int, lease_token: str) -> None:
         )
 
 
+def _save_feed_validators(
+    feed_id: int,
+    lease_token: str,
+    etag: str | None,
+    last_modified: str | None,
+) -> None:
+    """Persist the conditional-GET validators observed on the last fetch.
+
+    A 200 overwrites unconditionally (a response without ETag clears the
+    stored one so the next poll fetches unconditionally again); a 304 echoes
+    the previously-sent value back through fetch_feed, so this write is a
+    no-op on the not-modified path.
+    """
+    with get_db() as db:
+        db.execute(
+            "UPDATE feeds SET etag = ?, last_modified = ?"
+            " WHERE id = ? AND lease_token = ?",
+            (etag, last_modified, feed_id, lease_token),
+        )
+
+
 def _update_cursor(feed_id: int, lease_token: str, cursor_id: str) -> bool:
     """Advance a cursor only while the current worker still owns the lease."""
     with get_db() as db:
@@ -445,12 +466,33 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
         _update_last_fetched(feed_id, lease_token)
         return
 
+    # Conditional GET: advertise validators only when we actually hold them, so
+    # fresh feeds fetch unconditionally and existing single-arg fetch_feed
+    # fakes keep their seam.
+    fetch_kwargs: dict = {}
+    if feed["etag"]:
+        fetch_kwargs["etag"] = feed["etag"]
+    if feed["last_modified"]:
+        fetch_kwargs["last_modified"] = feed["last_modified"]
+
     try:
-        feed_data = fetch_feed(feed_url)
+        feed_data = fetch_feed(feed_url, **fetch_kwargs)
         _clear_feed_error(feed_id, lease_token)
+        _save_feed_validators(
+            feed_id,
+            lease_token,
+            feed_data.get("etag"),
+            feed_data.get("last_modified"),
+        )
     except Exception as exc:
         logger.exception("Feed %s (%s): fetch failed", feed_id, feed_name)
         _set_feed_error(feed_id, lease_token, str(exc))
+        _update_last_fetched(feed_id, lease_token)
+        return
+
+    if feed_data.get("not_modified"):
+        # The feed is unchanged since the stored validators: nothing parsed,
+        # nothing to deliver, cursor untouched.
         _update_last_fetched(feed_id, lease_token)
         return
 
@@ -581,6 +623,9 @@ def _retry_due_failures(feed_id: int, echoes, feed_name: str = "") -> None:
 
     # We only have item_id stored, not the full item payload. Fetch the feed
     # once and match; items that have aged out of the feed are marked gave_up.
+    # This fetch is deliberately UNCONDITIONAL (no etag/last_modified): the
+    # sweep needs the full current body to match item_ids, and a 304 here
+    # would leave every pending item unmatched and marked "gave_up".
     try:
         feed_data = fetch_feed(db_feed_url(feed_id))
     except Exception:

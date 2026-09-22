@@ -6,6 +6,9 @@ stored on a feed row are sent as conditional headers, a 304 short-circuits the
 parse-and-dispatch path, and fresh validators from a 200 are persisted.
 """
 
+from unittest import mock
+
+import httpx
 import pytest
 
 import feed_parser
@@ -101,6 +104,38 @@ class TestConditionalFetch:
         assert result["items"][0]["title"] == "i1"
 
 
+class _StreamCtx:
+    def __init__(self, response):
+        self._response = response
+
+    def __enter__(self):
+        return self._response
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestReal304Handling:
+    """Drive the REAL helper against an actual httpx.Response(304).
+
+    httpx reports 304 as is_redirect (3xx) AND raise_for_status() raises for
+    it, so a 304 would crash the fetch helper unless both are explicitly
+    skipped. The fetch_feed-level tests above mock the helper, which is why a
+    304 bug there would slip through — this test closes that gap.
+    """
+
+    def test_helper_survives_real_304_response(self):
+        resp = httpx.Response(304, request=httpx.Request("GET", "https://example.com/feed"))
+        client = mock.MagicMock()
+        client.stream.return_value = _StreamCtx(resp)
+
+        body, content_type, meta = feed_parser._fetch_with_redirect_validation(
+            client, "https://example.com/feed", {}
+        )
+        assert meta["status"] == 304
+        assert body == b""
+
+
 def _seed_feed(db, *, etag=None, last_modified=None):
     db.execute(
         "INSERT INTO accounts (name, username, instance, access_token) VALUES (?, ?, ?, ?)",
@@ -135,12 +170,14 @@ class TestSchedulerConditional:
             return {"not_modified": True, "items": [], "etag": '"abc"'}
 
         monkeypatch.setattr(scheduler, "fetch_feed", fake_feed)
-        monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "p1"})
+        process_echo = mock.MagicMock()
+        monkeypatch.setattr(scheduler, "process_echo", process_echo)
 
         scheduler.check_feed(1)
 
         assert calls["kwargs"].get("etag") == '"abc"'
         assert calls["kwargs"].get("last_modified") == "Mon, 01 Jan 2024 00:00:00 GMT"
+        process_echo.assert_not_called()
 
         with db_tmp.get_db() as db:
             row = db.execute(
@@ -184,19 +221,26 @@ class TestSchedulerConditional:
 
         with db_tmp.get_db() as db:
             _seed_feed(db, etag='"old"')
+            db.execute(
+                "INSERT INTO posted_items (echo_id, item_id, status, next_retry_at)"
+                " VALUES (1, 'item-1', 'failed', '2000-01-01 00:00:00')"
+            )
 
         saw = {}
 
         def fake_feed(url, *args, **kwargs):
-            saw.setdefault("kwargs", kwargs)
-            return {"items": [], "etag": None, "last_modified": None}
+            saw["called"] = True
+            saw["kwargs"] = kwargs
+            return {
+                "items": [{"id": "item-1", "title": "t", "link": "https://e/1", "summary": ""}],
+                "etag": None,
+                "last_modified": None,
+            }
 
         monkeypatch.setattr(scheduler, "fetch_feed", fake_feed)
-        # A pending retry would normally pull the full feed; the point of this
-        # test is that the retry path must NOT send conditional headers (a 304
-        # with no body there would mark the pending item "gave_up").
         monkeypatch.setattr(scheduler, "process_echo", lambda *a, **k: True)
 
-        scheduler._retry_due_failures(1, [], feed_name="f")
+        scheduler._retry_due_failures(1, [{"id": 1}], feed_name="f")
 
-        assert saw.get("kwargs", {}) == {}, "retry sweep must fetch unconditionally"
+        assert saw.get("called") is True, "retry sweep must actually fetch"
+        assert saw.get("kwargs") == {}, "retry sweep must fetch unconditionally"

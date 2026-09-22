@@ -593,7 +593,11 @@ def _fetch_with_redirect_validation(
     """
     for _ in range(MAX_REDIRECTS + 1):
         with client.stream("GET", url, headers=headers) as response:
-            if response.is_redirect:
+            # httpx treats every 3xx as is_redirect (304 included), but a 304
+            # has no Location header and is NOT a hop we can follow. It must
+            # fall through to the meta capture below so the caller can
+            # short-circuit on "not modified".
+            if response.is_redirect and response.status_code != 304:
                 location = response.headers.get("location")
                 if not location:
                     raise ValueError("Redirect response had no Location header")
@@ -606,7 +610,11 @@ def _fetch_with_redirect_validation(
                 url = next_url
                 continue
 
-            response.raise_for_status()
+            # raise_for_status() raises for ANY non-2xx, including 304 (a 3xx
+            # is not is_success), so skip it explicitly for 304: a not-modified
+            # response is a success, not an error, and carries no body.
+            if response.status_code != 304:
+                response.raise_for_status()
             declared = response.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > max_bytes:
                 raise ValueError(

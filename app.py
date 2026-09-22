@@ -5120,7 +5120,8 @@ async def edit_feed(
                 """
                 UPDATE feeds
                    SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?,
-                       folder_id = ?, last_item_id = NULL
+                       folder_id = ?, last_item_id = NULL,
+                       etag = NULL, last_modified = NULL
                  WHERE id = ? AND deleted_at IS NULL AND user_id = ?
                 """,
                 (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),

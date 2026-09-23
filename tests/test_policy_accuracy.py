@@ -224,11 +224,19 @@ class TestDeletionSemantics:
             assert row["status"] == "failed"
             assert "Feed deleted" in row["error_message"]
 
-    def test_lifespan_resilences_uvicorn_access(self):
+    def test_lifespan_resilences_uvicorn_access(self, monkeypatch, tmp_path):
         # `python app.py` / uvicorn.run() calls configure_logging() at server
         # start, AFTER import, resetting uvicorn.access to INFO. The lifespan
         # must re-silence it so the launch path cannot reopen the token leak.
+        # The DB is isolated to tmp_path so the lifespan's init_db() never
+        # touches real state.
         import logging
+
+        monkeypatch.setattr(settings, "MULTI", False)
+        monkeypatch.setattr(settings, "AUTH_TOKEN", "lifespan-test-token")
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(settings, "ALLOW_SQLITE_FALLBACK", True)
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "lifespan.db")
 
         logging.getLogger("uvicorn.access").setLevel(logging.INFO)
         with TestClient(app):
@@ -236,3 +244,38 @@ class TestDeletionSemantics:
                 logging.getLogger("uvicorn.access").getEffectiveLevel()
                 >= logging.CRITICAL
             )
+
+    def test_flush_queue_finalizes_row_with_purged_item_for_deleted_feed(
+        self, single_client, monkeypatch
+    ):
+        # A queued row whose feed_items row is gone AND whose feed was
+        # deleted must finalize, never dispatch. (A pruned feed_items row on
+        # a LIVE feed still dispatches — the queue row carries its own
+        # materialized content; test_queue.py pins that.)
+        import scheduler
+
+        calls = []
+
+        def _fake_process_echo(*args, **kwargs):
+            calls.append(args)
+            return True
+
+        monkeypatch.setattr(scheduler, "process_echo", _fake_process_echo)
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, deleted_at)"
+                " VALUES ('D', '', '2026-01-01 00:00:00')"
+            )
+            db.execute(
+                "INSERT INTO queued_posts (feed_id, feed_item_id, item_id,"
+                " destination_type, destination_id, content, scheduled_at)"
+                " VALUES (1, 424242, 'i1', 'mastodon', 1, 'body', '2020-01-01 00:00:00')"
+            )
+
+        scheduler.flush_queue()
+
+        with get_db() as db:
+            row = db.execute("SELECT * FROM queued_posts WHERE id = 1").fetchone()
+            assert row["status"] == "failed"
+            assert "Feed deleted" in row["error_message"]
+        assert calls == []

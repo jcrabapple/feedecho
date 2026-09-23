@@ -365,3 +365,20 @@ class TestDisclosureBatch:
         # it so it can never come back.)
         for tpl in sorted((REPO_ROOT / "templates").glob("*.html")):
             assert "Google Fonts" not in tpl.read_text(), tpl.name
+
+    def test_privacy_discloses_fallback_fetch_relay(self, multi_client):
+        # On a 403/429 from a feed or image origin, feed_parser retries the
+        # fetch through the operator-configured relay worker, passing the
+        # full URL (private tokens included) as ?url=. This data flow must
+        # be disclosed (third-batch reviewer, confirmed against source).
+        page = multi_client.get("/privacy").text
+        assert "fetch relay" in page
+        assert "Cloudflare Workers" in page
+        assert "403 or 429" in page
+        assert "including any private token in its query string" in page
+        assert "The relay logs and caches nothing" in page
+
+    def test_about_discloses_fallback_fetch_relay(self, multi_client):
+        page = multi_client.get("/about").text
+        assert "fetch relay" in page
+        assert "Cloudflare Workers" in page

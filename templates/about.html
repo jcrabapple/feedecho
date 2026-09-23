@@ -44,6 +44,7 @@
     <h2>Third parties</h2>
     <ul>
         <li>Your connected platforms (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, your email provider) receive exactly the posts you configure. Nothing else.</li>
+        <li>Some sites block server-side readers with a 403 or 429. When that happens, the feed or image URL is retried through our own first-party fetch relay on Cloudflare Workers, which fetches the site and returns the response, logging and caching nothing. The URL is passed exactly as configured — including any token in it. No account credentials or post content go through it. (A self-hosted install only uses this if its operator configures a relay.)</li>
         <li>Billing goes through Stripe, which processes your payment card directly.</li>
         <li>Transactional email (verification, password reset, operational alerts) is delivered by Mailgun, which processes the message and your recipient address.</li>
         <li>If you enable AI-generated alt text, images you attach to posts are sent to the OpenAI-compatible vision provider you configure, using your own API key.</li>

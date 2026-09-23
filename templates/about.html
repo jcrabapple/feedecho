@@ -10,10 +10,10 @@
     <ul>
         <li><strong>Your account:</strong> email address and a salted scrypt hash of your password. Passwords are never stored in plain text.</li>
         <li><strong>Feeds:</strong> the feed URLs you add and the last item each feed was checked against. Recent feed content — titles, authors, summaries, article bodies, and image references — is stored so the built-in reader can display it: the newest 200 unstarred items per feed (older ones are pruned automatically), and starred items until you unstar them, delete the feed, or delete your account. Your folders, saved searches, and read/starred marks are stored as well.</li>
-        <li><strong>Destinations:</strong> credentials for the accounts you connect — Mastodon access tokens, Bluesky app passwords, micro.blog tokens, Matrix access tokens, Discord webhook URLs, generic webhook URLs and headers, and email SMTP credentials. These are required to post on your behalf, and they are encrypted at rest.</li>
+        <li><strong>Destinations:</strong> credentials for the accounts you connect — Mastodon access tokens, Bluesky app passwords, micro.blog tokens, Matrix access tokens, Discord webhook URLs, Telegram bot tokens, generic webhook URLs and headers, and email SMTP credentials. These are required to post on your behalf, and they are encrypted at rest. If you enable AI-generated alt text, the API key for the vision provider you choose is stored the same way.</li>
         <li><strong>Post history:</strong> which items were posted where, and any delivery errors, so failures can be retried and diagnosed.</li>
     </ul>
-    <p>Everything lives in a Postgres database on a single VPS we operate. Data is not sold, rented, or shared with anyone.</p>
+    <p>Everything lives in a Postgres database on a single VPS we operate. Data is not sold or rented; it is disclosed only as described under Third parties below.</p>
 </section>
 
 <section>
@@ -45,13 +45,16 @@
     <ul>
         <li>Your connected platforms (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, your email provider) receive exactly the posts you configure. Nothing else.</li>
         <li>Billing goes through Stripe, which processes your payment card directly.</li>
+        <li>Transactional email (verification, password reset, operational alerts) is delivered by Mailgun, which processes the message and your recipient address.</li>
+        <li>If you enable AI-generated alt text, images you attach to posts are sent to the OpenAI-compatible vision provider you configure, using your own API key.</li>
+        <li>If you enable Boost on an account or echo, the public URL of each published post goes to FeedBooster — a companion service run by the same operator on the same infrastructure — which re-shares it on the fediverse.</li>
         <li>Pages use the self-hosted Inter font family. No third-party assets or requests are made from your browser.</li>
     </ul>
 </section>
 
 <section>
     <h2>Account deletion</h2>
-    <p>Deleting a feed stops it from posting, removes its stored reader items, and blanks its URL; its delivery history is kept, so your posting record stays intact. Deleting a connected account or an echo likewise keeps its history. To remove everything, delete your account from Settings (password-confirmed) — that removes your account and all of its data, including post history.</p>
+    <p>Deleting a feed stops it from posting, removes its stored reader items, and blanks its URL; its delivery history is kept, so your posting record stays intact. Deleting a connected account or an echo likewise keeps its history. To remove everything, delete your account from Settings (password-confirmed) — that removes your account and all of its data, including post history. Encrypted backups may retain deleted data until they rotate out, within about 8 weeks.</p>
 </section>
 
 <p class="hint">Questions or problems: email <a href="mailto:support@feedecho.net">support@feedecho.net</a> — it reaches the operator directly.</p>

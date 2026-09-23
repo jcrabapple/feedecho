@@ -279,3 +279,89 @@ class TestDeletionSemantics:
             assert row["status"] == "failed"
             assert "Feed deleted" in row["error_message"]
         assert calls == []
+
+
+class TestDisclosureBatch:
+    """Second external-review batch (2026-09-23): disclosure gaps."""
+
+    def test_privacy_names_transactional_email_provider(self, multi_client):
+        page = multi_client.get("/privacy").text
+        assert "Mailgun" in page
+
+    def test_privacy_discloses_ai_alt_text_provider(self, multi_client):
+        # Users can configure their own OpenAI-compatible vision API key;
+        # attached images then go to that provider, and the key is stored
+        # encrypted. Both the stored credential and the data flow must be
+        # disclosed.
+        page = multi_client.get("/privacy").text
+        assert "alt text" in page
+        assert "vision" in page.lower()
+        assert "API key" in page
+
+    def test_about_discloses_ai_alt_text_key(self, multi_client):
+        page = multi_client.get("/about").text
+        assert "vision" in page.lower()
+
+    def test_privacy_connected_platforms_line_includes_telegram(self, multi_client):
+        page = multi_client.get("/privacy").text
+        assert (
+            "Mastodon, Bluesky, micro.blog, your Matrix homeserver, Discord,"
+            " Telegram, your email provider"
+        ) in page
+
+    def test_privacy_revoke_list_covers_all_platforms(self, multi_client):
+        page = multi_client.get("/privacy").text
+        assert "Discord, or Telegram settings" in page
+
+    def test_privacy_sell_rent_wording_points_at_disclosures(self, multi_client):
+        page = multi_client.get("/privacy").text
+        assert "don't sell, rent, or share" not in page
+        assert "disclosed only as described" in page
+
+    def test_about_sell_rent_wording_points_at_disclosures(self, multi_client):
+        page = multi_client.get("/about").text
+        assert "disclosed only as described" in page
+
+    def test_privacy_discloses_us_transfer_for_eea_uk(self, multi_client):
+        page = multi_client.get("/privacy").text
+        assert "transferred to and stored in the United States" in page
+        # Bare acknowledgement is not a GDPR Chapter V hook; the policy must
+        # name the contract-necessity derogation.
+        assert "Art. 49(1)(b)" in page
+
+    def test_privacy_discloses_backup_retention(self, multi_client):
+        # Account deletion removes live data, but encrypted backups retain it
+        # until they rotate out — the window must be stated.
+        page = multi_client.get("/privacy").text
+        assert "backup" in page.lower()
+        assert "8 weeks" in page
+
+    def test_about_discloses_backup_retention(self, multi_client):
+        page = multi_client.get("/about").text
+        assert "backup" in page.lower()
+
+    def test_privacy_discloses_booster(self, multi_client):
+        # BOOSTER_URL is set in production: boosted posts' public URLs go to
+        # the FeedBooster service, so it must be disclosed.
+        page = multi_client.get("/privacy").text
+        assert "FeedBooster" in page
+
+    def test_about_discloses_booster(self, multi_client):
+        page = multi_client.get("/about").text
+        assert "FeedBooster" in page
+
+    def test_terms_states_auto_renewal_and_how_to_cancel(self, multi_client):
+        page = multi_client.get("/terms").text
+        assert "renews automatically" in page
+        assert "Manage subscription" in page
+
+    def test_pricing_states_auto_renewal(self, multi_client):
+        page = multi_client.get("/pricing").text
+        assert "renews automatically" in page
+
+    def test_no_google_fonts_claim_remains(self):
+        # The font has been self-hosted since v1.44.0; no page may claim
+        # Google Fonts. (Second-batch reviewer had a stale snapshot, but pin
+        # it so it can never come back.)
+        for tpl in sorted((REPO_ROOT / "templates").glob("*.html")):
+            assert "Google Fonts" not in tpl.read_text(), tpl.name

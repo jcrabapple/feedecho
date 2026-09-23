@@ -376,7 +376,7 @@ class TestDisclosureBatch:
         assert "Cloudflare Workers" in page
         assert "403 or 429" in page
         assert "including any private token in its query string" in page
-        assert "The relay stores nothing" in page
+        assert "The relay logs and caches nothing" in page
 
     def test_about_discloses_fallback_fetch_relay(self, multi_client):
         page = multi_client.get("/about").text

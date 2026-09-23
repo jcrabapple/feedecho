@@ -25,7 +25,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlparse, urlencode
 
-from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 import xml.etree.ElementTree as ElementTree
 from xml.sax.saxutils import quoteattr
@@ -214,7 +214,7 @@ from settings import AUTH_TOKEN  # noqa: F401  (re-exported for tests/legacy)
 # the user's browser here). /oauth/connect requires auth so unauthenticated
 # users cannot trigger outbound requests to arbitrary instance URLs.
 _AUTH_EXEMPT_PATHS = {"/healthz", "/favicon.svg", "/static", "/oauth/callback"}
-_AUTH_EXEMPT_PREFIXES = ("/static",)
+_AUTH_EXEMPT_PREFIXES = ("/static", "/poke/")
 
 # S10f: index the route table once, splitting literal paths (dict lookup of
 # path -> methods) from parameterized ones (need the full matches() scan).
@@ -356,7 +356,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # (the route branches on authed).
         "/",
     }
-    _MULTI_EXEMPT_PREFIXES = ("/static",)
+    _MULTI_EXEMPT_PREFIXES = ("/static", "/poke/")
 
     # Paths a card-pending trial user (registered but checkout unfinished) may
     # still reach so they can finish checkout, log out, or delete the abandoned
@@ -5253,6 +5253,78 @@ def fetch_now(request: Request, feed_id: int):
         return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+POKE_COOLDOWN_SECONDS = 60
+
+
+@app.post("/api/feeds/{feed_id}/poke-token")
+def poke_token(request: Request, feed_id: int, regenerate: str = Form("0")):
+    """Generate or reveal the secret poke URL for a feed.
+
+    The token lets a publisher/automation trigger an immediate fetch without
+    a FeedEcho session (see GET /poke/{token}). Revealing is idempotent;
+    `regenerate=1` rotates the token, revoking any previously shared URL.
+    """
+    uid = current_user_id(request)
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT poke_token FROM feeds"
+            " WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Feed not found")
+        token = feed["poke_token"]
+        if not token or regenerate in ("1", "true", "on"):
+            token = secrets.token_urlsafe(24)
+            db.execute(
+                "UPDATE feeds SET poke_token = ? WHERE id = ? AND user_id = ?",
+                (token, feed_id, uid),
+            )
+    base = settings.BASE_URL.rstrip("/") if settings.BASE_URL else ""
+    poke_url = f"{base}/poke/{token}" if base else f"/poke/{token}"
+    return {"success": True, "poke_token": token, "poke_url": poke_url}
+
+
+@app.api_route("/poke/{token}", methods=["GET", "POST"])
+def poke(token: str, response: Response, background_tasks: BackgroundTasks):
+    """Unauthenticated poke: fetch the feed that owns this secret token now.
+
+    Deliberately session-free, and the feed id is carried only inside the
+    token, so the URL is safe to hand to third parties. No URL is taken from
+    the request (the feed URL was validated at add time), so there is no SSRF
+    surface here. A poke inside the cooldown window is a no-op so a leaked
+    token can't be turned into a fetch hammer against the feed's origin.
+    """
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (now_dt - timedelta(seconds=POKE_COOLDOWN_SECONDS)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT id, paused FROM feeds"
+            " WHERE poke_token = ? AND deleted_at IS NULL",
+            (token,),
+        ).fetchone()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Unknown poke token")
+        if feed["paused"]:
+            return {"ok": True, "skipped": "feed_paused"}
+
+        # Atomic cooldown acquisition: exactly one concurrent request updates the row
+        res = db.execute(
+            "UPDATE feeds SET last_poked_at = ? WHERE id = ?"
+            " AND (last_poked_at IS NULL OR last_poked_at <= ?)",
+            (now, feed["id"], cutoff),
+        )
+        if res.rowcount == 0:
+            return {"ok": True, "skipped": "recently_poked"}
+        feed_id = feed["id"]
+    background_tasks.add_task(check_feed, feed_id)
+    return {"ok": True}
 
 
 @app.post("/api/history/{posted_id}/retry")

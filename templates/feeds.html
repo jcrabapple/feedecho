@@ -95,7 +95,8 @@
             data-url="{{ feed.url | e }}"
             data-poll-interval="{{ feed.poll_interval }}"
             data-folder-id="{{ feed.folder_id or '' }}"
-            data-mute-keywords="{{ (feed.mute_keywords or '') | e }}">
+            data-mute-keywords="{{ (feed.mute_keywords or '') | e }}"
+            data-has-poke-token="{{ 1 if feed.poke_token else 0 }}">
             <td data-label="Name">
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}

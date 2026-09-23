@@ -26,4 +26,8 @@ RUN useradd --create-home --uid 10001 --user-group feedecho \
 EXPOSE 8453
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8453"]
+# --no-access-log: uvicorn's built-in access log records the full request
+# line (query string included), which would leak password-reset and
+# email-verification tokens to stdout. The app's own middleware logs method +
+# path only, so the built-in one stays off.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8453", "--no-access-log"]

@@ -2,7 +2,7 @@
 {% block title %}Privacy Policy — FeedEcho{% endblock %}
 {% block content %}
 <h1>Privacy Policy</h1>
-<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 20, 2026.</p>
+<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 22, 2026.</p>
 
 <p>FeedEcho is operated by Jason Crabtree, Winchester, Virginia, United States. For privacy questions or data requests, email <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</p>
 
@@ -16,10 +16,12 @@
             <tr><td>Email address</td><td>Account identity, verification, password reset, and operational alerts about your feeds.</td></tr>
             <tr><td>Password</td><td>Stored only as a salted scrypt hash. Never in plain text.</td></tr>
             <tr><td>Feed URLs</td><td>The feeds you ask us to watch, and a cursor (last seen item) per feed so posts are not duplicated.</td></tr>
+            <tr><td>Feed content</td><td>Titles, authors, summaries, article bodies, and image references from recent items, stored so the built-in reader can display them. The newest 200 unstarred items per feed are kept (older ones are pruned automatically); items you star are kept until you unstar them, delete the feed, or delete your account.</td></tr>
+            <tr><td>Reader organization</td><td>Your folders, saved searches, and per-item read/starred state.</td></tr>
             <tr><td>Destination credentials</td><td>Tokens, app passwords, webhook URLs, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, webhooks). Required to post on your behalf; nothing else is done with them. They are encrypted at rest.</td></tr>
             <tr><td>Echo configuration</td><td>Your templates, filters, and delivery settings.</td></tr>
             <tr><td>Post history</td><td>Which feed items were delivered where, when, and with what outcome — needed for retries, duplicate prevention, and failure diagnosis.</td></tr>
-            <tr><td>Server logs</td><td>Request paths, status codes, and timestamps for debugging and abuse prevention. Paths only — query strings (which could contain tokens) are never logged.</td></tr>
+            <tr><td>Server logs</td><td>Request paths, client IP addresses, your account id when you are signed in, status codes, and timestamps — for debugging and abuse prevention. Paths only: query strings (which could contain tokens) are never logged.</td></tr>
         </tbody>
     </table>
 </section>
@@ -52,7 +54,7 @@
     <h2>What we don't do</h2>
     <ul>
         <li>We don't sell, rent, or share your data. There is no advertising.</li>
-        <li>Feed <em>content</em> is fetched, filtered, posted, and discarded — it is not archived. Only item identifiers and delivery outcomes are kept.</li>
+        <li>Feed content is used only to run your echoes and power your reader — never for advertising, profiling, or training.</li>
         <li>No analytics, tracking scripts, or third-party browser requests run on these pages.</li>
         <li>No payment data: billing is handled by Stripe, which processes your card directly — card numbers never touch our servers.</li>
     </ul>
@@ -79,7 +81,8 @@
     <h2>How long we keep things</h2>
     <ul>
         <li>Account and configuration data: while your account exists.</li>
-        <li>Post history and delivery outcomes: retained with the feed/echo records they belong to, so your posting record and retry state survive. Deleting a feed or echo removes access to its history; full account deletion (below) removes everything.</li>
+        <li>Reader items: the newest 200 unstarred items per feed; starred items until you unstar them, delete the feed, or delete your account. Deleting a feed removes its stored items and its URL immediately.</li>
+        <li>Post history and delivery outcomes: retained with the feed/echo records they belong to, so your posting record and retry state survive — deleting a feed or echo keeps its delivery history. Full account deletion (below) removes everything.</li>
         <li>Verification and password-reset tokens: single-use, expire in 24 hours, stored only as hashes.</li>
         <li>Server logs: rotated automatically and kept briefly.</li>
     </ul>
@@ -97,6 +100,6 @@
 
 <section>
     <h2>Contact</h2>
-    <p>Privacy questions or data requests: email <a href="mailto:support@feedecho.net">support@feedecho.net</a> or reply to any email this service sent you.</p>
+    <p>Privacy questions or data requests: email <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</p>
 </section>
 {% endblock %}

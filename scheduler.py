@@ -2951,7 +2951,7 @@ def _flush_queue() -> None:
                 continue
             row = db.execute(
                 """
-                SELECT q.*, f.name AS feed_name
+                SELECT q.*, f.name AS feed_name, f.deleted_at AS feed_deleted_at
                   FROM queued_posts q
                   LEFT JOIN feeds f ON q.feed_id = f.id
                  WHERE q.id = ?
@@ -2960,6 +2960,23 @@ def _flush_queue() -> None:
             ).fetchone()
 
         if not row:
+            continue
+
+        # Never send from a feed the user deleted (the feed's stored items
+        # are purged on delete, so the item lookup below would come back
+        # empty and dispatch a blank post). Finalize with a reason so the
+        # row shows what happened instead of sitting stuck or sending.
+        if row["feed_deleted_at"] is not None:
+            with get_db() as db:
+                db.execute(
+                    "UPDATE queued_posts SET status = 'failed',"
+                    " error_message = 'Feed deleted'"
+                    " WHERE id = ? AND status = 'sending'",
+                    (qp_id,),
+                )
+            logger.info(
+                "Queue flush: post %s finalized — its feed was deleted", qp_id
+            )
             continue
 
         # Enforce max_posts_per_hour for the queue (multi mode only, using hoisted counts)
@@ -3033,7 +3050,10 @@ def _flush_queue() -> None:
             "image_alt": row["image_alt"] or "",
         }
 
-        # If feed_item_id is still present, load any existing images/metadata
+        # If feed_item_id is still present, load any existing images/metadata.
+        # A missing row is NOT fatal: retention pruning removes feed_items
+        # routinely, and the queue row is self-sufficient (it carries its own
+        # materialized content).
         if row["feed_item_id"]:
             with get_db() as db:
                 fi = db.execute(
@@ -3048,6 +3068,24 @@ def _flush_queue() -> None:
                         "content_html": (fi["content_html"] if "content_html" in fi.keys() else "") or "",
                         "image_url": fi["image_url"] or "",
                     })
+
+        # Race insurance: the feed may have been deleted between the claim
+        # SELECT above and dispatch (feed deletion finalizes 'queued' rows,
+        # but this row is 'sending'). Re-check immediately before sending so
+        # nothing ever posts from a deleted feed.
+        with get_db() as db:
+            feed_state = db.execute(
+                "SELECT deleted_at FROM feeds WHERE id = ?", (row["feed_id"],)
+            ).fetchone()
+        if feed_state is None or feed_state["deleted_at"] is not None:
+            with get_db() as db:
+                db.execute(
+                    "UPDATE queued_posts SET status = 'failed',"
+                    " error_message = 'Feed deleted'"
+                    " WHERE id = ? AND status = 'sending'",
+                    (qp_id,),
+                )
+            continue
 
         try:
             ok = process_echo(

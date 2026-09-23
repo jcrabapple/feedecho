@@ -2,7 +2,7 @@
 {% block title %}Privacy Policy — FeedEcho{% endblock %}
 {% block content %}
 <h1>Privacy Policy</h1>
-<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 22, 2026.</p>
+<p class="hint">This policy describes what the FeedEcho hosted service at feedecho.net collects, stores, and does with your data. Last updated: September 23, 2026.</p>
 
 <p>FeedEcho is operated by Jason Crabtree, Winchester, Virginia, United States. For privacy questions or data requests, email <a href="mailto:support@feedecho.net">support@feedecho.net</a>.</p>
 
@@ -19,6 +19,7 @@
             <tr><td>Feed content</td><td>Titles, authors, summaries, article bodies, and image references from recent items, stored so the built-in reader can display them. The newest 200 unstarred items per feed are kept (older ones are pruned automatically); items you star are kept until you unstar them, delete the feed, or delete your account.</td></tr>
             <tr><td>Reader organization</td><td>Your folders, saved searches, and per-item read/starred state.</td></tr>
             <tr><td>Destination credentials</td><td>Tokens, app passwords, webhook URLs, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, webhooks). Required to post on your behalf; nothing else is done with them. They are encrypted at rest.</td></tr>
+            <tr><td>AI alt-text API key</td><td>Optional. If you enable AI-generated alt text, the API key for the OpenAI-compatible vision provider you choose. Stored encrypted at rest, used only to request alt text for images you attach to posts.</td></tr>
             <tr><td>Echo configuration</td><td>Your templates, filters, and delivery settings.</td></tr>
             <tr><td>Post history</td><td>Which feed items were delivered where, when, and with what outcome — needed for retries, duplicate prevention, and failure diagnosis.</td></tr>
             <tr><td>Server logs</td><td>Request paths, client IP addresses, your account id when you are signed in, status codes, and timestamps — for debugging and abuse prevention. Paths only: query strings (which could contain tokens) are never logged.</td></tr>
@@ -53,7 +54,7 @@
 <section>
     <h2>What we don't do</h2>
     <ul>
-        <li>We don't sell, rent, or share your data. There is no advertising.</li>
+        <li>We don't sell or rent your data, and there is no advertising. Data is shared only with the processors listed under "Who else sees data" below.</li>
         <li>Feed content is used only to run your echoes and power your reader — never for advertising, profiling, or training.</li>
         <li>No analytics, tracking scripts, or third-party browser requests run on these pages.</li>
         <li>No payment data: billing is handled by Stripe, which processes your card directly — card numbers never touch our servers.</li>
@@ -62,16 +63,19 @@
 
 <section>
     <h2>Where your data lives</h2>
-    <p>All account data is stored in a Postgres database on a server we operate in the United States (with encrypted offsite backups of that database). Destination credentials are encrypted at rest. Traffic is HTTPS with HSTS. Sessions are signed, HttpOnly, SameSite cookies; logging out or resetting your password invalidates existing sessions immediately. Every feed, account, setting, and history row is scoped to your account at the query level.</p>
+    <p>All account data is stored in a Postgres database on a server we operate in the United States, with encrypted off-site backups of that database that rotate out within about 8 weeks. Destination credentials are encrypted at rest. Traffic is HTTPS with HSTS. Sessions are signed, HttpOnly, SameSite cookies; logging out or resetting your password invalidates existing sessions immediately. Every feed, account, setting, and history row is scoped to your account at the query level.</p>
+    <p><strong>International transfer:</strong> if you use the service from the EEA or the UK, your personal data is transferred to and stored in the United States, where the server and the operator are located. By using the service you acknowledge that transfer.</p>
     <p><strong>Breach notification:</strong> if we learn that your personal data has been compromised, we will notify affected users and, where required, the relevant authorities.</p>
 </section>
 
 <section>
     <h2>Who else sees data</h2>
     <ul>
-        <li><strong>Your connected platforms</strong> (Mastodon, Bluesky, micro.blog, your Matrix homeserver, Discord, your email provider) receive exactly the posts you configure — nothing else.</li>
-        <li><strong>Email delivery</strong> for verification and password-reset mail goes through a transactional email provider; it processes the message (and your address as recipient) to deliver it.</li>
+        <li><strong>Your connected platforms</strong> (Mastodon, Bluesky, micro.blog, your Matrix homeserver, Discord, Telegram, your email provider) receive exactly the posts you configure — nothing else.</li>
+        <li><strong>Email delivery</strong> for verification, password-reset, and operational mail goes through Mailgun, our transactional email provider; it processes the message (and your address as recipient) to deliver it.</li>
         <li><strong>Payment processing</strong> is handled by Stripe, which processes your card directly for subscriptions and refunds.</li>
+        <li><strong>AI alt-text provider</strong> (optional): if you enable AI-generated alt text, images you attach to posts are sent to the OpenAI-compatible vision provider you configure, using your own API key. If you never configure one, no images leave the service for this purpose.</li>
+        <li><strong>FeedBooster</strong> (optional): if you enable Boost on an account or echo, the public URL of each published post is sent to the FeedBooster service — also operated by us, on the same infrastructure — which re-shares it on the fediverse. Only posts you explicitly mark for boosting, and only their already-public URLs.</li>
         <li><strong>Uptime monitoring</strong> periodically requests the public health endpoint from outside the server; it does not involve your account data.</li>
         <li>Nothing else, unless required by law.</li>
     </ul>
@@ -85,6 +89,7 @@
         <li>Post history and delivery outcomes: retained with the feed/echo records they belong to, so your posting record and retry state survive — deleting a feed or echo keeps its delivery history. Full account deletion (below) removes everything.</li>
         <li>Verification and password-reset tokens: single-use, expire in 24 hours, stored only as hashes.</li>
         <li>Server logs: rotated automatically and kept briefly.</li>
+        <li>Encrypted backups: deleted data (including after full account deletion) may persist in encrypted off-site backups until those backups rotate out, within about 8 weeks.</li>
     </ul>
 </section>
 
@@ -92,9 +97,9 @@
     <h2>Your controls</h2>
     <ul>
         <li>Delete individual feeds, connected accounts, or echoes from the dashboard at any time.</li>
-        <li>Revoke any destination token at its source platform (Mastodon, Bluesky, micro.blog, or Matrix settings) — we stop being able to post immediately.</li>
+        <li>Revoke any destination token at its source platform (Mastodon, Bluesky, micro.blog, Matrix, Discord, or Telegram settings) — we stop being able to post immediately. Webhook URLs can be rotated at the receiving service; disconnecting the account in FeedEcho stops all use either way.</li>
         <li>Export your data: the dashboard shows your feeds, echoes, and full delivery history.</li>
-        <li>Delete your account entirely from Settings (password-confirmed) — this removes your account and all of its data, including post history.</li>
+        <li>Delete your account entirely from Settings (password-confirmed) — this removes your account and all of its data, including post history. Encrypted backups may retain deleted data until they rotate out, within about 8 weeks.</li>
     </ul>
 </section>
 

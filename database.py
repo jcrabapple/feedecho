@@ -1125,6 +1125,11 @@ def init_db_sqlite() -> None:
             WHERE deleted_at IS NULL
         """)
         db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feeds_poke_token
+            ON feeds(poke_token)
+            WHERE poke_token IS NOT NULL AND deleted_at IS NULL
+        """)
+        db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_instance_username
             ON accounts(user_id, instance, username)
         """)
@@ -1747,6 +1752,11 @@ def init_db_postgres() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_user_url
             ON feeds(user_id, url)
             WHERE deleted_at IS NULL
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feeds_poke_token
+            ON feeds(poke_token)
+            WHERE poke_token IS NOT NULL AND deleted_at IS NULL
         """)
         db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_instance_username

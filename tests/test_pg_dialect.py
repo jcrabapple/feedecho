@@ -792,37 +792,35 @@ class TestAppOnPostgres:
         """The poke cooldown compares last_poked_at in SQL against a string
         cutoff. On PG that column is a real TIMESTAMP, so pin that the implicit
         string→timestamp cast works in both directions (the `<=` poke gate and
-        the `>` throttle check the route runs). Deliberately no app boot: the
+        the atomic throttle update the route runs). Deliberately no app boot: the
         full-app scheduler threads race monkeypatch teardown and flake."""
         from datetime import timedelta
 
         database.init_db()
+        now = datetime.now(timezone.utc)
+        old_time = (now - timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S")
         with database.get_db() as db:
             db.execute(
                 "INSERT INTO feeds (name, url, user_id, poke_token, last_poked_at)"
-                " VALUES ('PG', 'https://example.com/feed.xml', 1, 'tokpg',"
-                " TIMESTAMP '2026-09-22 22:00:00')"
+                " VALUES ('PG', 'https://example.com/feed.xml', 1, 'tokpg', ?)",
+                (old_time,),
             )
-        now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
         with database.get_db() as db:
-            # Old last_poked_at (22:00) is before the cutoff → pokeable.
-            pokeable = db.execute(
-                "SELECT id FROM feeds WHERE poke_token = ? AND deleted_at IS NULL"
+            # Old last_poked_at is before the cutoff → pokeable via atomic update.
+            updated = db.execute(
+                "UPDATE feeds SET last_poked_at = ? WHERE poke_token = ? AND deleted_at IS NULL"
                 " AND (last_poked_at IS NULL OR last_poked_at <= ?)",
-                ("tokpg", cutoff),
-            ).fetchone()
-            assert pokeable is not None
-            # A now-timestamp is inside the window → the throttle's > check fires.
-            db.execute(
-                "UPDATE feeds SET last_poked_at = ? WHERE id = ?",
-                (now.strftime("%Y-%m-%d %H:%M:%S"), pokeable["id"]),
+                (now.strftime("%Y-%m-%d %H:%M:%S"), "tokpg", cutoff),
             )
-            recent = db.execute(
-                "SELECT 1 FROM feeds WHERE id = ? AND last_poked_at > ?",
-                (pokeable["id"], cutoff),
-            ).fetchone()
-            assert recent is not None
+            assert updated.rowcount == 1
+            # A second poke inside the cooldown window updates 0 rows (throttled).
+            second = db.execute(
+                "UPDATE feeds SET last_poked_at = ? WHERE poke_token = ? AND deleted_at IS NULL"
+                " AND (last_poked_at IS NULL OR last_poked_at <= ?)",
+                (now.strftime("%Y-%m-%d %H:%M:%S"), "tokpg", cutoff),
+            )
+            assert second.rowcount == 0
 
     def test_history_page_renders_on_pg(self, pg_env, monkeypatch):
         """Timestamps come back as datetime objects on PG; the iso_utc /

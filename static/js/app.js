@@ -192,7 +192,7 @@ function editFeed(feedId) {
                 </label>
                 <label>Poke URL
                     <div class="poke-row" style="display:flex; gap:0.4rem; align-items:center;">
-                        <input type="text" id="poke-url-${feedId}" readonly value="" placeholder="Not generated" style="flex:1;">
+                        <input type="text" id="poke-url-${feedId}" readonly value="" placeholder="Click Generate to reveal" style="flex:1;">
                         <button type="button" class="btn-sm" onclick="generatePokeUrl(${feedId}, this)">Generate</button>
                     </div>
                     <span class="hint">Share this secret URL with a publisher or automation to trigger an immediate fetch the moment new content goes live. Regenerating revokes the old URL.</span>

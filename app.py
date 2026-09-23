@@ -25,7 +25,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlparse, urlencode
 
-from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 import xml.etree.ElementTree as ElementTree
 from xml.sax.saxutils import quoteattr
@@ -5279,16 +5279,16 @@ def poke_token(request: Request, feed_id: int, regenerate: str = Form("0")):
         if not token or regenerate in ("1", "true", "on"):
             token = secrets.token_urlsafe(24)
             db.execute(
-                "UPDATE feeds SET poke_token = ? WHERE id = ?",
-                (token, feed_id),
+                "UPDATE feeds SET poke_token = ? WHERE id = ? AND user_id = ?",
+                (token, feed_id, uid),
             )
     base = settings.BASE_URL.rstrip("/") if settings.BASE_URL else ""
     poke_url = f"{base}/poke/{token}" if base else f"/poke/{token}"
     return {"success": True, "poke_token": token, "poke_url": poke_url}
 
 
-@app.get("/poke/{token}")
-def poke(token: str):
+@app.api_route("/poke/{token}", methods=["GET", "POST"])
+def poke(token: str, response: Response, background_tasks: BackgroundTasks):
     """Unauthenticated poke: fetch the feed that owns this secret token now.
 
     Deliberately session-free, and the feed id is carried only inside the
@@ -5297,31 +5297,33 @@ def poke(token: str):
     surface here. A poke inside the cooldown window is a no-op so a leaked
     token can't be turned into a fetch hammer against the feed's origin.
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(seconds=POKE_COOLDOWN_SECONDS)
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (now_dt - timedelta(seconds=POKE_COOLDOWN_SECONDS)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     with get_db() as db:
         feed = db.execute(
-            "SELECT id FROM feeds"
-            " WHERE poke_token = ? AND deleted_at IS NULL"
-            " AND (last_poked_at IS NULL OR last_poked_at <= ?)",
-            (token, cutoff),
+            "SELECT id, paused FROM feeds"
+            " WHERE poke_token = ? AND deleted_at IS NULL",
+            (token,),
         ).fetchone()
         if not feed:
-            known = db.execute(
-                "SELECT 1 FROM feeds WHERE poke_token = ? AND deleted_at IS NULL",
-                (token,),
-            ).fetchone()
-            if known:
-                return {"ok": True, "skipped": "recently_poked"}
             raise HTTPException(status_code=404, detail="Unknown poke token")
-        db.execute(
-            "UPDATE feeds SET last_poked_at = ? WHERE id = ?",
-            (now, feed["id"]),
+        if feed["paused"]:
+            return {"ok": True, "skipped": "feed_paused"}
+
+        # Atomic cooldown acquisition: exactly one concurrent request updates the row
+        res = db.execute(
+            "UPDATE feeds SET last_poked_at = ? WHERE id = ?"
+            " AND (last_poked_at IS NULL OR last_poked_at <= ?)",
+            (now, feed["id"], cutoff),
         )
+        if res.rowcount == 0:
+            return {"ok": True, "skipped": "recently_poked"}
         feed_id = feed["id"]
-    check_feed(feed_id)
+    background_tasks.add_task(check_feed, feed_id)
     return {"ok": True}
 
 

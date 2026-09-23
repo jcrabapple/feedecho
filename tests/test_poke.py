@@ -154,3 +154,59 @@ class TestPokeEndpoint:
         resp = client.get("/poke/tok123", follow_redirects=False)
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
+
+    def test_poke_paused_feed_is_skipped(self, client, temp_db, monkeypatch):
+        import app as app_module
+
+        calls = []
+        monkeypatch.setattr(
+            app_module, "check_feed", lambda feed_id: calls.append(feed_id)
+        )
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, poll_interval, poke_token, paused)"
+                " VALUES (?, ?, ?, ?, 1)",
+                ("Paused Feed", "https://example.com/feed.xml", 15, "tok-paused"),
+            )
+        resp = client.get("/poke/tok-paused")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "skipped": "feed_paused"}
+        assert calls == [], "a paused feed must not be fetched on poke"
+
+    def test_poke_accepts_post_method_and_sets_robots_header(self, client, temp_db, monkeypatch):
+        import app as app_module
+
+        calls = []
+        monkeypatch.setattr(
+            app_module, "check_feed", lambda feed_id: calls.append(feed_id)
+        )
+        _seed(poke_token="tok-post")
+        resp = client.post("/poke/tok-post")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        assert resp.headers.get("x-robots-tag") == "noindex, nofollow"
+        assert calls == [1]
+
+    def test_poke_token_tenant_scoped(self, client, temp_db, monkeypatch):
+        import app as app_module
+
+        monkeypatch.setattr(app_module.settings, "MULTI", True)
+        monkeypatch.setattr(app_module.AuthMiddleware, "_session_user", staticmethod(lambda req: 2))
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id, poke_token)"
+                " VALUES (?, ?, 1, 'tok-u1')",
+                ("User1 Feed", "https://example.com/u1.xml"),
+            )
+        # User 2 tries to reveal or regenerate User 1's poke token:
+        resp = client.post("/api/feeds/1/poke-token", data={})
+        assert resp.status_code == 404
+
+    def test_idx_feeds_poke_token_created(self, temp_db):
+        with get_db() as db:
+            indexes = {
+                row["name"]
+                for row in db.execute("PRAGMA index_list('feeds')").fetchall()
+            }
+        assert "idx_feeds_poke_token" in indexes
+

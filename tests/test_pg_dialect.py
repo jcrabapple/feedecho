@@ -408,7 +408,7 @@ class TestPostgresMigration:
                     " WHERE table_name = 'feeds'"
                 ).fetchall()
             }
-        for expected in ("lease_token", "lease_expires_at", "paused", "deleted_at", "etag", "last_modified"):
+        for expected in ("lease_token", "lease_expires_at", "paused", "deleted_at", "etag", "last_modified", "poke_token", "last_poked_at"):
             assert expected in columns, f"feeds.{expected} not backfilled on PG"
 
     def test_echoes_legacy_columns_backfilled_on_pg(self, pg_env):
@@ -787,6 +787,42 @@ class TestAppOnPostgres:
         assert row["url"] == "https://example.com/other.xml"
         assert row["poll_interval"] == 45
         assert row["last_item_id"] is None
+
+    def test_poke_cooldown_sql_dialect_safe_on_pg(self, pg_env):
+        """The poke cooldown compares last_poked_at in SQL against a string
+        cutoff. On PG that column is a real TIMESTAMP, so pin that the implicit
+        string→timestamp cast works in both directions (the `<=` poke gate and
+        the `>` throttle check the route runs). Deliberately no app boot: the
+        full-app scheduler threads race monkeypatch teardown and flake."""
+        from datetime import timedelta
+
+        database.init_db()
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, user_id, poke_token, last_poked_at)"
+                " VALUES ('PG', 'https://example.com/feed.xml', 1, 'tokpg',"
+                " TIMESTAMP '2026-09-22 22:00:00')"
+            )
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
+        with database.get_db() as db:
+            # Old last_poked_at (22:00) is before the cutoff → pokeable.
+            pokeable = db.execute(
+                "SELECT id FROM feeds WHERE poke_token = ? AND deleted_at IS NULL"
+                " AND (last_poked_at IS NULL OR last_poked_at <= ?)",
+                ("tokpg", cutoff),
+            ).fetchone()
+            assert pokeable is not None
+            # A now-timestamp is inside the window → the throttle's > check fires.
+            db.execute(
+                "UPDATE feeds SET last_poked_at = ? WHERE id = ?",
+                (now.strftime("%Y-%m-%d %H:%M:%S"), pokeable["id"]),
+            )
+            recent = db.execute(
+                "SELECT 1 FROM feeds WHERE id = ? AND last_poked_at > ?",
+                (pokeable["id"], cutoff),
+            ).fetchone()
+            assert recent is not None
 
     def test_history_page_renders_on_pg(self, pg_env, monkeypatch):
         """Timestamps come back as datetime objects on PG; the iso_utc /

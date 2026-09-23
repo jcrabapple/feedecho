@@ -79,6 +79,27 @@ async function fetchNow(feedId, btn) {
     }
 }
 
+async function generatePokeUrl(feedId, btn) {
+    const input = document.getElementById(`poke-url-${feedId}`);
+    try {
+        const isRegen = input.value !== '';
+        const body = new URLSearchParams();
+        if (isRegen) body.set('regenerate', '1');
+        const resp = await fetch(`/api/feeds/${feedId}/poke-token`, { method: 'POST', body });
+        const data = await resp.json();
+        if (data.success) {
+            input.value = data.poke_url;
+            input.select();
+            if (btn) btn.textContent = 'Regenerate';
+            showStatus(btn, 'Poke URL generated', 'success');
+        } else {
+            showStatus(btn, data.detail || 'Failed to generate poke URL', 'error');
+        }
+    } catch (e) {
+        showStatus(btn, 'Request failed: ' + e.message, 'error');
+    }
+}
+
 // Restore scroll position across the full reloads that table-row actions
 // trigger (pause/retry/give-up/toggle). Dumping the user back to the top of
 // a long history list after every action is exactly the friction this avoids.
@@ -168,6 +189,13 @@ function editFeed(feedId) {
                 <label>Mute keywords (comma-separated)
                     <input type="text" id="feed-mute-input-${feedId}" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                     ${chipsHtml}
+                </label>
+                <label>Poke URL
+                    <div class="poke-row" style="display:flex; gap:0.4rem; align-items:center;">
+                        <input type="text" id="poke-url-${feedId}" readonly value="" placeholder="Not generated" style="flex:1;">
+                        <button type="button" class="btn-sm" onclick="generatePokeUrl(${feedId}, this)">Generate</button>
+                    </div>
+                    <span class="hint">Share this secret URL with a publisher or automation to trigger an immediate fetch the moment new content goes live. Regenerating revokes the old URL.</span>
                 </label>
             </div>
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>

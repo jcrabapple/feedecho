@@ -539,6 +539,8 @@ def init_db_sqlite() -> None:
                 last_error TEXT,
                 etag TEXT,
                 last_modified TEXT,
+                poke_token TEXT,
+                last_poked_at TIMESTAMP,
                 deleted_at TIMESTAMP,
                 user_id INTEGER NOT NULL DEFAULT 1,
                 folder_id INTEGER,
@@ -554,6 +556,8 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "feeds", "folder_id", "INTEGER")
         _add_column_if_missing(db, "feeds", "etag", "TEXT")
         _add_column_if_missing(db, "feeds", "last_modified", "TEXT")
+        _add_column_if_missing(db, "feeds", "poke_token", "TEXT")
+        _add_column_if_missing(db, "feeds", "last_poked_at", "TIMESTAMP")
         # Soft-delete marker: feeds are never hard-deleted by the app so that
         # echo configuration and posted-item history survive as an audit trail.
         _add_column_if_missing(db, "feeds", "deleted_at", "TIMESTAMP")
@@ -1320,6 +1324,8 @@ def init_db_postgres() -> None:
                 last_error TEXT,
                 etag TEXT,
                 last_modified TEXT,
+                poke_token TEXT,
+                last_poked_at TIMESTAMP,
                 deleted_at TIMESTAMP,
                 user_id BIGINT NOT NULL DEFAULT 1,
                 folder_id INTEGER,
@@ -1334,6 +1340,8 @@ def init_db_postgres() -> None:
         _add_column_if_missing(db, "feeds", "folder_id", "BIGINT")
         _add_column_if_missing(db, "feeds", "etag", "TEXT")
         _add_column_if_missing(db, "feeds", "last_modified", "TEXT")
+        _add_column_if_missing(db, "feeds", "poke_token", "TEXT")
+        _add_column_if_missing(db, "feeds", "last_poked_at", "TIMESTAMP")
         _add_column_if_missing(db, "feeds", "lease_token", "TEXT")
         _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
         _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")

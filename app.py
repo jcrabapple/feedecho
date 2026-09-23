@@ -1015,6 +1015,12 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # uvicorn's configure_logging() runs at server start — AFTER app import
+    # under `python app.py` or uvicorn.run() — and resets uvicorn.access back
+    # to INFO, re-enabling full-request-line (query-string token) logging.
+    # Re-silence it here so the launch path cannot matter. Docker CMDs also
+    # pass --no-access-log; this is the catch-all for every other path.
+    logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
     settings.validate_config()
     _assert_billing_mounted(app)
     init_db()
@@ -5147,25 +5153,40 @@ async def delete_feed(request: Request, feed_id: int):
     disappears from listings and is skipped by the scheduler, but its echo
     config and history remain on the /echoes and /history pages.
 
-    The feed's URL and its stored reader items do NOT survive, though: feed
-    URLs often embed private tokens and the reader rows are unreachable once
-    the feed is gone, so both are removed here. posted_items keeps its own
-    copies of what was delivered, so the audit trail is unaffected.
+    The feed's URL, poke token, stored reader items, and any queued curation
+    posts do NOT survive, though: feed URLs often embed private tokens and the
+    reader rows are unreachable once the feed is gone, so they are removed
+    here. posted_items keeps its own copies of what was delivered, so the
+    audit trail is unaffected.
     """
     uid = current_user_id(request)
     with get_db() as db:
-        db.execute(
+        cur = db.execute(
             """
             UPDATE feeds
                SET deleted_at = CURRENT_TIMESTAMP,
-                   url = ''
+                   url = '',
+                   poke_token = NULL
              WHERE id = ?
                AND deleted_at IS NULL
                AND user_id = ?
             """,
             (feed_id, uid),
         )
-        db.execute("DELETE FROM feed_items WHERE feed_id = ?", (feed_id,))
+        if cur.rowcount > 0:
+            # Purge ONLY when this user actually owned a live feed row.
+            # feed_items has no user_id column, so an unconditional DELETE
+            # would let any tenant wipe another tenant's reader items (IDOR).
+            db.execute("DELETE FROM feed_items WHERE feed_id = ?", (feed_id,))
+            # Queued reader-curation posts must never send from a deleted
+            # feed (their stored item rows are gone now, so a flush would
+            # dispatch empty content). Finalize them with a reason.
+            db.execute(
+                "UPDATE queued_posts SET status = 'failed',"
+                " error_message = 'Feed deleted'"
+                " WHERE feed_id = ? AND status = 'queued'",
+                (feed_id,),
+            )
     # Soft-deleting a feed changes which items saved-search counts cover
     _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)
@@ -6841,4 +6862,4 @@ async def favicon():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8453)
+    uvicorn.run(app, host="0.0.0.0", port=8453, access_log=False)

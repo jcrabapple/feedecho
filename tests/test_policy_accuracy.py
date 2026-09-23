@@ -143,6 +143,96 @@ class TestDeletionSemantics:
     def test_no_template_invites_email_replies(self, multi_client):
         # System mail comes from a no-reply address; replies are unroutable,
         # so no page may tell users to reply to service email.
-        for path in ("/about", "/privacy"):
+        for path in ("/about", "/privacy", "/terms"):
             page = multi_client.get(path).text
             assert "reply to any email" not in page
+
+    def test_delete_feed_cannot_purge_another_tenants_items(self, multi_client):
+        # IDOR regression: feed_items has no user_id column, so the purge
+        # must be contingent on the scoped soft-delete actually matching.
+        # User 2's feed must keep its items when user 1 (or a stranger)
+        # targets its id.
+        import security
+
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, email_verified)"
+                " VALUES (2, 'victim@example.com', '', 1)"
+            )
+            db.execute(
+                "INSERT INTO feeds (id, name, url, user_id) VALUES (7, 'V', 'https://v.example.com/x', 2)"
+            )
+            db.execute(
+                "INSERT INTO feed_items (feed_id, item_id, title)"
+                " VALUES (7, 'i1', 'Victim Item')"
+            )
+        # No session at all -> must not reach the handler's DB writes.
+        r = multi_client.post("/api/feeds/7/delete", follow_redirects=False)
+        assert r.status_code in (302, 303, 401, 403)
+        # Sign in as a DIFFERENT user (id 1, the default local user) and try.
+        multi_client.cookies.set(
+            "feedecho_session", security.sign_session(1, "local@example.com")
+        )
+        multi_client.post("/api/feeds/7/delete", follow_redirects=False)
+        with get_db() as db:
+            feed = db.execute("SELECT * FROM feeds WHERE id = 7").fetchone()
+            assert feed["deleted_at"] is None, "another tenant's feed was deleted"
+            assert feed["url"] == "https://v.example.com/x"
+            c = db.execute(
+                "SELECT COUNT(*) AS c FROM feed_items WHERE feed_id = 7"
+            ).fetchone()
+            assert c["c"] == 1, "another tenant's feed_items were purged"
+
+    def test_delete_feed_finalizes_queued_posts(self, single_client):
+        # A queued curation post for a feed must never send after the feed is
+        # deleted (its stored item rows are gone, so the flush would dispatch
+        # blank content).
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES ('Q', 'https://q.example.com/x')"
+            )
+            db.execute(
+                "INSERT INTO queued_posts (feed_id, item_id, destination_type,"
+                " destination_id, content, scheduled_at)"
+                " VALUES (1, 'i1', 'mastodon', 1, 'body', '2020-01-01 00:00:00')"
+            )
+        single_client.post("/api/feeds/1/delete", follow_redirects=False)
+        with get_db() as db:
+            row = db.execute("SELECT * FROM queued_posts WHERE id = 1").fetchone()
+            assert row["status"] == "failed"
+            assert "Feed deleted" in row["error_message"]
+
+    def test_flush_queue_finalizes_posts_for_deleted_feed(self, single_client):
+        # Defense in depth: even a row that slips past delete_feed (deleted
+        # before this shipped, or claimed in the race window) is finalized by
+        # the flush, never dispatched.
+        from scheduler import flush_queue
+
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO feeds (name, url, deleted_at)"
+                " VALUES ('D', '', '2026-01-01 00:00:00')"
+            )
+            db.execute(
+                "INSERT INTO queued_posts (feed_id, item_id, destination_type,"
+                " destination_id, content, scheduled_at)"
+                " VALUES (1, 'i1', 'mastodon', 1, 'body', '2020-01-01 00:00:00')"
+            )
+        flush_queue()
+        with get_db() as db:
+            row = db.execute("SELECT * FROM queued_posts WHERE id = 1").fetchone()
+            assert row["status"] == "failed"
+            assert "Feed deleted" in row["error_message"]
+
+    def test_lifespan_resilences_uvicorn_access(self):
+        # `python app.py` / uvicorn.run() calls configure_logging() at server
+        # start, AFTER import, resetting uvicorn.access to INFO. The lifespan
+        # must re-silence it so the launch path cannot reopen the token leak.
+        import logging
+
+        logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+        with TestClient(app):
+            assert (
+                logging.getLogger("uvicorn.access").getEffectiveLevel()
+                >= logging.CRITICAL
+            )

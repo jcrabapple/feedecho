@@ -2951,7 +2951,7 @@ def _flush_queue() -> None:
                 continue
             row = db.execute(
                 """
-                SELECT q.*, f.name AS feed_name
+                SELECT q.*, f.name AS feed_name, f.deleted_at AS feed_deleted_at
                   FROM queued_posts q
                   LEFT JOIN feeds f ON q.feed_id = f.id
                  WHERE q.id = ?
@@ -2960,6 +2960,23 @@ def _flush_queue() -> None:
             ).fetchone()
 
         if not row:
+            continue
+
+        # Never send from a feed the user deleted (the feed's stored items
+        # are purged on delete, so the item lookup below would come back
+        # empty and dispatch a blank post). Finalize with a reason so the
+        # row shows what happened instead of sitting stuck or sending.
+        if row["feed_deleted_at"] is not None:
+            with get_db() as db:
+                db.execute(
+                    "UPDATE queued_posts SET status = 'failed',"
+                    " error_message = 'Feed deleted'"
+                    " WHERE id = ? AND status = 'sending'",
+                    (qp_id,),
+                )
+            logger.info(
+                "Queue flush: post %s finalized — its feed was deleted", qp_id
+            )
             continue
 
         # Enforce max_posts_per_hour for the queue (multi mode only, using hoisted counts)

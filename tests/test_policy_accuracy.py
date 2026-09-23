@@ -313,18 +313,21 @@ class TestDisclosureBatch:
         page = multi_client.get("/privacy").text
         assert "Discord, or Telegram settings" in page
 
-    def test_privacy_sell_rent_wording_points_at_processors(self, multi_client):
+    def test_privacy_sell_rent_wording_points_at_disclosures(self, multi_client):
         page = multi_client.get("/privacy").text
         assert "don't sell, rent, or share" not in page
-        assert "shared only with the processors" in page
+        assert "disclosed only as described" in page
 
-    def test_about_sell_rent_wording_points_at_processors(self, multi_client):
+    def test_about_sell_rent_wording_points_at_disclosures(self, multi_client):
         page = multi_client.get("/about").text
-        assert "shared only with the processors" in page
+        assert "disclosed only as described" in page
 
     def test_privacy_discloses_us_transfer_for_eea_uk(self, multi_client):
         page = multi_client.get("/privacy").text
         assert "transferred to and stored in the United States" in page
+        # Bare acknowledgement is not a GDPR Chapter V hook; the policy must
+        # name the contract-necessity derogation.
+        assert "Art. 49(1)(b)" in page
 
     def test_privacy_discloses_backup_retention(self, multi_client):
         # Account deletion removes live data, but encrypted backups retain it

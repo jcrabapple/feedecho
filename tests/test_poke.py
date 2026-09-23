@@ -88,6 +88,17 @@ class TestPokeTokenManagement:
         resp = client.post("/api/feeds/1/poke-token", data={})
         assert resp.status_code == 404
 
+    def test_feed_row_exposes_poke_token_presence(self, client, temp_db):
+        # The edit modal must know whether a poke URL already exists so it can
+        # say "Reveal" instead of "Generate"; the row carries that as data.
+        _seed(poke_token="tok123")
+        page = client.get("/feeds").text
+        assert 'data-has-poke-token="1"' in page
+        with get_db() as db:
+            db.execute("UPDATE feeds SET poke_token = NULL WHERE id = 1")
+        page = client.get("/feeds").text
+        assert 'data-has-poke-token="0"' in page
+
 
 class TestPokeEndpoint:
     def test_valid_token_triggers_fetch(self, client, temp_db, monkeypatch):

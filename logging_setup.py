@@ -68,6 +68,14 @@ def setup_logging() -> None:
     # httpx/urllib3 log per-request INFO lines that duplicate the access
     # log; keep them quiet unless explicitly enabled.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # uvicorn's built-in access log records the full request line — query
+    # string included — which leaks password-reset and email-verification
+    # tokens to stdout. The app's middleware access log (method + path only)
+    # is the single source. The Dockerfile CMDs pass --no-access-log; this
+    # covers every other launch path (source installs, systemd, tests). This
+    # runs after uvicorn's own logging config (app import happens last), so
+    # the level sticks.
+    logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
     _configured = True
 
 

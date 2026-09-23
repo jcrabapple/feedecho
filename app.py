@@ -5146,19 +5146,26 @@ async def delete_feed(request: Request, feed_id: int):
     the cross-post audit trail, so feeds are only marked deleted_at. The feed
     disappears from listings and is skipped by the scheduler, but its echo
     config and history remain on the /echoes and /history pages.
+
+    The feed's URL and its stored reader items do NOT survive, though: feed
+    URLs often embed private tokens and the reader rows are unreachable once
+    the feed is gone, so both are removed here. posted_items keeps its own
+    copies of what was delivered, so the audit trail is unaffected.
     """
     uid = current_user_id(request)
     with get_db() as db:
         db.execute(
             """
             UPDATE feeds
-               SET deleted_at = CURRENT_TIMESTAMP
+               SET deleted_at = CURRENT_TIMESTAMP,
+                   url = ''
              WHERE id = ?
                AND deleted_at IS NULL
                AND user_id = ?
             """,
             (feed_id, uid),
         )
+        db.execute("DELETE FROM feed_items WHERE feed_id = ?", (feed_id,))
     # Soft-deleting a feed changes which items saved-search counts cover
     _saved_search_counts_cache.invalidate(uid)
     return RedirectResponse(url="/feeds", status_code=303)

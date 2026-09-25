@@ -83,7 +83,29 @@ DATABASE_URL = env("DATABASE_URL", "")
 # None preserves the original contract).
 AUTH_TOKEN = env("AUTH_TOKEN")
 STATE_SECRET = env("STATE_SECRET", "")
-BASE_URL = env("BASE_URL", "").strip()
+
+
+def _platform_base_url() -> str:
+    """The public URL a one-click host (Render, Railway) assigned this service.
+
+    Both platforms publish it in their own environment variables, so a
+    deploy-button install gets working OAuth callbacks and poke URLs without
+    the operator copying the URL back into FEEDECHO_BASE_URL. Only consulted
+    in single mode: a multi-tenant deployment names its URL explicitly.
+    """
+    render = os.environ.get("RENDER_EXTERNAL_URL", "").strip()
+    if render:
+        return render
+    railway = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway:
+        return f"https://{railway}"
+    return ""
+
+
+PLATFORM_BASE_URL = "" if MULTI else _platform_base_url()
+# An explicit FEEDECHO_BASE_URL always wins over the platform's own URL, so a
+# custom domain in front of a Render/Railway service is still honoured.
+BASE_URL = env("BASE_URL", "").strip() or PLATFORM_BASE_URL
 
 # Where the source lives. Used as the last-resort website for the Mastodon
 # OAuth app registration so posts never advertise a placeholder domain.
@@ -122,8 +144,15 @@ ALLOW_SQLITE_FALLBACK = env("ALLOW_SQLITE_FALLBACK", "") == "1"
 ALLOW_INSECURE = env("ALLOW_INSECURE", "") == "1"
 # Force the Secure flag on session cookies when TLS terminates in front
 # of the app (Caddy/nginx proxy): the request scheme then reads http
-# even though the client connection is https.
-FORCE_SECURE_COOKIE = env("FORCE_SECURE_COOKIE", "") == "1"
+# even though the client connection is https. Defaults on when a one-click
+# host's HTTPS URL was detected (Render and Railway both terminate TLS in
+# front of the container); an explicit "0" turns it back off.
+_force_secure = env("FORCE_SECURE_COOKIE", "").strip()
+FORCE_SECURE_COOKIE = (
+    _force_secure == "1"
+    if _force_secure
+    else PLATFORM_BASE_URL.startswith("https://")
+)
 # Comma-separated CIDR list of trusted reverse proxies. When the direct
 # peer is inside this list, client IPs are derived from X-Forwarded-For
 # (rightmost entry) instead of the TCP peer, so rate limits see real

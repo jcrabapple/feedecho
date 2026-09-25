@@ -19,18 +19,10 @@ pass attach_image=1 explicitly.
 import os
 import tempfile
 
-# One-click host variables must be gone BEFORE settings is first imported
-# (the `import database` below, and every test module at collection time):
-# settings.BASE_URL falls back to RENDER_EXTERNAL_URL / RAILWAY_PUBLIC_DOMAIN
-# in single mode and FORCE_SECURE_COOKIE follows it, both computed at import.
-# A fixture would run too late. Tests of the fallback set them explicitly.
-os.environ.pop("RENDER_EXTERNAL_URL", None)
-os.environ.pop("RAILWAY_PUBLIC_DOMAIN", None)
+import pytest
 
-import pytest  # noqa: E402
-
-import database  # noqa: E402
-import scheduler  # noqa: E402
+import database
+import scheduler
 
 
 @pytest.fixture(autouse=True)

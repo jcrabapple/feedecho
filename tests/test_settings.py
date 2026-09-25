@@ -3,6 +3,7 @@
 import os
 import importlib
 
+import pytest
 from cryptography.fernet import Fernet
 
 import settings
@@ -21,6 +22,10 @@ def _clean_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith(("FEEDECHO_", "FEEDCHO_")):
             monkeypatch.delenv(key)
+    # One-click host URLs feed the BASE_URL default, so a test run on a
+    # Render/Railway box must not inherit them either.
+    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+    monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
 
 
 class TestModeFlag:
@@ -88,6 +93,102 @@ class TestEnvPassthrough:
         s = _reload_settings()
         assert s.FALLBACK_PROXY_URL == "https://proxy.example.com"
         assert s.FALLBACK_PROXY_SECRET == "sekret"
+
+
+class TestPlatformBaseUrl:
+    """One-click hosts (render.yaml, the Railway template) publish the
+    service's public URL in their own variables; single mode uses it when
+    FEEDECHO_BASE_URL is unset."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_settings(self, monkeypatch):
+        # These tests reload the settings module with platform env set;
+        # restore the env first, then reload, so later tests do not inherit
+        # a forced Secure cookie or a platform BASE_URL.
+        yield
+        monkeypatch.undo()
+        _reload_settings()
+
+    def test_no_platform_no_base_url(self, monkeypatch):
+        _clean_env(monkeypatch)
+        s = _reload_settings()
+        assert s.BASE_URL == ""
+        assert s.PLATFORM_BASE_URL == ""
+        assert s.FORCE_SECURE_COOKIE is False
+
+    def test_render_external_url(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://fe-abc.onrender.com")
+        s = _reload_settings()
+        assert s.BASE_URL == "https://fe-abc.onrender.com"
+        assert s.CALLBACK_URL == "https://fe-abc.onrender.com/oauth/callback"
+        assert s.APP_WEBSITE == "https://fe-abc.onrender.com"
+        # Render terminates TLS; the app sees http, so the cookie flag
+        # has to be forced or the login cookie ships without Secure.
+        assert s.FORCE_SECURE_COOKIE is True
+
+    def test_railway_public_domain_gets_https(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "fe-production.up.railway.app")
+        s = _reload_settings()
+        assert s.BASE_URL == "https://fe-production.up.railway.app"
+        assert s.CALLBACK_URL == "https://fe-production.up.railway.app/oauth/callback"
+        assert s.FORCE_SECURE_COOKIE is True
+
+    def test_render_wins_over_railway(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://r.onrender.com")
+        monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "x.up.railway.app")
+        s = _reload_settings()
+        assert s.BASE_URL == "https://r.onrender.com"
+
+    def test_explicit_base_url_wins(self, monkeypatch):
+        # A custom domain in front of the platform service.
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://fe.onrender.com")
+        monkeypatch.setenv("FEEDECHO_BASE_URL", "https://feeds.example.org")
+        s = _reload_settings()
+        assert s.BASE_URL == "https://feeds.example.org"
+        assert s.CALLBACK_URL == "https://feeds.example.org/oauth/callback"
+
+    def test_explicit_callback_url_wins(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "fe.up.railway.app")
+        monkeypatch.setenv(
+            "FEEDECHO_CALLBACK_URL", "https://other.example.org/oauth/callback"
+        )
+        s = _reload_settings()
+        assert s.CALLBACK_URL == "https://other.example.org/oauth/callback"
+
+    def test_blank_platform_values_ignored(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "  ")
+        monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "")
+        s = _reload_settings()
+        assert s.BASE_URL == ""
+        assert s.FORCE_SECURE_COOKIE is False
+
+    def test_multi_mode_ignores_platform_url(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("FEEDECHO_MODE", "multi")
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://fe.onrender.com")
+        s = _reload_settings()
+        assert s.BASE_URL == ""
+        assert s.PLATFORM_BASE_URL == ""
+        assert s.FORCE_SECURE_COOKIE is False
+
+    def test_force_secure_cookie_explicit_off(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://fe.onrender.com")
+        monkeypatch.setenv("FEEDECHO_FORCE_SECURE_COOKIE", "0")
+        s = _reload_settings()
+        assert s.FORCE_SECURE_COOKIE is False
+
+    def test_force_secure_cookie_explicit_on_without_platform(self, monkeypatch):
+        _clean_env(monkeypatch)
+        monkeypatch.setenv("FEEDECHO_FORCE_SECURE_COOKIE", "1")
+        s = _reload_settings()
+        assert s.FORCE_SECURE_COOKIE is True
 
 
 class TestValidateConfig:

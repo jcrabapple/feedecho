@@ -48,6 +48,22 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 
 ## Quick Start
 
+### One-click deploy
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/jcrabapple/feedecho)
+
+**Render.** The button reads [`render.yaml`](render.yaml): one web service running the published GHCR image, a 1 GB persistent disk at `/app/data`, and generated values for `FEEDECHO_AUTH_TOKEN` and `FEEDECHO_CREDENTIAL_KEY`. Render's free instances cannot attach a disk, so the Blueprint uses the paid Starter plan; without a disk every restart would wipe your data. Once it is live, copy `FEEDECHO_AUTH_TOKEN` from the service's **Environment** tab and log in with it. Render does not pull new images on its own: to upgrade, use **Manual Deploy → Deploy latest reference**.
+
+**Railway.** Create a project from the image instead of the repo, and set the variables before the first deploy (FeedEcho refuses to start without `FEEDECHO_AUTH_TOKEN`, so a deploy without it crash-loops until you add it):
+
+1. **New Project → Deploy a Docker Image** → `ghcr.io/jcrabapple/feedecho:latest`.
+2. Right-click the service → **Attach Volume**, mount path `/app/data`.
+3. Under **Variables**, set `FEEDECHO_AUTH_TOKEN` to a long random string (`openssl rand -base64 32`) and, optionally, `FEEDECHO_CREDENTIAL_KEY` to a Fernet key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+4. Under **Settings → Networking**, click **Generate Domain** and set the target port to `8453`.
+5. Deploy the staged changes. If the service went out before the domain existed, redeploy once so the container sees it.
+
+On both platforms FeedEcho picks up the service's public URL by itself (`RENDER_EXTERNAL_URL` on Render, `RAILWAY_PUBLIC_DOMAIN` on Railway), uses it for the Mastodon OAuth callback and poke URLs, and marks the login cookie `Secure` because the platform terminates HTTPS in front of the container. Set `FEEDECHO_BASE_URL` only when you put a custom domain in front of the service. Keep `FEEDECHO_CREDENTIAL_KEY` once it is set: changing or losing it leaves stored credentials unreadable, and every destination has to be reconnected.
+
 ### Docker (recommended)
 
 Pre-built multi-arch images (amd64 + arm64) are published to GHCR on every release — no local build needed:
@@ -103,7 +119,8 @@ docker run -d --name feedecho \
 | `FEEDECHO_AUTH_TOKEN` | yes | Shared-secret login for the web UI. **The app refuses to start without it** unless you set `FEEDECHO_ALLOW_INSECURE=1` (no auth at all — only sane behind your own authenticated reverse proxy). |
 | `FEEDECHO_ALLOW_INSECURE` | no | Set to `1` to boot single-user mode with no `FEEDECHO_AUTH_TOKEN` and no authentication. Logs a loud warning at startup. |
 | `FEEDECHO_CALLBACK_URL` | for Mastodon OAuth | Public callback URL, e.g. `https://feedecho.example.com/oauth/callback`. Must match the URL reachable by your browser. Derived from `FEEDECHO_BASE_URL` when unset. |
-| `FEEDECHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. |
+| `FEEDECHO_BASE_URL` | no | Public base URL of your install. Used to derive the OAuth callback and the app website shown on posts. On Render and Railway it defaults to the service's platform URL. |
+| `FEEDECHO_FORCE_SECURE_COOKIE` | no | Set to `1` to mark the login cookie `Secure` when TLS terminates at a reverse proxy in front of the app. On by default when a Render or Railway URL is detected; set `0` to turn it off. |
 | `FEEDECHO_APP_WEBSITE` | no | Link behind the "FeedEcho" application name on Mastodon posts. Defaults to `FEEDECHO_BASE_URL`, then to the project repo. |
 | `FEEDECHO_DB_PATH` | no | SQLite path (default `/app/data/feedecho.db` in Docker, `./feedecho.db` otherwise) |
 | `FEEDECHO_STATE_SECRET` | required in multi mode (32+ chars) | OAuth state signing secret. In multi mode the app refuses to start without it. Single mode falls back to `FEEDECHO_AUTH_TOKEN`, then a random per-process value. |

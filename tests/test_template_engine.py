@@ -55,6 +55,51 @@ class TestRenderTemplate:
         result = render_template(template, item)
         assert result == "#opensource #AI #AIML"
 
+    def test_hashtags_keeps_accented_letters(self):
+        template = "{{ hashtags }}"
+        item = {"tags": ["Attualità", "Économie", "Über"]}
+        result = render_template(template, item)
+        assert result == "#Attualità #Économie #Über"
+
+    def test_hashtags_nfd_input_normalizes(self):
+        # Decomposed form: "e" + combining acute accent (U+0301)
+        template = "{{ hashtags }}"
+        item = {"tags": ["e\u0301conomie"]}
+        result = render_template(template, item)
+        assert result == "#économie"
+        assert "\u0301" not in result
+
+    def test_hashtags_dedupes_accented_case_insensitively(self):
+        template = "{{ hashtags }}"
+        item = {"tags": ["Attualità", "ATTUALITÀ"]}
+        result = render_template(template, item)
+        assert result == "#Attualità"
+
+    def test_hashtags_still_strips_punctuation_and_emoji(self):
+        template = "{{ hashtags }}"
+        item = {"tags": ["Café ☕ Time!", "naïve—café"]}
+        result = render_template(template, item)
+        assert result == "#CaféTime #naïvecafé"
+
+    def test_hashtags_keeps_indic_and_thai_marks(self):
+        template = "{{ hashtags }}"
+        item = {"tags": ["नमस्ते", "เชียงใหม่"]}
+        result = render_template(template, item)
+        assert result == "#नमस्ते #เชียงใหม่"
+
+    def test_hashtags_leading_mark_dropped(self):
+        # A combining mark with no base character cannot start a hashtag
+        template = "{{ hashtags }}"
+        item = {"tags": ["\u0301abc"]}
+        result = render_template(template, item)
+        assert result == "#abc"
+
+    def test_hashtags_dedupes_nfd_against_nfc(self):
+        template = "{{ hashtags }}"
+        item = {"tags": ["e\u0301conomie", "économie"]}
+        result = render_template(template, item)
+        assert result == "#économie"
+
     def test_no_hashtags_when_empty(self):
         template = "{{ title }} {{ hashtags }}"
         item = {"title": "My Post", "tags": []}

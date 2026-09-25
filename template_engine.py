@@ -21,6 +21,7 @@ reach the filesystem, imports, or Python builtins.
 """
 
 import re
+import unicodedata
 from datetime import datetime
 from html.parser import HTMLParser
 
@@ -103,15 +104,32 @@ def _format_hashtags(tags) -> str:
     cleaning (#opensource for both "open source" and "Open-Source"), so
     dedupe case-insensitively on the cleaned form, preserving first-seen
     order.
+
+    Unicode-aware: accented and other non-ASCII letters are kept
+    (#Attualità stays #Attualità, issue #44). The tag is NFC-normalized
+    first so a decomposed é (e + combining accent) stays one letter
+    instead of collapsing to #e.
     """
     if not tags:
         return ""
     hashtags = []
     seen = set()
     for tag in tags:
-        clean = re.sub(r"[^a-zA-Z0-9]", "", str(tag))
+        # isalnum covers L*/N* (letters + numbers in every script); Mn/Mc
+        # combining marks are kept when attached to a kept base so Indic
+        # matras, viramas and Thai tone marks survive (NFC cannot compose
+        # those into single codepoints).
+        clean_chars: list[str] = []
+        for ch in unicodedata.normalize("NFC", str(tag)):
+            if ch.isalnum():
+                clean_chars.append(ch)
+            elif unicodedata.category(ch) in ("Mn", "Mc") and clean_chars:
+                clean_chars.append(ch)
+        clean = "".join(clean_chars)
         if not clean:
             continue
+        # lower(), not casefold(): casefold decomposes some codepoints
+        # (e.g. U+01F0) back into base + combining mark, defeating NFC.
         key = clean.lower()
         if key in seen:
             continue

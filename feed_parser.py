@@ -1431,16 +1431,21 @@ MAX_PAGE_METADATA_BYTES = 2_000_000  # cap the HTML we pull for og: tags
 _TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.I | re.S)
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
 _META_KEY_RE = re.compile(r"""(?:property|name)\s*=\s*["']([^"']+)["']""", re.I)
-_META_CONTENT_RE = re.compile(r"""content\s*=\s*["']([^"']*)["']""", re.I)
+# Paired quotes: [^"']* would stop a double-quoted value at an apostrophe
+# ("Today's Headline" -> "Today"), so each alternative matches its own
+# closing delimiter.
+_META_CONTENT_RE = re.compile(r"""content\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 
 
-def _extract_page_metadata(page_html: str) -> dict:
+def _extract_page_metadata(page_html: str, base_url: str = "") -> dict:
     """Pull og:*/twitter:* card metadata out of an HTML string.
 
     og: wins over twitter:; <title> and meta description are the fallbacks
-    when neither card format is present. Values are HTML-unescaped. Only
-    the head region matters, but the search runs over whatever the caller
-    passes (fetch_page_metadata caps the body size upstream).
+    when neither card format is present. Values are HTML-unescaped (markup
+    in the <title> fallback is stripped, not shown raw) and a relative
+    image URL is resolved against base_url. Only the head region matters,
+    but the search runs over whatever the caller passes
+    (fetch_page_metadata caps the body size upstream).
     """
     og: dict[str, str] = {}
     twitter: dict[str, str] = {}
@@ -1451,23 +1456,37 @@ def _extract_page_metadata(page_html: str) -> dict:
         if not key_match or not content_match:
             continue
         key = key_match.group(1).strip().lower()
-        value = html.unescape(content_match.group(1)).strip()
+        value = html.unescape(
+            content_match.group(1)
+            if content_match.group(1) is not None
+            else content_match.group(2)
+        ).strip()
         if not value:
             continue
         if key.startswith("og:") and key.count(":") == 1:
             og.setdefault(key[3:], value)
-        elif key.startswith("twitter:") and key.count(":") == 1:
-            twitter.setdefault(key[len("twitter:"):], value)
+        elif key.startswith("twitter:"):
+            rest = key[len("twitter:"):]
+            if rest == "image:src":  # legacy Twitter card field
+                rest = "image"
+            if ":" not in rest:
+                twitter.setdefault(rest, value)
         elif key == "description" and not plain_description:
             plain_description = value
     title_match = _TITLE_TAG_RE.search(page_html)
     title = (
         og.get("title")
         or twitter.get("title")
-        or (html.unescape(title_match.group(1)).strip() if title_match else "")
+        or (
+            html.unescape(re.sub(r"<[^>]+>", "", title_match.group(1))).strip()
+            if title_match
+            else ""
+        )
     )
     description = og.get("description") or twitter.get("description") or plain_description
     image = og.get("image") or twitter.get("image") or ""
+    if image and base_url:
+        image = urljoin(base_url, image)
     return {"title": title, "description": description, "image": image}
 
 
@@ -1514,7 +1533,7 @@ def fetch_page_metadata(url: str) -> dict | None:
     if content_type and "html" not in content_type and "xml" not in content_type:
         return None
     text = content.decode("utf-8", errors="replace")
-    return _extract_page_metadata(text)
+    return _extract_page_metadata(text, base_url=url)
 
 
 def _get_item_id(entry: dict) -> str:

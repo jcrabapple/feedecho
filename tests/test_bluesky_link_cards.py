@@ -140,6 +140,15 @@ class TestBuildExternalEmbed:
         embed = build_external_embed(uri="https://example.com/a", title="T")
         assert "thumb" not in embed["external"]
 
+    def test_thumb_cap_is_the_external_lexicon_limit(self):
+        """The external thumb kept its 1 MB lexicon maxSize when
+        embed.images was raised to 2 MB — using MAX_BLOB_BYTES here would
+        let a 1-2 MB blob through upload and get the whole record 400'd."""
+        from bluesky import EXTERNAL_THUMB_MAX_BYTES, MAX_BLOB_BYTES
+
+        assert EXTERNAL_THUMB_MAX_BYTES == 1_000_000
+        assert EXTERNAL_THUMB_MAX_BYTES < MAX_BLOB_BYTES
+
     def test_long_title_and_description_truncated(self):
         from bluesky import (
             EXTERNAL_DESCRIPTION_MAX_CHARS,
@@ -256,6 +265,167 @@ class TestExtractPageMetadata:
             '<meta property="article:published_time" content="2026-01-01">'
         )
         assert meta["title"] == ""
+
+    def test_apostrophe_in_double_quoted_value_not_truncated(self):
+        """[^"']* would stop a double-quoted value at an apostrophe,
+        corrupting every English title with a contraction."""
+        from feed_parser import _extract_page_metadata
+
+        meta = _extract_page_metadata(
+            '<meta property="og:title" content="Today\'s Top Headline">'
+            "<meta property=\"og:description\" content=\"It's a great day.\">"
+        )
+        assert meta["title"] == "Today's Top Headline"
+        assert meta["description"] == "It's a great day."
+
+    def test_single_quoted_value_with_double_quote_inside(self):
+        from feed_parser import _extract_page_metadata
+
+        meta = _extract_page_metadata(
+            "<meta property='og:title' content='Say \"hi\" now'>"
+        )
+        assert meta["title"] == 'Say "hi" now'
+
+    def test_twitter_image_src_normalized(self):
+        """Legacy twitter:image:src carries the thumbnail; the extra colon
+        must not discard it."""
+        from feed_parser import _extract_page_metadata
+
+        meta = _extract_page_metadata(
+            '<meta name="twitter:image:src" content="https://example.com/legacy.jpg">'
+        )
+        assert meta["image"] == "https://example.com/legacy.jpg"
+
+    def test_relative_image_resolved_against_base_url(self):
+        from feed_parser import _extract_page_metadata
+
+        meta = _extract_page_metadata(
+            '<meta property="og:image" content="/img/cover.jpg">',
+            base_url="https://example.com/posts/1",
+        )
+        assert meta["image"] == "https://example.com/img/cover.jpg"
+
+    def test_title_tag_markup_stripped(self):
+        from feed_parser import _extract_page_metadata
+
+        meta = _extract_page_metadata(
+            "<title>Breaking News &bull; <b>Live</b></title>"
+        )
+        assert meta["title"] == "Breaking News • Live"
+
+
+# ── fetch_page_metadata (the network seam) ───────────────────────────────────
+
+
+class TestFetchPageMetadata:
+    OG = (
+        "<html><head>"
+        '<meta property="og:title" content="Net Title">'
+        '<meta property="og:description" content="Net desc">'
+        "</head></html>"
+    ).encode()
+
+    def _mock_fetch(self, monkeypatch, *, content=b"", raw_type="text/html", exc=None):
+        import feed_parser
+
+        closed = []
+        monkeypatch.setattr(
+            feed_parser,
+            "ssrf_client",
+            lambda urls: (type("C", (), {"close": staticmethod(lambda: closed.append(1))})(), object()),
+        )
+
+        def fake_fetch(client, url, headers, max_bytes, backend=None):
+            if exc:
+                raise exc
+            return content, raw_type, {}
+
+        monkeypatch.setattr(
+            feed_parser, "_fetch_with_redirect_validation", fake_fetch
+        )
+        return closed
+
+    def test_success_parses_metadata_and_closes_client(self, monkeypatch):
+        import feed_parser
+
+        closed = self._mock_fetch(monkeypatch, content=self.OG)
+        meta = feed_parser.fetch_page_metadata("https://example.com/post")
+        assert meta["title"] == "Net Title"
+        assert meta["description"] == "Net desc"
+        assert closed == [1]
+
+    def test_non_html_content_type_returns_none(self, monkeypatch):
+        import feed_parser
+
+        self._mock_fetch(monkeypatch, content=b"%PDF-1.4", raw_type="application/pdf")
+        assert feed_parser.fetch_page_metadata("https://example.com/doc.pdf") is None
+
+    def test_unsafe_url_refused_without_fetch(self, monkeypatch):
+        import feed_parser
+        from feed_parser import SSRFError
+
+        calls = []
+        monkeypatch.setattr(
+            feed_parser,
+            "validate_outbound_url",
+            lambda url: calls.append(url) or (_ for _ in ()).throw(SSRFError("private")),
+        )
+        assert feed_parser.fetch_page_metadata("http://127.0.0.1:8080/") is None
+        assert calls == ["http://127.0.0.1:8080/"]
+
+    def test_transport_error_returns_none(self, monkeypatch):
+        import feed_parser
+
+        self._mock_fetch(monkeypatch, exc=OSError("conn reset"))
+        assert feed_parser.fetch_page_metadata("https://example.com/") is None
+
+    def test_http_404_returns_none(self, monkeypatch):
+        import httpx
+
+        import feed_parser
+
+        response = httpx.Response(404, request=httpx.Request("GET", "https://example.com/"))
+        self._mock_fetch(monkeypatch, exc=httpx.HTTPStatusError("404", request=response.request, response=response))
+        assert feed_parser.fetch_page_metadata("https://example.com/gone") is None
+
+    def test_http_403_uses_fallback_proxy_when_configured(self, monkeypatch):
+        import httpx
+
+        import feed_parser
+
+        response = httpx.Response(403, request=httpx.Request("GET", "https://example.com/"))
+        self._mock_fetch(monkeypatch, exc=httpx.HTTPStatusError("403", request=response.request, response=response))
+        monkeypatch.setattr("settings.FALLBACK_PROXY_URL", "https://proxy.example")
+        proxy_calls = []
+        monkeypatch.setattr(
+            feed_parser,
+            "_fetch_via_fallback_proxy",
+            lambda url, headers, max_bytes: proxy_calls.append(url)
+            or (self.OG, "text/html", {}),
+        )
+        meta = feed_parser.fetch_page_metadata("https://example.com/waf-post")
+        assert proxy_calls == ["https://example.com/waf-post"]
+        assert meta["title"] == "Net Title"
+
+    def test_http_403_without_proxy_returns_none(self, monkeypatch):
+        import httpx
+
+        import feed_parser
+
+        response = httpx.Response(403, request=httpx.Request("GET", "https://example.com/"))
+        self._mock_fetch(monkeypatch, exc=httpx.HTTPStatusError("403", request=response.request, response=response))
+        monkeypatch.setattr("settings.FALLBACK_PROXY_URL", "")
+        assert feed_parser.fetch_page_metadata("https://example.com/waf-post") is None
+
+    def test_relative_image_resolved_against_page_url(self, monkeypatch):
+        import feed_parser
+
+        page = (
+            '<html><head><meta property="og:image" content="/img/c.jpg"></head></html>'
+        ).encode()
+        self._mock_fetch(monkeypatch, content=page)
+        meta = feed_parser.fetch_page_metadata("https://example.com/posts/1")
+        assert meta["image"] == "https://example.com/img/c.jpg"
 
 
 # ── delivery wiring ──────────────────────────────────────────────────────────
@@ -381,6 +551,151 @@ class TestLinkCardDelivery:
                 "SELECT status FROM posted_items WHERE echo_id = 1"
             ).fetchone()
             assert row["status"] == "success"
+
+    def test_thumb_between_1mb_and_2mb_downscaled_not_uploaded_oversized(self, db_tmp, monkeypatch):
+        """1-2 MB og:images used to ride MAX_BLOB_BYTES (2 MB) straight into
+        the record, which the external thumb's 1 MB lexicon cap then 400'd,
+        killing the post. They must downscale to fit EXTERNAL_THUMB_MAX_BYTES
+        — or drop the thumb, never fail the post."""
+        import scheduler
+
+        sent = []
+        uploads = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: {"title": "T", "description": "", "image": "https://example.com/big.jpg"},
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_image",
+            lambda url: (b"x" * 1_400_000, "image/jpeg"),
+        )
+        downscale_caps = []
+
+        def fake_downscale(img_bytes, img_type, max_bytes):
+            downscale_caps.append(max_bytes)
+            if len(downscale_calls) == 0:
+                downscale_calls.append(1)
+                return (b"y" * 900_000, "image/jpeg")
+            return None
+
+        downscale_calls = []
+        import images as images_mod
+
+        monkeypatch.setattr(images_mod, "downscale_image", fake_downscale)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: uploads.append(kw) or {"$type": "blob", "ref": {"$link": "bafkreismall"}},
+        )
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        assert downscale_caps == [1_000_000]
+        assert sent[0]["embed"]["external"]["thumb"]["ref"]["$link"] == "bafkreismall"
+        assert uploads[0]["image_bytes"] == b"y" * 900_000
+
+    def test_undownscalable_thumb_degrades_to_text_only_card(self, db_tmp, monkeypatch):
+        import scheduler
+
+        sent = []
+        uploads = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: {"title": "T", "description": "", "image": "https://example.com/huge.jpg"},
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_image",
+            lambda url: (b"x" * 1_400_000, "image/jpeg"),
+        )
+        import images as images_mod
+
+        monkeypatch.setattr(images_mod, "downscale_image", lambda *a: None)
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: uploads.append(kw) or {"$type": "blob"},
+        )
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        assert uploads == []
+        assert sent[0]["embed"]["$type"] == "app.bsky.embed.external"
+        assert "thumb" not in sent[0]["embed"]["external"]
+
+    def test_missing_title_falls_back_to_hostname(self, db_tmp, monkeypatch):
+        """A title-less page must not ship an empty card container; the
+        official app shows the host in the same spot."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: {"title": "", "description": "desc only", "image": ""},
+        )
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        embed = sent[0]["embed"]
+        assert embed["external"]["title"] == "example.com"
+        assert embed["external"]["description"] == "desc only"
+
+    def test_metadata_fetched_once_across_reauth_retry(self, db_tmp, monkeypatch):
+        """The page fetch is prefetched per dispatch; a session re-auth must
+        rebuild the card from the cached metadata, not re-hit the origin."""
+        import scheduler
+        from bluesky import BlueskyAuthError
+
+        sent = []
+        meta_calls = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def flaky_post(**kw):
+            if len(sent) == 0:
+                sent.append(kw)
+                raise BlueskyAuthError("ExpiredToken")
+            sent.append(kw)
+            return {"uri": "u", "cid": "c"}
+
+        monkeypatch.setattr(scheduler, "create_post", flaky_post)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: meta_calls.append(url)
+            or {"title": "T", "description": "", "image": ""},
+        )
+
+        echo = _setup_bluesky_echo(db_tmp)
+        ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        assert meta_calls == ["https://example.com/post/1"]
+        assert sent[0]["embed"]["external"]["title"] == "T"
 
     def test_metadata_exception_degrades_to_cardless(self, db_tmp, monkeypatch):
         import scheduler

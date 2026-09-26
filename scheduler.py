@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -52,6 +53,7 @@ from bluesky import (
     build_image_embed,
     create_post,
     create_session,
+    EXTERNAL_THUMB_MAX_BYTES,
     first_link_uri,
     refresh_session,
     resolve_pds,
@@ -1983,20 +1985,23 @@ def _upload_bluesky_thumb(
 ) -> dict | None:
     """Fetch, validate, and upload a link card thumbnail blob.
 
-    Same constraints as the image pipeline (SSRF-validated fetch, blob cap
-    with a downscale attempt, type allowlist), minus alt text. Returns the
-    blob reference or None to render a text-only card.
+    Same pipeline as the image embeds (SSRF-validated fetch, downscale
+    attempt, type allowlist) but under EXTERNAL_THUMB_MAX_BYTES: the
+    app.bsky.embed.external lexicon caps the thumb at 1 MB (it did NOT get
+    the 2 MB raise embed.images got), and an oversized blob would get the
+    whole record rejected with a 400 — failing the post, not just the
+    thumb. Returns the blob reference or None to render a text-only card.
     """
     prepared = fetch_image(image_url)
     if not prepared:
         return None
     img_bytes, img_type = prepared
-    if len(img_bytes) > MAX_BLOB_BYTES:
-        downscaled = images.downscale_image(img_bytes, img_type, MAX_BLOB_BYTES)
+    if len(img_bytes) > EXTERNAL_THUMB_MAX_BYTES:
+        downscaled = images.downscale_image(img_bytes, img_type, EXTERNAL_THUMB_MAX_BYTES)
         if not downscaled:
             return None
         img_bytes, img_type = downscaled
-    if img_type not in BLUESKY_IMAGE_TYPES or len(img_bytes) > MAX_BLOB_BYTES:
+    if img_type not in BLUESKY_IMAGE_TYPES or len(img_bytes) > EXTERNAL_THUMB_MAX_BYTES:
         return None
     return upload_blob(
         pds=session["pds"],
@@ -2006,29 +2011,52 @@ def _upload_bluesky_thumb(
     )
 
 
+def _fetch_bluesky_link_meta(echo, item: FeedItem, uri: str) -> dict | None:
+    """Fetch a link target's og: metadata. Session-free and best-effort.
+
+    Runs once per dispatch, before the claim guard — the same placement as
+    the image pipeline's prefetch — so a session re-auth retry reuses the
+    cached metadata instead of re-fetching the page from origin.
+    """
+    try:
+        return fetch_page_metadata(uri)
+    except Exception:
+        logger.warning(
+            "Echo %s: Bluesky link card metadata fetch failed for item %s, "
+            "posting without a card",
+            echo["id"],
+            item["id"],
+            exc_info=True,
+        )
+        return None
+
+
 def _build_bluesky_link_card(
-    echo, item: FeedItem, uri: str, session: dict
+    echo, item: FeedItem, uri: str, meta: dict | None, session: dict
 ) -> dict | None:
-    """Build an app.bsky.embed.external link card for uri, or None.
+    """Build an app.bsky.embed.external link card, or None.
 
     Bluesky renders link cards only when the posting client attaches an
     external embed (the AppView does not generate them for third-party
-    records), so text-only echoes with a link fetch the page's Open Graph
-    metadata and attach one — the Echofeed behavior members expect.
+    records), so text-only echoes with a link attach one — the Echofeed
+    behavior members expect. `meta` is the prefetched page metadata (see
+    _fetch_bluesky_link_meta); only the thumb upload here touches the
+    Bluesky session, which is why it lives inside the retried post unit.
 
     Best-effort decoration for everything the LINK can do to break the
-    post (unsafe URL, dead page, no HTML, a thumb that will not fetch or
-    upload) — those degrade to a cardless or thumbless post. The one
-    deliberate exception is BlueskyAuthError from the thumb upload: a dead
-    session is a post-level problem, so it propagates and the caller's
-    re-auth path retries the whole post (card included) with a fresh
-    session, instead of shipping a thumbless card from a token that is
-    about to fail create_post anyway.
+    post (no metadata, a thumb that will not fetch or upload) — those
+    degrade to a cardless or thumbless post. The one deliberate exception
+    is BlueskyAuthError from the thumb upload: a dead session is a
+    post-level problem, so it propagates and the caller's re-auth path
+    retries the whole post (card included) with a fresh session, instead
+    of shipping a thumbless card from a token that is about to fail
+    create_post anyway. Pages without a title fall back to the hostname —
+    an empty-title card renders as a blank container in clients, and the
+    official app shows the host in the same situation.
     """
+    if meta is None:
+        return None
     try:
-        meta = fetch_page_metadata(uri)
-        if meta is None:
-            return None
         thumb_blob = None
         image_url = meta.get("image")
         if image_url:
@@ -2044,9 +2072,12 @@ def _build_bluesky_link_card(
                     item["id"],
                     exc_info=True,
                 )
+        title = (meta.get("title") or "").strip()
+        if not title:
+            title = urlparse(uri).netloc
         card = build_external_embed(
             uri=uri,
-            title=meta.get("title") or "",
+            title=title,
             description=meta.get("description") or "",
             thumb_blob=thumb_blob,
         )
@@ -2171,6 +2202,13 @@ def _send_bluesky(
 
     embed = build_image_embed(image_entries_out) if image_entries_out else None
 
+    # Link card prefetch: session-free page metadata, fetched ONCE per
+    # dispatch before the claim guard (same placement as the image
+    # pipeline's fetch phase) and cached, so a re-auth retry below rebuilds
+    # the card without re-fetching the page from origin.
+    link_uri = first_link_uri(facets) if embed is None else None
+    link_meta = _fetch_bluesky_link_meta(echo, item, link_uri) if link_uri else None
+
     # Re-validate claim ownership immediately before the post: if the lease
     # lapsed and another worker reclaimed this row, posting would duplicate.
     if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "Bluesky"):
@@ -2180,16 +2218,14 @@ def _send_bluesky(
         # Rebinding session also updates the DID post_url builds from below
         # (a re-login may have resolved it for the first time).
         post_embed = embed
-        if post_embed is None:
+        if post_embed is None and link_uri:
             # No image embed: attach a link card for the first link in the
             # post (rich anchor wins over a bare permalink, matching the
-            # facet order). Computed here, inside the retried unit, so a
-            # session that only refreshes after create_post rejects it gets
-            # the card on the retry too. Best-effort: _build_bluesky_link_card
-            # returns None instead of failing the post.
-            link_uri = first_link_uri(facets)
-            if link_uri:
-                post_embed = _build_bluesky_link_card(echo, item, link_uri, s)
+            # facet order). The thumb upload is here so a session that only
+            # refreshes after create_post rejects it gets the card on the
+            # retry too. Best-effort: _build_bluesky_link_card returns None
+            # instead of failing the post (BlueskyAuthError excepted).
+            post_embed = _build_bluesky_link_card(echo, item, link_uri, link_meta, s)
         return create_post(
             pds=s["pds"],
             access_jwt=s["access_jwt"],

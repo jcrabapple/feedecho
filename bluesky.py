@@ -790,6 +790,11 @@ def build_image_embed(image_entries: list[dict]) -> dict:
 
 EXTERNAL_TITLE_MAX_CHARS = 200
 EXTERNAL_DESCRIPTION_MAX_CHARS = 500
+# The external thumb carries its own lexicon cap (maxSize 1000000), which
+# stayed at 1 MB when app.bsky.embed.images was raised to 2 MB in April
+# 2026 — a 1-2 MB thumb here would upload fine but get the whole record
+# rejected with a 400 on createRecord.
+EXTERNAL_THUMB_MAX_BYTES = 1_000_000
 
 
 def build_external_embed(

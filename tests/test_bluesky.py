@@ -569,6 +569,10 @@ def _stub_session(monkeypatch):
             "refresh_jwt": "refreshed-rj",
         },
     )
+    # Link cards fetch the linked page's og: metadata; default to no page
+    # so legacy expectations (embed is None on text-only posts) hold. The
+    # card tests override this seam explicitly.
+    monkeypatch.setattr(scheduler, "fetch_page_metadata", lambda url: None)
 
 class TestSendBluesky:
     def test_happy_path_posts_and_records_success(self, db_tmp, monkeypatch):

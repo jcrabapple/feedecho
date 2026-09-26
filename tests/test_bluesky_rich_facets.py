@@ -297,6 +297,18 @@ class TestBlueskyRichSendWiring:
                 "refresh_jwt": "rj",
             },
         )
+        monkeypatch.setattr(
+            scheduler,
+            "refresh_session",
+            lambda pds, rj: {
+                "did": "did:plc:test123",
+                "access_jwt": "refreshed-aj",
+                "refresh_jwt": "refreshed-rj",
+            },
+        )
+        # Link cards: default to "no page found" so posts stay text-only
+        # unless a card test overrides the seam.
+        monkeypatch.setattr(scheduler, "fetch_page_metadata", lambda url: None)
 
     def test_sender_merges_rich_links_into_facets(self, db_tmp, bl_echo, monkeypatch):
         import scheduler

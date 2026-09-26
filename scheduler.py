@@ -22,6 +22,7 @@ from security import decrypt_secret, encrypt_secret
 from feed_parser import (
     fetch_feed,
     fetch_image,
+    fetch_page_metadata,
     get_new_items,
     get_backdated_items,
     _parse_item_date,
@@ -46,10 +47,12 @@ from bluesky import (
     BlueskyAccountGoneError,
     BlueskyAuthError,
     BlueskyError,
+    build_external_embed,
     build_facets,
     build_image_embed,
     create_post,
     create_session,
+    first_link_uri,
     refresh_session,
     resolve_pds,
     session_expiry,
@@ -1975,6 +1978,99 @@ def _upload_bluesky_image(
     return {"blob": blob, "alt": alt_description}
 
 
+def _upload_bluesky_thumb(
+    echo, item: FeedItem, image_url: str, session: dict
+) -> dict | None:
+    """Fetch, validate, and upload a link card thumbnail blob.
+
+    Same constraints as the image pipeline (SSRF-validated fetch, blob cap
+    with a downscale attempt, type allowlist), minus alt text. Returns the
+    blob reference or None to render a text-only card.
+    """
+    prepared = fetch_image(image_url)
+    if not prepared:
+        return None
+    img_bytes, img_type = prepared
+    if len(img_bytes) > MAX_BLOB_BYTES:
+        downscaled = images.downscale_image(img_bytes, img_type, MAX_BLOB_BYTES)
+        if not downscaled:
+            return None
+        img_bytes, img_type = downscaled
+    if img_type not in BLUESKY_IMAGE_TYPES or len(img_bytes) > MAX_BLOB_BYTES:
+        return None
+    return upload_blob(
+        pds=session["pds"],
+        access_jwt=session["access_jwt"],
+        image_bytes=img_bytes,
+        content_type=img_type,
+    )
+
+
+def _build_bluesky_link_card(
+    echo, item: FeedItem, uri: str, session: dict
+) -> dict | None:
+    """Build an app.bsky.embed.external link card for uri, or None.
+
+    Bluesky renders link cards only when the posting client attaches an
+    external embed (the AppView does not generate them for third-party
+    records), so text-only echoes with a link fetch the page's Open Graph
+    metadata and attach one — the Echofeed behavior members expect.
+
+    Best-effort decoration for everything the LINK can do to break the
+    post (unsafe URL, dead page, no HTML, a thumb that will not fetch or
+    upload) — those degrade to a cardless or thumbless post. The one
+    deliberate exception is BlueskyAuthError from the thumb upload: a dead
+    session is a post-level problem, so it propagates and the caller's
+    re-auth path retries the whole post (card included) with a fresh
+    session, instead of shipping a thumbless card from a token that is
+    about to fail create_post anyway.
+    """
+    try:
+        meta = fetch_page_metadata(uri)
+        if meta is None:
+            return None
+        thumb_blob = None
+        image_url = meta.get("image")
+        if image_url:
+            try:
+                thumb_blob = _upload_bluesky_thumb(echo, item, image_url, session)
+            except BlueskyAuthError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Echo %s: Bluesky link card thumb failed for item %s, "
+                    "attaching a text-only card",
+                    echo["id"],
+                    item["id"],
+                    exc_info=True,
+                )
+        card = build_external_embed(
+            uri=uri,
+            title=meta.get("title") or "",
+            description=meta.get("description") or "",
+            thumb_blob=thumb_blob,
+        )
+        logger.info(
+            "Echo %s: attached Bluesky link card for item %s (%s)",
+            echo["id"],
+            item["id"],
+            uri,
+        )
+        return card
+    except BlueskyAuthError:
+        # Session-level: let the caller's re-auth path retry the whole
+        # post (card included) with a fresh session.
+        raise
+    except Exception:
+        logger.warning(
+            "Echo %s: Bluesky link card build failed for item %s, posting without one",
+            echo["id"],
+            item["id"],
+            exc_info=True,
+        )
+        return None
+
+
 def _send_bluesky(
     echo,
     item: FeedItem,
@@ -2083,13 +2179,24 @@ def _send_bluesky(
     def _do_post(s: dict) -> dict:
         # Rebinding session also updates the DID post_url builds from below
         # (a re-login may have resolved it for the first time).
+        post_embed = embed
+        if post_embed is None:
+            # No image embed: attach a link card for the first link in the
+            # post (rich anchor wins over a bare permalink, matching the
+            # facet order). Computed here, inside the retried unit, so a
+            # session that only refreshes after create_post rejects it gets
+            # the card on the retry too. Best-effort: _build_bluesky_link_card
+            # returns None instead of failing the post.
+            link_uri = first_link_uri(facets)
+            if link_uri:
+                post_embed = _build_bluesky_link_card(echo, item, link_uri, s)
         return create_post(
             pds=s["pds"],
             access_jwt=s["access_jwt"],
             repo=s["did"],
             text=text,
             facets=facets or None,
-            embed=embed,
+            embed=post_embed,
         )
 
     ok, session, result = _bsky_call_with_reauth(

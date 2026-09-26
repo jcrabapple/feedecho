@@ -544,6 +544,9 @@ class TestBlueskyDownscaleWiring:
                 "refresh_jwt": "refreshed-rj",
             },
         )
+        # Link cards: default to "no page found" so posts stay text-only
+        # unless a card test overrides the seam.
+        monkeypatch.setattr(scheduler, "fetch_page_metadata", lambda url: None)
 
     def _setup(self, db_tmp, monkeypatch, bl_echo, img_bytes, img_type="image/jpeg"):
         import scheduler

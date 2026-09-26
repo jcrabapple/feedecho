@@ -788,6 +788,53 @@ def build_image_embed(image_entries: list[dict]) -> dict:
     return {"$type": "app.bsky.embed.images", "images": images}
 
 
+EXTERNAL_TITLE_MAX_CHARS = 200
+EXTERNAL_DESCRIPTION_MAX_CHARS = 500
+
+
+def build_external_embed(
+    uri: str, title: str, description: str = "", thumb_blob: dict | None = None
+) -> dict:
+    """Build an app.bsky.embed.external link card.
+
+    The card Bluesky renders when a post carries a link: the linked page's
+    Open Graph title/description, optionally an uploaded thumbnail blob.
+    Truncation is deliberately conservative — well inside the lexicon's
+    byte limits for any plausible title, so the PDS never rejects the
+    record over an oversized card. A missing thumb just renders a
+    text-only card, matching how the official client handles pages
+    without og:image.
+    """
+    external: dict = {
+        "uri": uri,
+        "title": truncate_graphemes((title or "").strip(), EXTERNAL_TITLE_MAX_CHARS),
+        "description": truncate_graphemes(
+            (description or "").strip(), EXTERNAL_DESCRIPTION_MAX_CHARS
+        ),
+    }
+    if thumb_blob:
+        external["thumb"] = thumb_blob
+    return {"$type": "app.bsky.embed.external", "external": external}
+
+
+def first_link_uri(facets: list[dict] | None) -> str | None:
+    """Return the uri of the first link facet, or None.
+
+    build_facets seeds rich-render link spans before bare-URL detection,
+    so first-wins here gives the same precedence the rendered post shows:
+    a {{ content_html }} anchor beats a trailing bare permalink.
+    """
+    for facet in facets or []:
+        for feature in facet.get("features", []):
+            if (
+                isinstance(feature, dict)
+                and feature.get("$type") == _FACET_LINK_TYPE
+                and feature.get("uri")
+            ):
+                return feature["uri"]
+    return None
+
+
 # ── Connection testing ───────────────────────────────────────────────────────
 
 

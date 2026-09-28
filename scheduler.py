@@ -1266,6 +1266,14 @@ def _echo_render_html(echo) -> bool:
         return False
 
 
+def _echo_use_markdown(echo) -> bool:
+    """The echo's use_markdown flag (Mastodon/GoToSocial), defaulting off."""
+    try:
+        return bool(echo["use_markdown"])
+    except (KeyError, IndexError):
+        return False
+
+
 def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
     """Feed-provided alt text wins; AI generation is the fallback.
 
@@ -1492,6 +1500,7 @@ def _send_mastodon(
             # retry of this same logical post reuses the key, so Mastodon
             # returns the original status instead of creating a duplicate.
             idempotency_key=mastodon_idempotency_key(echo["id"], item["id"]),
+            content_type="text/markdown" if _echo_use_markdown(echo) else None,
         )
     except MastodonAuthError as e:
         # Token rejected: retries cannot help until the user reconnects.

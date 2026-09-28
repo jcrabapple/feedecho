@@ -633,6 +633,7 @@ def init_db_sqlite() -> None:
                 content_warning TEXT DEFAULT '',
                 attach_image INTEGER NOT NULL DEFAULT 0,
                 render_html INTEGER NOT NULL DEFAULT 0,
+                use_markdown INTEGER NOT NULL DEFAULT 0,
                 delivery_mode TEXT NOT NULL DEFAULT 'instant',
                 drip_limit INTEGER NOT NULL DEFAULT 0,
                 one_shot INTEGER NOT NULL DEFAULT 0,
@@ -662,6 +663,10 @@ def init_db_sqlite() -> None:
         # v1.67.0: email echoes may render the body as HTML ({{ content_html }}).
         _add_column_if_missing(
             db, "echoes", "render_html", "INTEGER NOT NULL DEFAULT 0"
+        )
+        # Mastodon/GoToSocial: send content_type=text/markdown when set.
+        _add_column_if_missing(
+            db, "echoes", "use_markdown", "INTEGER NOT NULL DEFAULT 0"
         )
 
         db.execute("""
@@ -1420,6 +1425,7 @@ def init_db_postgres() -> None:
                 content_warning TEXT DEFAULT '',
                 attach_image INTEGER NOT NULL DEFAULT 0,
                 render_html INTEGER NOT NULL DEFAULT 0,
+                use_markdown INTEGER NOT NULL DEFAULT 0,
                 delivery_mode TEXT NOT NULL DEFAULT 'instant',
                 drip_limit INTEGER NOT NULL DEFAULT 0,
                 one_shot INTEGER NOT NULL DEFAULT 0,
@@ -1434,6 +1440,9 @@ def init_db_postgres() -> None:
         # v1.67.0: email echoes may render the body as HTML ({{ content_html }}).
         _add_column_if_missing(
             db, "echoes", "render_html", "INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(
+            db, "echoes", "use_markdown", "INTEGER NOT NULL DEFAULT 0"
         )
         _add_column_if_missing(db, "echoes", "filter_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(

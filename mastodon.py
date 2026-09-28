@@ -114,6 +114,7 @@ def post_status(
     spoiler_text: str = "",
     media_ids: list[str] | None = None,
     idempotency_key: str | None = None,
+    content_type: str | None = None,
 ) -> dict:
     """Post a status to a Mastodon instance.
 
@@ -130,6 +131,9 @@ def post_status(
             with the same key (within its retention window), returning the
             original status instead of creating a second one — protects
             against a crash-then-reclaim retry double-posting.
+        content_type: Optional body format. GoToSocial accepts
+            ``text/markdown`` (and ``text/plain``); stock Mastodon ignores
+            unknown form fields. Omit to leave the instance default.
 
     Returns:
         Dict with response data including 'id' and 'url' on success.
@@ -155,6 +159,8 @@ def post_status(
         data["sensitive"] = True
     if media_ids:
         data["media_ids[]"] = media_ids
+    if content_type:
+        data["content_type"] = content_type
 
     response = pinned_request(
         "POST", url, timeout=30, headers=headers, data=data

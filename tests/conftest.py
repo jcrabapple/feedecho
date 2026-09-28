@@ -78,6 +78,7 @@ def setup_echo(db_tmp):
             "filter_mode": "exclude",
             "content_warning": "",
             "attach_image": attach_image,
+            "use_markdown": 0,
             "enabled": 1,
         }
         if echo_overrides:
@@ -96,8 +97,8 @@ def setup_echo(db_tmp):
             db.execute(
                 """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
                                        visibility, filter_keywords, filter_mode,
-                                       content_warning, attach_image, enabled)
-                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                       content_warning, attach_image, use_markdown, enabled)
+                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     echo_kwargs["destination_type"],
                     echo_kwargs["destination_id"],
@@ -107,6 +108,7 @@ def setup_echo(db_tmp):
                     echo_kwargs["filter_mode"],
                     echo_kwargs["content_warning"],
                     echo_kwargs["attach_image"],
+                    echo_kwargs["use_markdown"],
                     echo_kwargs["enabled"],
                 ),
             )

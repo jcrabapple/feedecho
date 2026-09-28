@@ -4,7 +4,8 @@ Post templates are real, sandboxed Jinja2 templates. Everything the
 original regex engine supported keeps working unchanged, plus:
 
   - Conditionals: {% if summary %}...{% else %}...{% endif %}
-  - Filters: {{ title | truncate(120) }}, {{ author | default('Unknown') }}
+  - Filters: {{ title | truncate(120) }}, {{ author | default('Unknown') }},
+    {{ some_date | date_short }}, {{ some_date | date_iso }}
   - Full item access: {{ item.title }}, {{ item['link'] }}
   - feed_name for the owning feed
 
@@ -15,6 +16,10 @@ it converts to clean text whose article links become clickable facets), {{ autho
 {{ date }}, {{ date_iso }}, {{ date_short }}, {{ tags }}, {{ hashtags }},
 {{ categories }}, {{ image_url }}, {{ feed_name }}.
 
+Date filters accept ISO 8601 or RFC 822 strings (e.g. RSS ``pubDate`` /
+``lastBuildDate``) and format them; unparseable input is returned
+unchanged.
+
 Templates are sandboxed: attribute access on unsafe objects and method
 calls are blocked (use filters instead of methods), and templates cannot
 reach the filesystem, imports, or Python builtins.
@@ -23,6 +28,7 @@ reach the filesystem, imports, or Python builtins.
 import re
 import unicodedata
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
 from jinja2 import TemplateSyntaxError
@@ -68,9 +74,48 @@ class CappedSandbox(SandboxedEnvironment):
                 return
 
 
+def _format_date(date_str: str | None, fmt: str) -> str:
+    """Format a date string using the given format string.
+
+    Accepts ISO 8601 (``2024-01-15T09:30:00Z``) and RFC 822
+    (``Thu, 31 Dec 2026 00:00:00 +0000``). Unparseable or empty input is
+    returned as-is (empty string for falsy values) so templates never
+    blow up on odd feed data.
+    """
+    if not date_str:
+        return ""
+    if not isinstance(date_str, str):
+        date_str = str(date_str)
+
+    dt = None
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        try:
+            dt = parsedate_to_datetime(date_str)
+        except (ValueError, TypeError, OverflowError):
+            dt = None
+
+    if dt is None:
+        return date_str
+    return dt.strftime(fmt)
+
+
+def _filter_date_short(value) -> str:
+    """Jinja filter: format a date string as YYYY-MM-DD."""
+    return _format_date(value if value is not None else "", "%Y-%m-%d")
+
+
+def _filter_date_iso(value) -> str:
+    """Jinja filter: format a date string as YYYY-MM-DDTHH:MM:SS."""
+    return _format_date(value if value is not None else "", "%Y-%m-%dT%H:%M:%S")
+
+
 # Post content is plain text (Mastodon/Bluesky statuses, email bodies),
 # never HTML — no autoescaping.
 env = CappedSandbox(autoescape=False)
+env.filters["date_short"] = _filter_date_short
+env.filters["date_iso"] = _filter_date_iso
 
 # Jinja2 identifiers cannot contain colons, but the original engine exposed
 # {{ date:iso }} and {{ date:short }}. Normalize those two tokens before
@@ -84,17 +129,6 @@ _LEGACY_DATE_TOKENS = {
 # also mangle string literals and plain template prose that mentions the
 # token text (e.g. "format: date:iso").
 _EXPRESSION_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
-
-
-def _format_date(date_str: str | None, fmt: str) -> str:
-    """Format a date string using the given format string."""
-    if not date_str:
-        return ""
-    try:
-        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        return dt.strftime(fmt)
-    except (ValueError, TypeError):
-        return date_str
 
 
 def _format_hashtags(tags) -> str:
@@ -443,6 +477,8 @@ def available_variables() -> list[dict]:
         {"var": "{{ date }}", "desc": "Publication date (raw)"},
         {"var": "{{ date_iso }}", "desc": "ISO 8601 date (2024-01-15T09:30:00)"},
         {"var": "{{ date_short }}", "desc": "Short date (2024-01-15)"},
+        {"var": "{{ any | date_short }}", "desc": "Filter: format ISO/RFC822 date as YYYY-MM-DD"},
+        {"var": "{{ any | date_iso }}", "desc": "Filter: format ISO/RFC822 date as YYYY-MM-DDTHH:MM:SS"},
         {"var": "{{ tags }}", "desc": "Raw tag list"},
         {"var": "{{ hashtags }}", "desc": "Feed tags as #hashtags"},
         {"var": "{{ categories }}", "desc": "RSS/Atom categories keyed by domain (and #fragment); e.g. {{ categories['item-category-type'] }}"},

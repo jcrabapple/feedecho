@@ -120,6 +120,7 @@ import alt_text
 import images
 from utils import FeedItem
 from utils import utc_now_str as _now
+from utils import categories_from_value
 
 logger = logging.getLogger("feedecho.scheduler")
 
@@ -367,6 +368,7 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
             item.get("content_text") or "",
             item.get("content_link") or "",
             item.get("content_html") or "",
+            json.dumps(item.get("categories") or {}, ensure_ascii=False),
             item.get("author") or "",
             item.get("image_url") or "",
             item.get("image_alt") or "",
@@ -384,10 +386,10 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                 """
                 INSERT INTO feed_items (
                     feed_id, item_id, title, link, summary, content,
-                    content_text, content_link, content_html, author,
+                    content_text, content_link, content_html, categories, author,
                     image_url, image_alt, image_urls, enclosure_url, published_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(feed_id, item_id) DO UPDATE SET
                     title = excluded.title,
                     link = excluded.link,
@@ -396,6 +398,7 @@ def _store_feed_items(feed_id: int, items: list[dict]) -> None:
                     content_text = excluded.content_text,
                     content_link = excluded.content_link,
                     content_html = excluded.content_html,
+                    categories = excluded.categories,
                     author = excluded.author,
                     image_url = excluded.image_url,
                     image_alt = excluded.image_alt,
@@ -3209,6 +3212,7 @@ def _flush_queue() -> None:
                         "summary": fi["summary"] or "",
                         "content": fi["content"] or "",
                         "content_html": (fi["content_html"] if "content_html" in fi.keys() else "") or "",
+                        "categories": categories_from_value(fi["categories"]) if "categories" in fi.keys() else {},
                         "image_url": fi["image_url"] or "",
                     })
 

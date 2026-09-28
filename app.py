@@ -103,6 +103,7 @@ from scheduler import start_scheduler, stop_scheduler, check_feed, process_echo
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
 from utils import is_valid_email
+from utils import categories_from_value
 
 import logging_setup
 
@@ -5805,6 +5806,7 @@ def reader_compose_preview(
         "content_link": row["content_link"] or "",
         "author": row["author"] or "",
         "date": timestamp_str(row["published_at"]) if row["published_at"] else "",
+        "categories": categories_from_value(row["categories"]) if "categories" in row.keys() else {},
         "image_url": row["image_url"] or "",
         "image_alt": row["image_alt"] or "",
     }
@@ -5925,6 +5927,7 @@ def reader_compose(
         "content_link": row["content_link"] or "",
         "author": row["author"] or "",
         "date": timestamp_str(row["published_at"]) if row["published_at"] else "",
+        "categories": categories_from_value(row["categories"]) if "categories" in row.keys() else {},
         "image_url": row["image_url"] or "",
         "image_alt": chosen_alt,
     }

@@ -18,6 +18,7 @@ refactor.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -66,6 +67,21 @@ def truncate_chars(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "\u2026"
+
+
+def categories_from_value(value) -> dict:
+    """Parse the ``feed_items.categories`` JSON column into a dict.
+
+    Tolerates NULL (column added in v1.73.2), malformed JSON, and
+    non-dict payloads; every failure mode reads as "no categories".
+    """
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def json_error_detail(response, *keys: str) -> str:

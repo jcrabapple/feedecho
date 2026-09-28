@@ -6135,6 +6135,7 @@ async def add_echo(
     content_warning: str = Form(""),
     attach_image: str = Form(""),
     render_html: str = Form(""),
+    use_markdown: str = Form(""),
     delivery_mode: str = Form("instant"),
     drip_limit: int = Form(0),
     enabled: str = Form(""),
@@ -6167,6 +6168,13 @@ async def add_echo(
         1 if render_html in ("1", "true", "on")
         and destination_type in ("email", "matrix")
         and delivery_mode == "instant"
+        else 0
+    )
+    # use_markdown applies only to Mastodon destinations (GoToSocial parses
+    # content_type=text/markdown; stock Mastodon ignores the field).
+    is_use_markdown = (
+        1 if use_markdown in ("1", "true", "on")
+        and destination_type == "mastodon"
         else 0
     )
 
@@ -6234,11 +6242,11 @@ async def add_echo(
         db.execute(
             """INSERT INTO echoes (feed_id, destination_type, destination_id, template, visibility,
                                    filter_keywords, filter_mode, content_warning, attach_image,
-                                   render_html, delivery_mode, drip_limit, enabled, user_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   render_html, use_markdown, delivery_mode, drip_limit, enabled, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             is_render_html, delivery_mode, drip_limit, is_enabled, uid),
+             is_render_html, is_use_markdown, delivery_mode, drip_limit, is_enabled, uid),
         )
     # Return to the originating surface. Allowlist rather than prefix checks:
     # the WHATWG URL parser treats backslashes as slashes, so a prefix check
@@ -6360,6 +6368,7 @@ async def edit_echo(
     content_warning: str = Form(""),
     attach_image: str = Form(""),
     render_html: str = Form(""),
+    use_markdown: str = Form(""),
     delivery_mode: str = Form("instant"),
     drip_limit: int = Form(0),
     enabled: str = Form(""),
@@ -6389,6 +6398,13 @@ async def edit_echo(
         1 if render_html in ("1", "true", "on")
         and destination_type in ("email", "matrix")
         and delivery_mode == "instant"
+        else 0
+    )
+    # use_markdown applies only to Mastodon destinations (GoToSocial parses
+    # content_type=text/markdown; stock Mastodon ignores the field).
+    is_use_markdown = (
+        1 if use_markdown in ("1", "true", "on")
+        and destination_type == "mastodon"
         else 0
     )
 
@@ -6461,12 +6477,13 @@ async def edit_echo(
         db.execute(
             """UPDATE echoes SET feed_id = ?, destination_type = ?, destination_id = ?,
                template = ?, visibility = ?, filter_keywords = ?, filter_mode = ?,
-               content_warning = ?, attach_image = ?, render_html = ?, delivery_mode = ?, drip_limit = ?,
+               content_warning = ?, attach_image = ?, render_html = ?, use_markdown = ?,
+               delivery_mode = ?, drip_limit = ?,
                enabled = ?
                WHERE id = ? AND user_id = ?""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             is_render_html, delivery_mode, drip_limit, is_enabled, echo_id, uid),
+             is_render_html, is_use_markdown, delivery_mode, drip_limit, is_enabled, echo_id, uid),
         )
         if (
             echo["booster_enabled"]

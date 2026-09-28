@@ -302,6 +302,7 @@ function editEcho(echoId) {
     const contentWarning = row.dataset.contentWarning || '';
     const attachImage = row.dataset.attachImage === '1';
     const renderHtml = row.dataset.renderHtml === '1';
+    const useMarkdown = row.dataset.useMarkdown === '1';
     const deliveryMode = row.dataset.deliveryMode || 'instant';
     const dripLimit = row.dataset.dripLimit || '0';
     const enabled = row.dataset.enabled === '1';
@@ -358,6 +359,9 @@ function editEcho(echoId) {
                         <option value="private"${visibility === 'private' ? ' selected' : ''}>Private (followers only)</option>
                         <option value="direct"${visibility === 'direct' ? ' selected' : ''}>Direct</option>
                     </select>
+                </label>
+                <label>Parse as Markdown
+                    <input type="checkbox" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''}>
                 </label>
             </div>
             <div class="form-row" id="edit-email-fields-${echoId}" style="${emailStyle}">

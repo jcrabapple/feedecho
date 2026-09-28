@@ -94,7 +94,7 @@ _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paus
 _ECHO_COLS = [
     "feed_id", "destination_type", "destination_id", "template", "visibility",
     "enabled", "filter_keywords", "filter_mode", "content_warning",
-    "attach_image", "render_html", "delivery_mode", "drip_limit",
+    "attach_image", "render_html", "use_markdown", "delivery_mode", "drip_limit",
 ]
 
 _VALID_VISIBILITY = ("public", "unlisted", "private", "direct")
@@ -600,8 +600,8 @@ def import_data(db, uid: int, payload: dict) -> dict:
         db.execute(
             "INSERT INTO echoes (feed_id, destination_type, destination_id, template,"
             " visibility, enabled, filter_keywords, filter_mode, content_warning,"
-            " attach_image, render_html, delivery_mode, drip_limit, user_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " attach_image, render_html, use_markdown, delivery_mode, drip_limit, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 new_feed,
                 dest_type,
@@ -616,6 +616,7 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 # Clamp like the connect route: instant email/Matrix echoes.
                 1 if echo.get("render_html") and dest_type in ("email", "matrix")
                 and delivery_mode == "instant" else 0,
+                1 if echo.get("use_markdown") and dest_type == "mastodon" else 0,
                 delivery_mode,
                 drip,
                 uid,

@@ -157,3 +157,43 @@ class TestAvailableVariables:
     def test_includes_date_iso(self):
         variables = available_variables()
         assert any(v["var"] == "{{ date_iso }}" for v in variables)
+
+
+class TestDateFilters:
+    def test_date_short_filter_iso(self):
+        assert render_template(
+            "{{ item.stamp | date_short }}", {"stamp": "2024-01-15T09:30:00Z"}
+        ) == "2024-01-15"
+
+    def test_date_iso_filter_iso(self):
+        assert render_template(
+            "{{ item.stamp | date_iso }}", {"stamp": "2024-01-15T09:30:00Z"}
+        ) == "2024-01-15T09:30:00"
+
+    def test_date_short_filter_rfc822(self):
+        # Classic RSS pubDate / lastBuildDate shape
+        assert render_template(
+            "{{ item.stamp | date_short }}",
+            {"stamp": "Thu, 31 Dec 2026 00:00:00 +0000"},
+        ) == "2026-12-31"
+
+    def test_date_iso_filter_rfc822(self):
+        assert render_template(
+            "{{ item.stamp | date_iso }}",
+            {"stamp": "Sat, 26 Jul 2025 00:00:00 +0000"},
+        ) == "2025-07-26T00:00:00"
+
+    def test_unparseable_passthrough(self):
+        assert render_template(
+            "{{ item.stamp | date_short }}", {"stamp": "not-a-date"}
+        ) == "not-a-date"
+
+    def test_empty_input(self):
+        assert render_template("{{ item.stamp | date_short }}", {"stamp": ""}) == ""
+        assert render_template("{{ date | date_short }}", {}) == ""
+
+    def test_filter_on_item_date_variable(self):
+        # Context vars like date also work with the filter.
+        assert render_template(
+            "{{ date | date_short }}", {"date": "Thu, 31 Dec 2026 00:00:00 +0000"}
+        ) == "2026-12-31"

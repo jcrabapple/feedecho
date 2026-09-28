@@ -211,3 +211,61 @@ class TestExtractRssImageMediaTypeFilter:
             ]
         }
         assert _extract_rss_image(entry) == "https://example.com/thumb.jpg"
+
+
+class TestRssCategories:
+    """RSS <category domain="…"> → item['categories'] keyed by scheme + fragment."""
+
+    def _parse(self, body: str):
+        import feedparser
+        from feed_parser import parse_rss_feed
+
+        return parse_rss_feed(feedparser.parse(body), "https://e.com/feed")["items"]
+
+    def test_albopop_domains_indexed_by_uri_and_fragment(self):
+        items = self._parse("""<?xml version="1.0"?>
+        <rss version="2.0"><channel><title>t</title><link>https://e.com</link>
+        <description>d</description>
+        <item>
+          <title>Pubblicazione n. 1</title>
+          <link>https://e.com/1</link>
+          <description>atto</description>
+          <guid>https://e.com/1</guid>
+          <category domain="http://albopop.it/specs#item-category-uid">DGM7 32/2026</category>
+          <category domain="http://albopop.it/specs#item-category-type">MUNICIPIO 7 - PONENTE</category>
+          <category domain="http://albopop.it/specs#item-category-unit">N.D.</category>
+          <category>plain-tag</category>
+        </item></channel></rss>""")
+        item = items[0]
+        assert item["categories"]["item-category-type"] == "MUNICIPIO 7 - PONENTE"
+        assert item["categories"]["item-category-uid"] == "DGM7 32/2026"
+        assert item["categories"]["item-category-unit"] == "N.D."
+        assert (
+            item["categories"]["http://albopop.it/specs#item-category-type"]
+            == "MUNICIPIO 7 - PONENTE"
+        )
+        # Plain category without domain stays in tags only.
+        assert "plain-tag" in item["tags"]
+        assert "plain-tag" not in item["categories"].values()
+        assert "MUNICIPIO 7 - PONENTE" in item["tags"]
+
+    def test_no_domain_categories_empty_dict(self):
+        items = self._parse("""<?xml version="1.0"?>
+        <rss version="2.0"><channel><title>t</title><link>https://e.com</link>
+        <description>d</description>
+        <item><title>One</title><link>https://e.com/1</link>
+        <description>x</description><category>news</category>
+        </item></channel></rss>""")
+        assert items[0]["categories"] == {}
+        assert items[0]["tags"] == ["news"]
+
+    def test_json_feed_categories_empty(self):
+        from feed_parser import parse_json_feed
+
+        items = parse_json_feed({
+            "version": "https://jsonfeed.org/version/1.1",
+            "title": "t",
+            "items": [{"id": "1", "title": "x", "tags": ["a", "b"]}],
+        })["items"]
+        assert items[0]["categories"] == {}
+        assert items[0]["tags"] == ["a", "b"]

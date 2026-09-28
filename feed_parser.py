@@ -671,6 +671,33 @@ def _fetch_via_fallback_proxy(
         client.close()
 
 
+def _extract_categories(entry) -> dict[str, str]:
+    """Map RSS/Atom category domain (feedparser ``scheme``) → term.
+
+    Plain tags without a domain stay only in ``tags`` / ``hashtags``. When a
+    scheme has a URL fragment (AlboPOP ``#item-category-type``, Dublin Core
+    taxonomies, …), the fragment is indexed too so templates can use
+    ``{{ categories['item-category-type'] }}`` without repeating the full URI.
+    Duplicate keys keep the last term (feeds rarely repeat the same domain).
+    """
+    categories: dict[str, str] = {}
+    for tag in entry.get("tags", []) or []:
+        if not isinstance(tag, dict):
+            continue
+        term = tag.get("term")
+        if not term:
+            continue
+        scheme = (tag.get("scheme") or "").strip()
+        if not scheme:
+            continue
+        categories[scheme] = term
+        if "#" in scheme:
+            frag = scheme.rsplit("#", 1)[-1].strip()
+            if frag:
+                categories[frag] = term
+    return categories
+
+
 def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
     """Parse an RSS/Atom feed from feedparser output."""
     feed_info = parsed.get("feed", {})
@@ -696,6 +723,7 @@ def parse_rss_feed(parsed: feedparser.FeedParserDict, url: str) -> dict:
             "author": entry.get("author", ""),
             "date": _parse_date_struct(entry),
             "tags": [tag.get("term", "") for tag in entry.get("tags", []) if tag.get("term")],
+            "categories": _extract_categories(entry),
             "image_url": _extract_rss_image(entry),
             "image_alt": _extract_rss_image_alt(entry),
             "image_urls": _extract_rss_images(entry),
@@ -737,6 +765,8 @@ def parse_json_feed(data: dict) -> dict:
             "author": author_name,
             "date": _parse_iso_date(entry.get("date_published") or entry.get("date_modified")),
             "tags": entry.get("tags", []),
+            # JSON Feed tags are plain strings — no category domains.
+            "categories": {},
             "image_url": _extract_json_feed_image(entry),
             "image_alt": _extract_json_feed_image_alt(entry),
             "image_urls": _extract_json_feed_images(entry),

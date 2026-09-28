@@ -83,6 +83,32 @@ class TestJinja2Features:
         assert render_template(template, ITEM) == "#python #web "
 
 
+class TestCategories:
+    def test_categories_by_fragment_key(self):
+        item = dict(
+            ITEM,
+            categories={
+                "item-category-type": "MUNICIPIO 7 - PONENTE",
+                "http://albopop.it/specs#item-category-type": "MUNICIPIO 7 - PONENTE",
+                "item-category-uid": "DGM7 32/2026",
+            },
+        )
+        template = (
+            "[{{ categories['item-category-type'] }}] {{ title }} "
+            "{{ categories['item-category-uid'] }}"
+        )
+        assert render_template(template, item) == (
+            "[MUNICIPIO 7 - PONENTE] A Post Title DGM7 32/2026"
+        )
+
+    def test_categories_missing_defaults_empty(self):
+        item = dict(ITEM, categories={})
+        assert render_template("{{ categories['item-category-type'] | default('') }}", item) == ""
+
+    def test_categories_empty_when_absent(self):
+        # Items without the key (legacy / drip-redelivered) still render.
+        assert render_template("{{ categories }}", ITEM) == "{}"
+
 class TestLegacyCompatibility:
     """The old regex engine's documented syntax must keep rendering."""
 

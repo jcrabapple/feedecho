@@ -195,6 +195,7 @@ class FeedItem(TypedDict, total=False):
     author: str
     date: str
     tags: list[str]
+    categories: dict[str, str]
     image_url: str
     image_alt: str
     image_urls: list[dict]

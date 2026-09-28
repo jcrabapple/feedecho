@@ -20,7 +20,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
 - **Telegram support** — connect a bot token + chat; posts land in the chat (public channels get a t.me link in post history)
 - **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, push services like brrr, or anything you run yourself (optional custom JSON body template per endpoint)
-- **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ content_html }}` (sanitized HTML passthrough for markup-aware destinations), `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
+- **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ content_html }}` (sanitized HTML passthrough for markup-aware destinations), `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ categories }}` (RSS/Atom category domains), `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
 - **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, Telegram chats, and webhook endpoints
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Built-in feed reader** — read items in place instead of a third-party app: folders with OPML import/export, unread and starred tracking with CSV/JSON export of starred items, saved searches, a full-text view, and a compose desk that turns any item into a post without leaving FeedEcho
@@ -234,6 +234,7 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ date_short }}` | Short date (2024-01-15) |
 | `{{ tags }}` | Raw tag list |
 | `{{ hashtags }}` | Feed tags as #hashtags |
+| `{{ categories }}` | Dict of RSS/Atom `<category domain="…">` values keyed by domain URI and by URL `#fragment` (e.g. AlboPOP `{{ categories['item-category-type'] }}`). Empty for JSON Feed / tags without a domain |
 | `{{ image_url }}` | First image URL from the item |
 | `{{ content_link }}` | First outbound link inside the item's content (link-blogs) |
 | `{{ content_html }}` | Full content as sanitized HTML — links, formatting, and images kept; scripts/handlers/foreign schemes stripped at ingest. Renders in webhook bodies, email HTML parts (render_html echo flag), and Matrix formatted bodies. On Bluesky it converts to clean text with clickable link facets for article links. On Mastodon it embeds as HTML (Mastodon renders a safe subset); other plain-text destinations show the raw tags, so use `{{ content }}` there |
@@ -247,6 +248,8 @@ Examples:
 {% if summary %}{{ title }} - {{ summary | truncate(90) }}{% else %}{{ title }} {{ link }}{% endif %}
 {{ title }} by {{ author | default('unknown', true) }} {{ link }}
 {{ feed_name }}: {{ title }} {{ link }}
+[{{ categories['item-category-type'] }}] {{ title }}
+{{ categories['item-category-uid'] }} {{ link }}
 ```
 
 The echo form has a **Preview** button that renders the current template

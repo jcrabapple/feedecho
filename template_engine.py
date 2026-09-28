@@ -13,7 +13,7 @@ Supported flat variables: {{ title }}, {{ link }}, {{ content_link }},
 renders in webhook bodies and other markup-aware destinations; on Bluesky
 it converts to clean text whose article links become clickable facets), {{ author }},
 {{ date }}, {{ date_iso }}, {{ date_short }}, {{ tags }}, {{ hashtags }},
-{{ image_url }}, {{ feed_name }}.
+{{ categories }}, {{ image_url }}, {{ feed_name }}.
 
 Templates are sandboxed: attribute access on unsafe objects and method
 calls are blocked (use filters instead of methods), and templates cannot
@@ -183,6 +183,7 @@ def _build_context(item: dict, feed_name: str = "", rich: bool = False) -> dict:
         "date_short": _format_date(date_str, "%Y-%m-%d"),
         "tags": item.get("tags", []) or [],
         "hashtags": _format_hashtags(item.get("tags", [])),
+        "categories": item.get("categories", {}) or {},
         "image_url": item.get("image_url", ""),
         "feed_name": feed_name or "",
         # Full item dict for power users: {{ item.title }}, {{ item['link'] }}
@@ -444,6 +445,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ date_short }}", "desc": "Short date (2024-01-15)"},
         {"var": "{{ tags }}", "desc": "Raw tag list"},
         {"var": "{{ hashtags }}", "desc": "Feed tags as #hashtags"},
+        {"var": "{{ categories }}", "desc": "RSS/Atom categories keyed by domain (and #fragment); e.g. {{ categories['item-category-type'] }}"},
         {"var": "{{ image_url }}", "desc": "First image URL from the item"},
         {"var": "{{ image_alt }}", "desc": "The image's alt text from the feed (may be empty)"},
         {"var": "{{ feed_name }}", "desc": "Name of the source feed"},

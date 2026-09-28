@@ -2238,6 +2238,7 @@ def queue_post_now(request: Request, post_id: int):
                     "summary": fi["summary"] or "",
                     "content": fi["content"] or "",
                     "content_html": (fi["content_html"] if "content_html" in fi.keys() else "") or "",
+                    "categories": categories_from_value(fi["categories"]) if "categories" in fi.keys() else {},
                     "image_url": fi["image_url"] or "",
                 })
 

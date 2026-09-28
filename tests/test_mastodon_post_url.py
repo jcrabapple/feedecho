@@ -437,6 +437,45 @@ class TestMastodonIdempotencyKey:
 
         assert "Idempotency-Key" not in captured["headers"]
 
+    def test_post_status_sends_content_type_when_set(self, monkeypatch):
+        import mastodon
+
+        captured = {}
+
+        def fake_pinned_request(method, url, **kw):
+            captured.update(kw)
+            return _FakeResponse()
+
+        monkeypatch.setattr(mastodon, "pinned_request", fake_pinned_request)
+
+        mastodon.post_status(
+            instance="https://example.com",
+            access_token="tok",
+            content="**hello**",
+            content_type="text/markdown",
+        )
+
+        assert captured["data"]["content_type"] == "text/markdown"
+
+    def test_post_status_omits_content_type_when_unset(self, monkeypatch):
+        import mastodon
+
+        captured = {}
+
+        def fake_pinned_request(method, url, **kw):
+            captured.update(kw)
+            return _FakeResponse()
+
+        monkeypatch.setattr(mastodon, "pinned_request", fake_pinned_request)
+
+        mastodon.post_status(
+            instance="https://mastodon.social",
+            access_token="tok",
+            content="hello",
+        )
+
+        assert "content_type" not in captured["data"]
+
     def test_send_mastodon_passes_a_deterministic_key_across_calls(
         self, db_tmp, monkeypatch, setup_echo
     ):

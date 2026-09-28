@@ -28,6 +28,7 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
+- **Markdown posting** — per-echo flag on Mastodon destinations that sends `content_type=text/markdown`, so GoToSocial and other Markdown-capable servers render `**bold**` and `[links](url)`; stock Mastodon ignores the field and treats the body as plain text
 - **Image attachments** — automatically attach the feed item's images: up to 4 per post on Mastodon and Bluesky, up to 4 inline on email, and the first image on Matrix, micro.blog, Discord, and Telegram
 - **AI alt text** — optionally generate image descriptions via an OpenAI-compatible vision API
 - **Digest mode** — batch email deliveries into hourly digests instead of one email per item

@@ -28,6 +28,7 @@ reach the filesystem, imports, or Python builtins.
 import re
 import unicodedata
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
 from jinja2 import TemplateSyntaxError
@@ -91,8 +92,6 @@ def _format_date(date_str: str | None, fmt: str) -> str:
         dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         try:
-            from email.utils import parsedate_to_datetime
-
             dt = parsedate_to_datetime(date_str)
         except (ValueError, TypeError, OverflowError):
             dt = None

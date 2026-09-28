@@ -233,3 +233,27 @@ def test_shout_alias_still_works(compose_env, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["success"] is True
     assert resp.json()["status"] == "success"
+
+
+def test_compose_preview_renders_categories_from_db(compose_env):
+    """PR #45 build-out: categories persist through feed_items and reach the
+    compose preview render (the DB-rebuilt item dict), not just fresh parses."""
+    import json
+
+    with database.get_db() as db:
+        db.execute(
+            "UPDATE feed_items SET categories = ? WHERE id = 1",
+            (json.dumps({
+                "http://albopop.it/specs#item-category-type": "MUNICIPIO 7",
+                "item-category-type": "MUNICIPIO 7",
+            }),),
+        )
+
+    client = TestClient(app)
+    _as_u1(client)
+    resp = client.get(
+        "/api/reader/1/compose",
+        params={"template": "[{{ categories['item-category-type'] }}] {{ title }}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["rendered"]["mastodon:1"] == "[MUNICIPIO 7] Article One"

@@ -122,3 +122,63 @@ class TestSendPassesContentType:
         }) is True
         assert len(sent) == 1
         assert sent[0].get("content_type") is None
+
+
+class TestUseMarkdownImportExport:
+    """PR #47 build-out: the flag round-trips through import/export and the
+    import clamp mirrors the form clamp (mastodon-only)."""
+
+    def _payload(self, use_markdown_value, dest_type="mastodon", dest_id=1):
+        return {
+            "format": "feedecho-export",
+            "version": 1,
+            "feeds": [{"id": 1, "name": "F", "url": "https://a.example/rss"}],
+            "accounts": {
+                "mastodon": [{"id": 1, "name": "m", "username": "u", "instance": "https://example.com", "access_token": "tok"}],
+                "email": [{"id": 1, "name": "e", "email": "t@example.com"}],
+            },
+            "echoes": [{
+                "feed_id": 1, "destination_type": dest_type, "destination_id": dest_id,
+                "template": "t", "visibility": "public", "enabled": 1,
+                "attach_image": 0, "use_markdown": use_markdown_value,
+                "delivery_mode": "instant",
+            }],
+        }
+
+    def test_use_markdown_survives_import(self, db_tmp):
+        import import_export
+
+        with database.get_db() as db:
+            summary = import_export.import_data(db, 1, self._payload(1))
+            assert summary["added_echoes"] == 1
+            row = db.execute("SELECT use_markdown FROM echoes").fetchone()
+        assert row["use_markdown"] == 1
+
+    def test_use_markdown_clamped_on_non_mastodon_import(self, db_tmp):
+        import import_export
+
+        with database.get_db() as db:
+            summary = import_export.import_data(
+                db, 1, self._payload(1, dest_type="email")
+            )
+            assert summary["added_echoes"] == 1
+            row = db.execute("SELECT use_markdown FROM echoes").fetchone()
+        assert row["use_markdown"] == 0
+
+    def test_export_includes_use_markdown(self, db_tmp):
+        import import_export
+
+        with database.get_db() as db:
+            db.execute("INSERT INTO feeds (name, url) VALUES ('f', 'https://e.com/feed')")
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token)"
+                " VALUES ('m', 'u', 'https://example.com', 'tok')"
+            )
+            db.execute(
+                "INSERT INTO echoes (feed_id, destination_type, destination_id, template,"
+                " visibility, use_markdown, enabled)"
+                " VALUES (1, 'mastodon', 1, 't', 'public', 1, 1)"
+            )
+            payload = import_export.build_export(db, 1)
+        echo = payload["echoes"][0]
+        assert echo["use_markdown"] == 1

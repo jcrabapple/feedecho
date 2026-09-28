@@ -232,6 +232,8 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ date }}` | Publication date (raw) |
 | `{{ date_iso }}` | ISO 8601 date (2024-01-15T09:30:00) |
 | `{{ date_short }}` | Short date (2024-01-15) |
+| `{{ … \| date_short }}` | Filter: format any ISO 8601 or RFC 822 date string as `YYYY-MM-DD` (e.g. an RSS `pubDate`) |
+| `{{ … \| date_iso }}` | Filter: same input → `YYYY-MM-DDTHH:MM:SS` |
 | `{{ tags }}` | Raw tag list |
 | `{{ hashtags }}` | Feed tags as #hashtags |
 | `{{ image_url }}` | First image URL from the item |
@@ -247,6 +249,7 @@ Examples:
 {% if summary %}{{ title }} - {{ summary | truncate(90) }}{% else %}{{ title }} {{ link }}{% endif %}
 {{ title }} by {{ author | default('unknown', true) }} {{ link }}
 {{ feed_name }}: {{ title }} {{ link }}
+fino al {{ item.expires | date_short }}
 ```
 
 The echo form has a **Preview** button that renders the current template
@@ -254,7 +257,9 @@ against the feed's three most recent items, and template syntax errors are
 rejected at save time. Rendered posts longer than the platform limit are
 truncated before posting (500 chars Mastodon, 300 graphemes Bluesky;
 micro.blog has no hard cap); use `| truncate(N)` to control where the cut
-happens.
+happens. Date filters (`| date_short`, `| date_iso`) accept ISO 8601 and
+RFC 822 strings — useful for date-like fields that are not the item's
+main `{{ date }}`.
 
 ## Architecture
 

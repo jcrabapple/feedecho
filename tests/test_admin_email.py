@@ -198,7 +198,7 @@ class TestSystemVsPerUserSmtp:
         with _client(ADMIN_ID, "admin@example.com") as c:
             _save_smtp(c)
         calls = []
-        monkeypatch.setattr(email_sender, "_send_via", lambda cfg, to, subj, body: calls.append((cfg, to, subj)))
+        monkeypatch.setattr(email_sender, "_send_via", lambda cfg, to, subj, body, **kwargs: calls.append((cfg, to, subj)))
         email_sender.send_system_email("target@example.com", "Subject", "Body")
         assert calls and calls[0][0]["host"] == "smtp.example.com"
         assert calls[0][1] == "target@example.com"

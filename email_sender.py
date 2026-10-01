@@ -111,6 +111,7 @@ def _send_via(
     body: str,
     images: list[dict] | None = None,
     render_html: bool = False,
+    system_html: str | None = None,
 ) -> None:
     """Send one email through the given SMTP config. Raises on failure.
 
@@ -123,6 +124,12 @@ def _send_via(
     with render_html set, embedding the ingest-sanitized {{ content_html }}).
     The plain-text alternative is then derived from the HTML, and the escape
     step is skipped; only ingest-sanitized markup reaches this path.
+
+    system_html (system mail only) supplies the HTML alternative directly:
+    deployment-authored markup that must NOT go through sanitize_html, whose
+    allowlist strips the inline styles a designed email needs. Every dynamic
+    value interpolated into it is escaped at the call site (html.escape);
+    the plain-text `body` remains the fallback alternative.
     """
     if settings.MULTI:
         # Re-validate the relay at dial time, not just save time. smtplib
@@ -185,6 +192,8 @@ def _send_via(
         if images:
             for i, image in enumerate(images):
                 root.attach(_mime_image_part(f"image{i}@feedecho", image))
+    if system_html is not None:
+        alternative.attach(MIMEText(system_html, "html"))
 
     context = ssl.create_default_context()
     port = cfg["port"]
@@ -227,12 +236,20 @@ def send_email(
     return {"success": True}
 
 
-def send_system_email(to_email: str, subject: str, body: str) -> dict:
-    """Send a system email via the deployment SMTP. Raises on failure."""
+def send_system_email(
+    to_email: str, subject: str, body: str, html_body: str | None = None
+) -> dict:
+    """Send a system email via the deployment SMTP. Raises on failure.
+
+    html_body optionally supplies the HTML alternative (designed digests and
+    value emails). It is deployment-authored markup and is deliberately NOT
+    sanitized — escape every interpolated dynamic value with html.escape at
+    the call site; `body` stays the plain-text fallback either way.
+    """
     settings = get_system_smtp_settings()
     if not settings:
         raise ValueError("System SMTP not configured. Configure it in the admin dashboard.")
-    _send_via(settings, to_email, subject, body)
+    _send_via(settings, to_email, subject, body, system_html=html_body)
     return {"success": True}
 
 

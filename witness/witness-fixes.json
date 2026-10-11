@@ -1,0 +1,97 @@
+{
+  "fixes": [
+    {
+      "id": "CSRF-NULL-ORIGIN",
+      "desc": "v1.47.1: null Origin accepted only with Sec-Fetch-Site: same-origin (mobile login 403s)",
+      "file": "app.py",
+      "marker": "if request.headers.get(\"sec-fetch-site\", \"\").strip().lower() == \"same-origin\":"
+    },
+    {
+      "id": "REFERRER-POLICY-HEADER",
+      "desc": "v1.47.1: strict-origin-when-cross-origin, never no-referrer (no-referrer serializes same-origin POSTs as Origin: null)",
+      "file": "app.py",
+      "marker": "h[\"Referrer-Policy\"] = \"strict-origin-when-cross-origin\"",
+      "forbid": "\"Referrer-Policy\"\\]\\s*=\\s*\"no-referrer\""
+    },
+    {
+      "id": "REFERRER-POLICY-META",
+      "desc": "v1.47.1: base.html meta must match the header policy",
+      "file": "templates/base.html",
+      "marker": "<meta name=\"referrer\" content=\"strict-origin-when-cross-origin\">"
+    },
+    {
+      "id": "CSP-FORM-ACTION-SCOPED",
+      "desc": "v1.54.1: scheme-level form-action only on pages whose forms leave the origin (Stripe/OAuth redirects)",
+      "file": "app.py",
+      "marker": "form_action = \"form-action 'self' https:\" if wide else \"form-action 'self'\""
+    },
+    {
+      "id": "CONTAINER-NO-USER",
+      "desc": "v1.13.6: no USER directive; a bare USER breaks pre-existing volumes (readonly sqlite)",
+      "file": "Dockerfile",
+      "marker": "ENTRYPOINT [\"/app/docker-entrypoint.sh\"]",
+      "forbid": "^USER\\s"
+    },
+    {
+      "id": "CONTAINER-SETPRIV-DROP",
+      "desc": "v1.13.6: entrypoint drops root to uid 10001 after the conditional chown",
+      "file": "docker-entrypoint.sh",
+      "marker": "exec setpriv --reuid=\"$APP_UID\" --regid=\"$APP_GID\" --clear-groups \"$@\""
+    },
+    {
+      "id": "OAUTH-EXCHANGE-NO-REFRESH",
+      "desc": "issue #7: token exchange pins the cached registration; a re-register mid-flow swaps client_id",
+      "file": "oauth.py",
+      "marker": "app = get_or_create_app(instance, allow_refresh=False)"
+    },
+    {
+      "id": "PG-NULLS-LAST-ORDER",
+      "desc": "dialect: Postgres sorts NULLs first on DESC; explicit IS NULL key keeps sqlite/PG identical",
+      "file": "database.py",
+      "marker": "ORDER BY published_at IS NULL, published_at DESC, id DESC"
+    },
+    {
+      "id": "ALPN-RETRY",
+      "desc": "v1.62.2: one-shot no-ALPN retry for edges that drop ALPN-advertising clients",
+      "file": "feed_parser.py",
+      "marker": "client, backend = ssrf_client([url], no_alpn=True)"
+    },
+    {
+      "id": "SSRF-CGNAT-EXPLICIT-CHECKS",
+      "desc": "SSRF: explicit range checks + CGNAT; `not is_global` would allow multicast/NAT64 on 3.14",
+      "file": "feed_parser.py",
+      "marker": "or (ip.version == 4 and ip in _CGNAT_V4)",
+      "forbid": "return\\s+not\\s+ip\\.is_global"
+    },
+    {
+      "id": "SINGLE-AUTH-FAIL-CLOSED",
+      "desc": "v1.69.0 SEC-01: no AUTH_TOKEN and no ALLOW_INSECURE fails closed even under --lifespan off",
+      "file": "app.py",
+      "marker": "if not settings.AUTH_TOKEN and not settings.ALLOW_INSECURE:"
+    },
+    {
+      "id": "TOKEN-COMPARE-BYTES",
+      "desc": "compare_digest on bytes; str with non-ASCII raises TypeError -> attacker-triggered 500",
+      "file": "app.py",
+      "marker": "token.encode(\"utf-8\", \"surrogatepass\"),"
+    },
+    {
+      "id": "READER-PLAN-FAIL-CLOSED",
+      "desc": "v1.34.1: reader gate reads the plan's own dict; limit_for falls back to trial for unknown plans",
+      "file": "plans.py",
+      "marker": "limits = settings.PLAN_LIMITS.get(plan)\n    if limits is None:\n        return False\n    return bool(limits.get(\"reader\", 0))"
+    },
+    {
+      "id": "ENV-LEGACY-PREFIX",
+      "desc": "issue #15: settings.env() still honours the pre-v1.32 misspelled prefix",
+      "file": "settings.py",
+      "marker": "legacy = LEGACY_ENV_PREFIX + name"
+    },
+    {
+      "id": "BLUESKY-THUMB-1MB",
+      "desc": "v1.73.0: external-embed thumb cap is 1 MB per lexicon, not the 2 MB image cap",
+      "file": "bluesky.py",
+      "marker": "EXTERNAL_THUMB_MAX_BYTES = 1_000_000"
+    }
+  ]
+}

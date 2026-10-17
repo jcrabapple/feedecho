@@ -2031,7 +2031,7 @@ def _fetch_bluesky_link_meta(echo, item: FeedItem, uri: str) -> dict | None:
     cached metadata instead of re-fetching the page from origin.
     """
     try:
-        return fetch_page_metadata(uri)
+        meta = fetch_page_metadata(uri)
     except Exception:
         logger.warning(
             "Echo %s: Bluesky link card metadata fetch failed for item %s, "
@@ -2041,6 +2041,20 @@ def _fetch_bluesky_link_meta(echo, item: FeedItem, uri: str) -> dict | None:
             exc_info=True,
         )
         return None
+    if meta is None:
+        # fetch_page_metadata never raises and reports WHY it gave up at
+        # DEBUG only (dead links are routine), so without this line a skipped
+        # card is invisible at the default INFO level and an operator cannot
+        # tell "card skipped" from "this build has no cards".
+        logger.info(
+            "Echo %s: no link card for item %s: could not read page metadata "
+            "from %s (fetch failed, blocked, or not HTML; set "
+            "FEEDECHO_LOG_LEVEL=DEBUG for the cause), posting without a card",
+            echo["id"],
+            item["id"],
+            uri,
+        )
+    return meta
 
 
 def _build_bluesky_link_card(
@@ -2094,10 +2108,11 @@ def _build_bluesky_link_card(
             thumb_blob=thumb_blob,
         )
         logger.info(
-            "Echo %s: attached Bluesky link card for item %s (%s)",
+            "Echo %s: attached Bluesky link card for item %s (%s, %s)",
             echo["id"],
             item["id"],
             uri,
+            "with thumbnail" if thumb_blob else "no thumbnail",
         )
         return card
     except BlueskyAuthError:

@@ -97,6 +97,8 @@ docker run -d --name feedecho \
   feedecho
 ```
 
+Updating later? A running install does not pick up new releases by itself. See [Updating](#updating).
+
 ### Environment variables
 
 | Variable | Required | Purpose |
@@ -121,7 +123,7 @@ git clone https://github.com/jcrabapple/feedecho.git
 cd feedecho
 python -m venv .venv
 source .venv/bin/activate
-pip install fastapi "uvicorn[standard]" jinja2 python-multipart feedparser httpx apscheduler cryptography pillow
+pip install fastapi "uvicorn[standard]" jinja2 python-multipart feedparser httpx apscheduler cryptography pillow nh3
 FEEDECHO_AUTH_TOKEN=your-token python -m uvicorn app:app --host 0.0.0.0 --port 8453
 ```
 
@@ -149,6 +151,43 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 }
 ```
 
+### Updating
+
+FeedEcho does not update itself. A container keeps running the image it was created from, and `docker compose up -d` does not check the registry for a newer `latest`, so an install stays on the version it started with until you update it. Your version is in the footer of every page once you are logged in, and it links to the [release notes](https://github.com/jcrabapple/feedecho/releases). Check it after an update to confirm the new build is the one running.
+
+Your data lives in the `feedecho-data` volume (or wherever `FEEDECHO_DB_PATH` points) and survives every update below. You do not need to re-add feeds, accounts, or echoes.
+
+If you use the pre-built image (the `image:` line is active in your compose file), pull the new image and recreate the container:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+To have every `up` check the registry for you, uncomment `pull_policy: always` in `docker-compose.yml`, or run `docker compose up -d --pull always`.
+
+If you build from a clone (`build: .` is active), there is no image to pull. Update the code and rebuild:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+With plain Docker, update the code, rebuild the image, and recreate the container with the same `docker run` options you used the first time. The named volume keeps your data:
+
+```bash
+git pull
+docker build -t feedecho .
+docker rm -f feedecho
+# then run your original `docker run ...` command again
+```
+
+If you manage the container through a NAS or container-manager UI, the mechanics are the same: pull the new image, then recreate the container.
+
+From source, run `git pull`, re-run the `pip install` line under [From source](#from-source) (releases occasionally add a dependency), and restart the process. If you run it as the systemd user service under [Deployment](#deployment), that is `systemctl --user restart <your unit name>`.
+
+On NixOS, see [`nix/README.md`](nix/README.md).
+
 ## Usage
 
 1. **Add a Mastodon account** — Go to `/accounts`, enter your instance URL, click "Connect Account". OAuth handles the rest.
@@ -167,7 +206,7 @@ FeedEcho ships a Nix flake and a NixOS module. See [`nix/README.md`](nix/README.
 - Accounts connect via **App Passwords**, which are scoped to creating posts (and other app activity) and can be revoked individually without changing your main password.
 - Sessions are cached per account (access + refresh JWTs in SQLite) and refreshed automatically; expired tokens trigger a transparent re-login and one retry.
 - Posts are truncated to **300 graphemes** (Unicode-aware) and, separately, to Bluesky's 3000-byte limit on the post text; URLs and #hashtags in the text get proper richtext facets, so links are clickable and hashtags become real, searchable Bluesky tags.
-- **Link cards**: when a post has no image embed, the first link in it (a template `{{ content_link }}`/rich anchor wins over a trailing bare URL) gets a real Bluesky link card — FeedEcho fetches the page's Open Graph metadata, attaches the title/description, and uploads the `og:image` as the card thumbnail (downscaled to Bluesky's 1 MB card limit; a missing or broken thumbnail just means a card without the image, and a page that won't fetch means a cardless post — never a failed one).
+- **Link cards**: when a post has no image embed, the first link in it (a template `{{ content_link }}`/rich anchor wins over a trailing bare URL) gets a real Bluesky link card — FeedEcho fetches the page's Open Graph metadata, attaches the title/description, and uploads the `og:image` as the card thumbnail (downscaled to Bluesky's 1 MB card limit; a missing or broken thumbnail just means a card without the image, and a page that won't fetch means a cardless post — never a failed one). Each post that is eligible for a card logs what happened at the default log level: `attached Bluesky link card …` (it says whether a thumbnail went with it) or `no link card …`. Set `FEEDECHO_LOG_LEVEL=DEBUG` to see why a page was unreadable.
 - Image attachments upload through the PDS blob API with an `app.bsky.embed.images` embed carrying **up to 4 images** per post; each image's alt text uses the feed's own description when it provides one, otherwise your AI vision config when enabled. Images are capped at 2 MB each and jpeg/png/webp/gif (Bluesky's limits); oversized JPEG/PNG/WebP sources are downscaled or re-encoded to fit automatically, and one image that fails to fetch or upload is skipped without dropping the rest of the post.
 - Content warnings and visibility settings are Mastodon-only and are ignored for Bluesky posts.
 

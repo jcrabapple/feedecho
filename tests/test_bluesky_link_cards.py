@@ -7,6 +7,8 @@ Graph metadata and attach a card (the Echofeed behavior members expect);
 any failure degrades to the old cardless post.
 """
 
+import logging
+
 import pytest
 
 
@@ -426,6 +428,110 @@ class TestFetchPageMetadata:
         self._mock_fetch(monkeypatch, content=page)
         meta = feed_parser.fetch_page_metadata("https://example.com/posts/1")
         assert meta["image"] == "https://example.com/img/c.jpg"
+
+    # The Bluesky caller's INFO "no link card" line tells operators to set
+    # FEEDECHO_LOG_LEVEL=DEBUG for the cause, so EVERY None return must state
+    # one. Before this, SSRF refusals, unresolvable hosts and non-HTML pages
+    # were silent and HTTP failures omitted the status (a WAF 403 and a dead
+    # 404 read the same).
+
+    @staticmethod
+    def _debug_lines(caplog):
+        return [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "feedecho.feed_parser" and r.levelno == logging.DEBUG
+        ]
+
+    def test_unsafe_url_reason_is_logged(self, monkeypatch, caplog):
+        """BUG pin: a refused URL used to return None without a word."""
+        import feed_parser
+        from feed_parser import SSRFError
+
+        def refuse(url):
+            raise SSRFError("Blocked: IP address 127.0.0.1 is in a private/reserved range")
+
+        monkeypatch.setattr(feed_parser, "validate_outbound_url", refuse)
+        with caplog.at_level(logging.DEBUG, logger="feedecho.feed_parser"):
+            assert feed_parser.fetch_page_metadata("http://127.0.0.1:8080/") is None
+
+        lines = self._debug_lines(caplog)
+        assert any(
+            "http://127.0.0.1:8080/" in line and "private/reserved" in line for line in lines
+        ), lines
+
+    def test_non_html_reason_is_logged(self, monkeypatch, caplog):
+        """BUG pin: a non-HTML response used to return None without a word."""
+        import feed_parser
+
+        self._mock_fetch(
+            monkeypatch, content=b"%PDF-1.4", raw_type="application/pdf; charset=binary"
+        )
+        with caplog.at_level(logging.DEBUG, logger="feedecho.feed_parser"):
+            assert feed_parser.fetch_page_metadata("https://example.com/doc.pdf") is None
+
+        lines = self._debug_lines(caplog)
+        assert any("application/pdf" in line and "not HTML" in line for line in lines), lines
+
+    @pytest.mark.parametrize("status", [403, 404, 500])
+    def test_http_status_is_logged(self, status, monkeypatch, caplog):
+        """BUG pin: the log said 'failed' but not why; the status separates a
+        WAF block (403/429) from a dead link (404)."""
+        import httpx
+
+        import feed_parser
+
+        response = httpx.Response(status, request=httpx.Request("GET", "https://example.com/"))
+        self._mock_fetch(
+            monkeypatch,
+            exc=httpx.HTTPStatusError(str(status), request=response.request, response=response),
+        )
+        monkeypatch.setattr("settings.FALLBACK_PROXY_URL", "")
+        with caplog.at_level(logging.DEBUG, logger="feedecho.feed_parser"):
+            assert feed_parser.fetch_page_metadata("https://example.com/p") is None
+
+        lines = self._debug_lines(caplog)
+        assert any(f"HTTP {status}" in line for line in lines), lines
+
+    def test_fallback_proxy_failure_logs_origin_status_and_cause(self, monkeypatch, caplog):
+        """BUG pin: a dead fallback proxy used to vanish without its traceback."""
+        import httpx
+
+        import feed_parser
+
+        response = httpx.Response(403, request=httpx.Request("GET", "https://example.com/"))
+        self._mock_fetch(
+            monkeypatch,
+            exc=httpx.HTTPStatusError("403", request=response.request, response=response),
+        )
+        monkeypatch.setattr("settings.FALLBACK_PROXY_URL", "https://proxy.example")
+
+        def dead_proxy(url, headers, max_bytes):
+            raise RuntimeError("proxy exploded")
+
+        monkeypatch.setattr(feed_parser, "_fetch_via_fallback_proxy", dead_proxy)
+        with caplog.at_level(logging.DEBUG, logger="feedecho.feed_parser"):
+            assert feed_parser.fetch_page_metadata("https://example.com/p") is None
+
+        fallback = [
+            r for r in caplog.records
+            if r.name == "feedecho.feed_parser"
+            and r.levelno == logging.DEBUG
+            and "fallback" in r.getMessage()
+        ]
+        assert len(fallback) == 1
+        assert "HTTP 403" in fallback[0].getMessage()
+        assert fallback[0].exc_info and "proxy exploded" in str(fallback[0].exc_info[1])
+
+    def test_success_logs_nothing_at_debug(self, monkeypatch, caplog):
+        """SEMANTICS pin (green before and after): a readable page is silent."""
+        import feed_parser
+
+        self._mock_fetch(monkeypatch, content=self.OG)
+        with caplog.at_level(logging.DEBUG, logger="feedecho.feed_parser"):
+            assert feed_parser.fetch_page_metadata("https://example.com/post") is not None
+
+        assert not [line for line in self._debug_lines(caplog) if "Page metadata" in line]
 
 
 # ── delivery wiring ──────────────────────────────────────────────────────────
@@ -861,3 +967,168 @@ class TestLinkCardDelivery:
         assert len(sent) == 1
         assert sent[0]["embed"]["external"]["thumb"]["ref"]["$link"] == "bafkreifresh"
         assert sent[0]["access_jwt"] == "aj-2"
+
+
+# ── Diagnosability: the card outcome is visible at the default INFO level ────
+#
+# fetch_page_metadata reports why it gave up at DEBUG only (dead links are
+# routine), so a skipped card used to leave NO trace at the default level. An
+# operator looking at cardless posts could not tell "the page was unreadable"
+# from "this build has no link cards". Each card-eligible post now logs one line
+# saying what happened, and the success line says whether a thumbnail went along.
+
+
+def _scheduler_records(caplog):
+    return [r for r in caplog.records if r.name == "feedecho.scheduler"]
+
+
+class TestLinkCardLogging:
+    def test_skipped_card_logs_one_info_line_with_item_and_url(
+        self, db_tmp, monkeypatch, caplog
+    ):
+        """BUG pin: unreadable page -> exactly one INFO line naming echo, item, URL."""
+        import scheduler
+
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: sent.append(kw) or {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(scheduler, "fetch_page_metadata", lambda url: None)
+
+        echo = _setup_bluesky_echo(db_tmp)
+        with caplog.at_level(logging.INFO, logger="feedecho.scheduler"):
+            ok = scheduler.process_echo(echo, _item())
+
+        assert ok is True
+        assert sent[0]["embed"] is None
+        skips = [r for r in _scheduler_records(caplog) if "no link card" in r.getMessage()]
+        assert len(skips) == 1
+        assert skips[0].levelno == logging.INFO
+        msg = skips[0].getMessage()
+        assert "Echo 1" in msg
+        assert "item-1" in msg
+        assert "https://example.com/post/1" in msg
+        assert "FEEDECHO_LOG_LEVEL=DEBUG" in msg
+
+    def test_attached_card_logs_no_skip_line(self, db_tmp, monkeypatch, caplog):
+        """SEMANTICS pin (green before and after): the skip line means no card."""
+        import scheduler
+
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: {"title": "T", "description": "", "image": ""},
+        )
+
+        echo = _setup_bluesky_echo(db_tmp)
+        with caplog.at_level(logging.INFO, logger="feedecho.scheduler"):
+            assert scheduler.process_echo(echo, _item()) is True
+
+        records = _scheduler_records(caplog)
+        assert not [r for r in records if "no link card" in r.getMessage()]
+        attached = [r for r in records if "attached Bluesky link card" in r.getMessage()]
+        assert len(attached) == 1
+        assert attached[0].levelno == logging.INFO
+
+    def test_metadata_exception_warns_once_and_adds_no_skip_line(
+        self, db_tmp, monkeypatch, caplog
+    ):
+        """SEMANTICS pin: the exception path keeps its WARNING; one line per outcome."""
+        import scheduler
+
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+
+        def boom(url):
+            raise RuntimeError("metadata bug")
+
+        monkeypatch.setattr(scheduler, "fetch_page_metadata", boom)
+
+        echo = _setup_bluesky_echo(db_tmp)
+        with caplog.at_level(logging.INFO, logger="feedecho.scheduler"):
+            assert scheduler.process_echo(echo, _item()) is True
+
+        records = _scheduler_records(caplog)
+        warned = [
+            r for r in records
+            if r.levelno == logging.WARNING and "metadata fetch failed" in r.getMessage()
+        ]
+        assert len(warned) == 1
+        assert not [r for r in records if "no link card" in r.getMessage()]
+
+    def test_attached_line_says_with_thumbnail(self, db_tmp, monkeypatch, caplog):
+        """BUG pin: a card that carries the og:image says so."""
+        import scheduler
+
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: {
+                "title": "T",
+                "description": "",
+                "image": "https://example.com/cover.jpg",
+            },
+        )
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"fake-image-bytes", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler,
+            "upload_blob",
+            lambda **kw: {"$type": "blob", "ref": {"$link": "bafkrei"}},
+        )
+
+        echo = _setup_bluesky_echo(db_tmp)
+        with caplog.at_level(logging.INFO, logger="feedecho.scheduler"):
+            assert scheduler.process_echo(echo, _item()) is True
+
+        msgs = [
+            r.getMessage() for r in _scheduler_records(caplog)
+            if "attached Bluesky link card" in r.getMessage()
+        ]
+        assert len(msgs) == 1
+        assert "with thumbnail" in msgs[0]
+        assert "no thumbnail" not in msgs[0]
+
+    @pytest.mark.parametrize(
+        "image",
+        ["", "https://example.com/dead.jpg"],
+        ids=["page-has-no-og-image", "og-image-will-not-fetch"],
+    )
+    def test_attached_line_says_no_thumbnail(self, image, db_tmp, monkeypatch, caplog):
+        """BUG pin: both ways to end up with an image-less card are named in the log."""
+        import scheduler
+
+        monkeypatch.setattr(
+            scheduler, "create_post", lambda **kw: {"uri": "u", "cid": "c"}
+        )
+        _stub_session(monkeypatch)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_page_metadata",
+            lambda url: {"title": "T", "description": "", "image": image},
+        )
+        monkeypatch.setattr(scheduler, "fetch_image", lambda url: None)
+
+        echo = _setup_bluesky_echo(db_tmp)
+        with caplog.at_level(logging.INFO, logger="feedecho.scheduler"):
+            assert scheduler.process_echo(echo, _item()) is True
+
+        msgs = [
+            r.getMessage() for r in _scheduler_records(caplog)
+            if "attached Bluesky link card" in r.getMessage()
+        ]
+        assert len(msgs) == 1
+        assert "no thumbnail" in msgs[0]
+        assert "with thumbnail" not in msgs[0]

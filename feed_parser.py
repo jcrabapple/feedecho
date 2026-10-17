@@ -1531,7 +1531,11 @@ def fetch_page_metadata(url: str) -> dict | None:
     """
     try:
         validate_outbound_url(url)
-    except SSRFError:
+    except SSRFError as exc:
+        # A refused or unresolvable URL is silent otherwise, and the reason
+        # (private address, DNS failure) is the whole diagnosis. The Bluesky
+        # caller logs the INFO-level "no link card" line and points here.
+        logger.debug("Page metadata skipped for %s: %s", url, exc)
         return None
 
     headers = {"User-Agent": USER_AGENT}
@@ -1544,16 +1548,23 @@ def fetch_page_metadata(url: str) -> dict | None:
         finally:
             client.close()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in (403, 429) and settings.FALLBACK_PROXY_URL:
+        status = exc.response.status_code
+        if status in (403, 429) and settings.FALLBACK_PROXY_URL:
             try:
                 content, raw_type, _meta = _fetch_via_fallback_proxy(
                     url, headers, MAX_PAGE_METADATA_BYTES
                 )
             except Exception:
-                logger.debug("Page metadata fallback fetch failed for %s", url)
+                logger.debug(
+                    "Page metadata fallback fetch failed for %s (origin returned HTTP %s)",
+                    url,
+                    status,
+                    exc_info=True,
+                )
                 return None
         else:
-            logger.debug("Page metadata fetch failed for %s", url)
+            # The status is what tells a WAF block (403/429) from a dead link.
+            logger.debug("Page metadata fetch failed for %s: HTTP %s", url, status)
             return None
     except Exception:
         logger.debug("Page metadata fetch failed for %s", url, exc_info=True)
@@ -1561,6 +1572,11 @@ def fetch_page_metadata(url: str) -> dict | None:
 
     content_type = raw_type.split(";")[0].strip().lower()
     if content_type and "html" not in content_type and "xml" not in content_type:
+        logger.debug(
+            "Page metadata skipped for %s: content type %s is not HTML",
+            url,
+            content_type,
+        )
         return None
     text = content.decode("utf-8", errors="replace")
     return _extract_page_metadata(text, base_url=url)

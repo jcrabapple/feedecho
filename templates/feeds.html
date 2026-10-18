@@ -8,7 +8,7 @@
     <div style="padding: 0.5rem 0;">
         <p class="hint">Drag this link to your bookmarks bar, then click it on any article or blog page to open FeedEcho with that page's URL prefilled — FeedEcho resolves the site's feed link automatically.</p>
         <p><a href="javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ request.url.scheme }}://{{ request.url.netloc }}/feeds?add='+encodeURIComponent(u);})()" title="Drag me to your bookmarks bar">+ Subscribe</a></p>
-        <p>Or copy this snippet into a bookmark's URL field:</p>
+        <p>Or copy this snippet into a bookmark's URL field (replace <code>{% raw %}{{ scheme }}://{{ netloc }}{% endraw %}</code> with this page's base URL):</p>
         {% raw %}<pre>javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ scheme }}://{{ netloc }}/feeds?add='+encodeURIComponent(u);})()</pre>{% endraw %}
     </div>
 </details>

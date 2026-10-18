@@ -352,3 +352,148 @@ class TestPlanCap:
         with database.get_db() as db:
             n = db.execute("SELECT COUNT(*) AS n FROM queued_posts").fetchone()["n"]
         assert n == 10
+
+
+class TestQueueModeIngestion:
+    def test_queue_mode_feed_stores_items_without_reader(self, db_tmp, monkeypatch):
+        """A feed with ONLY a queue/review echo (read_enabled=0) must ingest
+        feed_items: the queue reconstructs images/link-card metadata from
+        them at dispatch (delta-gate F-03 residual)."""
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token) VALUES (?, ?, ?, ?)",
+                ("main", "user", "https://mastodon.social", "tok"),
+            )
+            # read_enabled stays 0 (the default for echo-only feeds).
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES (?, ?)",
+                ("Echo-only Feed", "https://example.com/feed"),
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, delivery_mode, attach_image, enabled)
+                   VALUES (1, 'mastodon', 1, '{{ title }}', 'public', 'queue', 1, 1)"""
+            )
+
+        feed_data = {
+            "title": "Echo-only Feed",
+            "url": "https://example.com/feed",
+            "type": "rss",
+            "items": [{
+                "id": "item-new",
+                "title": "Item with image",
+                "link": "https://example.com/post/9",
+                "summary": "sum",
+                "content": "full body",
+                "content_text": "full body",
+                "image_url": "https://example.com/img.jpg",
+                "image_alt": "an image",
+                "author": "jason",
+                "date": "2026-10-18T10:00:00",
+                "tags": [],
+            }],
+        }
+        with database.get_db() as db:
+            feed = db.execute("SELECT * FROM feeds WHERE id = 1").fetchone()
+
+        # The 1st poll initializes the cursor to item-new (backfill guard);
+        # the 2nd poll sees a newer item-2 and delivers it into the queue,
+        # with feed_items ingested even though read_enabled=0.
+        monkeypatch.setattr(scheduler, "fetch_feed", lambda url, **kw: feed_data)
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "1"})
+
+        scheduler.check_feed(1)
+        feed_data["items"].insert(0, {
+            "id": "item-2",
+            "title": "Second item with image",
+            "link": "https://example.com/post/10",
+            "summary": "sum2",
+            "content": "full body 2",
+            "content_text": "full body 2",
+            "image_url": "https://example.com/img2.jpg",
+            "image_alt": "second image",
+            "author": "jason",
+            "date": "2026-10-18T11:00:00",
+            "tags": [],
+        })
+        scheduler.check_feed(1)
+
+        with database.get_db() as db:
+            fi = db.execute(
+                "SELECT id, image_url FROM feed_items WHERE feed_id = 1 AND item_id = 'item-2'"
+            ).fetchone()
+            qp = db.execute("SELECT feed_item_id, status FROM queued_posts WHERE item_id = 'item-2'").fetchone()
+        assert fi is not None, "queue-mode feed must ingest items without the reader"
+        assert fi["image_url"] == "https://example.com/img2.jpg"
+        assert qp is not None
+        assert qp["feed_item_id"] == fi["id"], "queued row must link the feed_items row"
+
+    def test_queue_mode_post_now_dispatches_image_metadata(self, db_tmp, monkeypatch):
+        """Dispatch through the queue for a read_enabled=0 feed carries the
+        item's image_url into the sender payload (the F-03 failure was a
+        blank image_url at _send_mastodon)."""
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token) VALUES (?, ?, ?, ?)",
+                ("main", "user", "https://mastodon.social", "tok"),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES (?, ?)",
+                ("Echo-only Feed", "https://example.com/feed"),
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, delivery_mode, attach_image, enabled)
+                   VALUES (1, 'mastodon', 1, '{{ title }}', 'public', 'queue', 1, 1)"""
+            )
+        feed_data = {
+            "title": "Echo-only Feed",
+            "url": "https://example.com/feed",
+            "type": "rss",
+            "items": [{
+                "id": "item-new",
+                "title": "Item with image",
+                "link": "https://example.com/post/9",
+                "summary": "sum",
+                "content": "full body",
+                "image_url": "https://example.com/img.jpg",
+                "image_alt": "an image",
+                "date": "2026-10-18T10:00:00",
+                "tags": [],
+            }],
+        }
+        monkeypatch.setattr(scheduler, "fetch_feed", lambda url, **kw: feed_data)
+
+        seen_media = []
+        def fake_upload(instance, access_token, image_bytes, content_type, description=""):
+            seen_media.append({"desc": description})
+            return {"id": "m1"}
+        monkeypatch.setattr(scheduler, "upload_media", fake_upload)
+        monkeypatch.setattr(scheduler, "fetch_image", lambda url: (b"\xff\xd8jpeg", "image/jpeg"))
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "1"})
+        # The slot is ~4h out; force the flush window by scheduling now.
+        monkeypatch.setattr(scheduler, "next_free_slot", lambda db, uid, t, i: scheduler._now())
+
+        # First poll initializes the feed cursor (no backfill); the second
+        # delivers item-2 into the queue at the forced slot.
+        scheduler.check_feed(1)
+        feed_data["items"].insert(0, {
+            "id": "item-2",
+            "title": "Item with image",
+            "link": "https://example.com/post/9",
+            "summary": "sum",
+            "content": "full body",
+            "image_url": "https://example.com/img.jpg",
+            "image_alt": "an image",
+            "date": "2026-10-18T10:00:00",
+            "tags": [],
+        })
+        scheduler.check_feed(1)
+        scheduler.flush_queue()
+
+        with database.get_db() as db:
+            row = db.execute(
+                "SELECT status FROM queued_posts WHERE item_id = 'item-2'"
+            ).fetchone()
+        assert row is not None and row["status"] == "sent"
+        assert seen_media and seen_media[0]["desc"] == "an image"

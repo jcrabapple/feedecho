@@ -511,10 +511,21 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
         return
 
     # Reader ingestion is decoupled from echo delivery: store every parsed
-    # item regardless of echo config, so a read-enabled feed keeps its reading
-    # list even before (or without) any attached echo. The cursor/ordering
-    # logic below runs only when echoes exist and is otherwise unchanged.
-    if read_enabled:
+    # item regardless of echo config when reading is on, so a read-enabled
+    # feed keeps its reading list even before (or without) any attached
+    # echo. Queue/review echoes ALSO need the ingestion: the curation queue
+    # reconstructs item metadata (images, link cards, categories) from
+    # feed_items at dispatch, so a feed destined for the queue must have
+    # its items stored even without the reader. The cursor/ordering logic
+    # below runs only when echoes exist and is otherwise unchanged.
+    try:
+        ingest_items = read_enabled or any(
+            (e["delivery_mode"] or "instant") in ("queue", "review") for e in echoes
+        )
+    except (KeyError, IndexError):
+        # Malformed echo rows: fall back to the read-enabled gate only.
+        ingest_items = read_enabled
+    if ingest_items:
         _store_feed_items(feed_id, items)
 
     if not echoes:
@@ -1049,20 +1060,21 @@ def _enqueue_for_queue_mode(
 
     # Resolve the feed_items row id so _flush_queue dispatches with the
     # full item metadata (images, content_html, categories) the way the
-    # Reader Compose enqueue does. A miss (pruned rows, cold feeds) is NOT
-    # fatal: the queued row still carries its rendered content, and
-    # _flush_queue already tolerates NULL there.
-    metadata_feed_item_id: int | None = None
+    # Reader Compose enqueue does. _check_feed_with_lease ingests items for
+    # ANY feed with a queue/review echo (the same condition that routes us
+    # here), but the row can still be absent (pruned by retention before a
+    # late slot, or the item fell out of the feed) — a miss is NOT fatal:
+    # the queued row carries its rendered content and _flush_queue
+    # tolerates NULL there (http metadata is then blank, matching the
+    # manual-compose fallback).
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as db:
         fi_row = db.execute(
             "SELECT id FROM feed_items WHERE feed_id = ? AND item_id = ?",
             (feed_id, item_id),
         ).fetchone()
-        if fi_row:
-            metadata_feed_item_id = fi_row["id"]
+        metadata_feed_item_id = fi_row["id"] if fi_row else None
 
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    with get_db() as db:
         # One-shot echo at enqueue time so crash-recovery retries reuse the
         # same echo_id (idempotency key for _claim_post), mirroring the
         # Reader Compose desk's insert. The stored content carries the real

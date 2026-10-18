@@ -55,7 +55,12 @@ def _field_text(item: dict, field: str) -> str:
     (tag names, attribute soup) can false-positive on ordinary keywords.
     """
     if field == "tag":
-        tags = [str(t) for t in (item.get("tags") or []) if t]
+        tags_raw = item.get("tags") or []
+        if isinstance(tags_raw, str):
+            # Defensive: a malformed feed can deliver tags as a bare string;
+            # treat it as one tag rather than iterating its characters.
+            tags_raw = [tags_raw]
+        tags = [str(t) for t in tags_raw if t]
         categories = item.get("categories")
         if isinstance(categories, dict):
             tags.extend(str(v) for v in categories.values() if v)

@@ -73,6 +73,15 @@ def test_exclude_content_scoped():
     assert is_filtered(_item(summary="", content="", content_text=""), "content:deep", "exclude") is False
 
 
+def test_exclude_tags_as_string_not_iterated():
+    """tags as raw string matches as one tag, not per-character tokens."""
+    from filters import is_filtered, split_clause
+
+    assert split_clause("tag:release notes")[0] == "tag"
+    assert is_filtered(_item(tags="release notes", categories=None), "tag:release notes", "exclude") is True
+    assert is_filtered(_item(tags="release notes"), "tag:onent", "exclude") is False
+
+
 def test_unknown_prefix_stays_bare():
     from filters import is_filtered, split_clause
 

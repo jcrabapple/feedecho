@@ -110,6 +110,30 @@ class TestQueueMode:
         assert draft is not None
         assert draft["id"] not in [r["id"] for r in due]
 
+    def test_queue_mode_renders_feed_name(self, db_tmp, monkeypatch):
+        """{{ feed_name }} renders in queue-mode content like the instant path."""
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO accounts (name, username, instance, access_token) VALUES (?, ?, ?, ?)",
+                ("main", "user", "https://mastodon.social", "tok"),
+            )
+            db.execute(
+                "INSERT INTO feeds (name, url) VALUES (?, ?)",
+                ("My Feed", "https://example.com/feed"),
+            )
+            db.execute(
+                """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                       visibility, delivery_mode, enabled)
+                   VALUES (1, 'mastodon', 1, '{{ feed_name }}: {{ title }}', 'public', 'queue', 1)"""
+            )
+            echo = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+
+        scheduler.process_echo(echo, _item(), feed_name="My Feed")
+
+        with database.get_db() as db:
+            row = db.execute("SELECT content FROM queued_posts").fetchone()
+        assert row["content"] == "My Feed: Weekly giveaway roundup"
+
     def test_drip_limit_bypassed_for_queue_mode(self, db_tmp, monkeypatch):
         monkeypatch.setattr(
             scheduler, "post_status", lambda **kw: {"id": "1"}

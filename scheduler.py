@@ -837,7 +837,9 @@ def process_echo(
     except (KeyError, IndexError):
         delivery_mode = "instant"
     if delivery_mode in ("queue", "review"):
-        return _enqueue_for_queue_mode(echo, item, posted_id, claim_token, delivery_mode)
+        return _enqueue_for_queue_mode(
+            echo, item, posted_id, claim_token, delivery_mode, feed_name=feed_name
+        )
 
     if _drip_applies(echo):
         # Serialize the rate check + dispatch per echo so the flush job
@@ -966,6 +968,7 @@ def _enqueue_for_queue_mode(
     posted_id: int,
     claim_token: str,
     mode: str,
+    feed_name: str = "",
 ) -> bool:
     """Bridge an auto-queue or review-mode echo item into the curation queue.
 
@@ -973,7 +976,8 @@ def _enqueue_for_queue_mode(
     inserts one queued_posts row (status 'queued' for auto-queue, 'draft' for
     review), marks the posted_items row 'queued' so the feed cursor advances
     (same terminal-hold semantics as drip/digest), and lets the existing
-    _flush_queue / post-now machinery handle delivery.
+    _flush_queue / post-now machinery handle delivery. feed_name is template
+    context only ({{ feed_name }}), mirroring the instant path.
     """
     echo_id = echo["id"]
     item_id = item["id"]
@@ -1015,9 +1019,7 @@ def _enqueue_for_queue_mode(
     # Render the stored template into materialized text. The queued row
     # carries the content verbatim from here on (same as Reader Compose).
     try:
-        content = render_template(
-            echo["template"], item, feed_name=item.get("feed_name") or ""
-        )
+        content = render_template(echo["template"], item, feed_name=feed_name)
     except Exception as e:
         logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
         return _fail_post(posted_id, claim_token, echo_id, f"Template rendering failed: {e}")

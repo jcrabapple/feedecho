@@ -42,6 +42,7 @@
                 </form>
                 {% else %}
                 <button class="btn-sm" type="button" onclick="withBusy(this, () => queuePostNow({{ post.id }}, this))">Post now</button>
+                {% if post.status == 'queued' %}
                 <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
                     <input type="hidden" name="direction" value="up">
                     <button class="btn-sm" type="submit" title="Move earlier">&uarr;</button>
@@ -50,6 +51,7 @@
                     <input type="hidden" name="direction" value="down">
                     <button class="btn-sm" type="submit" title="Move later">&darr;</button>
                 </form>
+                {% endif %}
                 {% endif %}
                 <form method="post" action="/api/queue/{{ post.id }}/cancel" class="inline" onsubmit="return confirm('{% if post.status == 'failed' %}Remove this failed post?{% else %}Cancel this queued post?{% endif %}');">
                     <button class="btn-sm btn-danger" type="submit">Remove</button>

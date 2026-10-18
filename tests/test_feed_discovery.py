@@ -180,3 +180,36 @@ class _Ctx:
 
     def __exit__(self, *exc):
         return False
+
+
+def test_link_type_with_mime_parameters_still_matches():
+    """<link type="application/rss+xml; charset=utf-8"> is a valid feed link
+    (gate F-06): MIME parameters are stripped before the type check."""
+    from feed_parser import _DiscoveryHTMLParser
+
+    parser = _DiscoveryHTMLParser()
+    parser.feed(
+        '<!DOCTYPE html><html><head>'
+        '<title>The Page</title>'
+        '<link rel="alternate" type="application/rss+xml; charset=utf-8" href="/feed.xml">'
+        '<link rel="alternate" type="application/atom+xml; CHARSET=UTF-8" href="/atom.xml">'
+        '</head></html>'
+    )
+    mimes = [t for _, t, _ in parser.links]
+    assert any(m.strip().lower().startswith("application/rss+xml") for m in mimes)
+    assert any(m.strip().lower().startswith("application/atom+xml") for m in mimes)
+    assert "The Page" == parser.title.strip()
+
+
+def test_later_title_elements_do_not_pollute_page_title():
+    """Only the first <title> in the document is the page title; inline SVG
+    titles must not append to it (gate F-07)."""
+    from feed_parser import _DiscoveryHTMLParser
+
+    parser = _DiscoveryHTMLParser()
+    parser.feed(
+        "<html><head><title>The Page</title></head>"
+        "<body><svg><title>GitHub logo</title></svg>"
+        "<svg><title>Another icon</title></svg></body></html>"
+    )
+    assert parser.title == "The Page"

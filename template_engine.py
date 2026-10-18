@@ -264,9 +264,12 @@ def _filter_utm(value, source=None, medium=None, campaign=None, term=None,
         # Not an absolute URL (garbage or a relative path): leave it alone.
         return value
     overridden = {key for key, _ in additions}
+    # Case-insensitive override matching: a URL carrying ?UTM_SOURCE=... must
+    # not end up with both spellings after the merge.
+    overridden_lower = {key.lower() for key in overridden}
     params = [
         (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in overridden
+        if k.lower() not in overridden_lower
     ]
     params.extend(additions)
     return urlunsplit(

@@ -129,3 +129,18 @@ def test_combined_clauses_any_match_suppresses():
     assert is_filtered(_item(), "tag:posse, author:nobody", "exclude") is True
     assert is_filtered(_item(), "tag:nope, author:jason", "exclude") is True
     assert is_filtered(_item(), "tag:nope, author:nobody", "exclude") is False
+
+
+def test_uppercase_prefix_is_field_clause():
+    """Users type Tag:/URL:/Author: freely; the field prefix matching is
+    case-insensitive (gate F-08)."""
+    from filters import split_clause, is_filtered
+
+    assert split_clause("Tag:posse") == ("tag", "posse")
+    assert split_clause("URL:/post/1") == ("url", "/post/1")
+    assert split_clause("AUTHOR:jason") == ("author", "jason")
+    assert split_clause("Link:whatever") == ("link", "whatever")
+    assert split_clause("Content:x") == ("content", "x")
+    # And matching works end to end with capitalized prefixes.
+    assert is_filtered(_item(), "Tag:posse", "exclude") is True
+    assert is_filtered(_item(), "URL:/post/1", "exclude") is True

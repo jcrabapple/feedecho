@@ -128,6 +128,38 @@ class TestDraftRowsOnQueuePage:
         assert row["content"] == "Edited draft"
         assert row["status"] == "draft"
 
+    def test_post_now_approves_draft(self, queue_env, monkeypatch):
+        """Review-mode drafts go out via the desk: POST now claims a draft row
+        and dispatches with its stored content (gate F-01)."""
+        qp_id = self._draft_row()
+        dispatch = {}
+
+        def fake_process_echo(echo, item, feed_name="", override_content=None):
+            dispatch["content"] = override_content
+            import os
+            import datetime as dt
+
+            with database.get_db() as db:
+                now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                db.execute(
+                    """INSERT INTO posted_items (echo_id, item_id, item_title, item_url,
+                                                status, attempt_count, error_message)
+                       VALUES (?, 'item-1', 'Draft awaiting review', '', 'success', 1, NULL)""",
+                    (echo["id"],),
+                )
+            return True
+
+        # app.py's route imports process_echo directly; patch the app's name.
+        monkeypatch.setattr(app_module, "process_echo", fake_process_echo)
+        client = _client()
+        resp = client.post(f"/api/queue/{qp_id}/post-now")
+        assert resp.json()["success"] is True
+        with database.get_db() as db:
+            row = db.execute("SELECT status, posted_item_id FROM queued_posts WHERE id = ?", (qp_id,)).fetchone()
+        assert row["status"] == "sent"
+        assert row["posted_item_id"] is not None
+        assert dispatch["content"] == "Draft awaiting review"
+
     def test_delete_feed_finalizes_drafts(self, queue_env):
         qp_id = self._draft_row()
         client = _client()

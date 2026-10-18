@@ -186,3 +186,14 @@ class TestRegistration:
 class TestNoDatabase:
     def test_module_does_not_import_database(self):
         assert "database" not in template_engine.__dict__
+
+
+def test_merges_over_existing_uppercase_utm_keys():
+    """A URL already carrying ?UTM_SOURCE=... dedupes case-insensitively so
+    both spellings cannot coexist after the merge (gate F-11)."""
+    result = render_template(
+        "{{ link | utm('mastodon') }}",
+        {"link": "https://ex.com/p?UTM_SOURCE=newsletter&utm_medium=feed"},
+    )
+    assert result.count("utm_source=") + result.count("UTM_SOURCE=") == 1
+    assert "utm_source=mastodon" in result

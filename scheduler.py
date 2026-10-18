@@ -996,7 +996,9 @@ def _enqueue_for_queue_mode(
     with get_db() as db:
         if settings.MULTI:
             # Plan cap enforced like the Compose desk: fail LOUDLY, never
-            # silently drop the item.
+            # silently drop the item. _check_allowance adds its own +1
+            # ("adding one more would exceed the cap"), so pass the raw
+            # count — passing n+1 double-counted and rejected at cap-1.
             row = db.execute(
                 """
                 SELECT COUNT(*) AS n FROM queued_posts
@@ -1006,7 +1008,7 @@ def _enqueue_for_queue_mode(
                 (user_id,),
             ).fetchone()
             try:
-                plans.check_queue_allowance(row["n"] + 1, plan)
+                plans.check_queue_allowance(row["n"], plan)
             except plans.PlanError:
                 return _fail_post(
                     posted_id,
@@ -1036,21 +1038,56 @@ def _enqueue_for_queue_mode(
         feed_id = 0
     attach_image = _echo_attach_image(echo)
     image_alt = item.get("image_alt") or ""
+    try:
+        content_warning = echo["content_warning"] or ""
+    except (KeyError, IndexError):
+        content_warning = ""
+    try:
+        use_markdown = 1 if echo["use_markdown"] else 0
+    except (KeyError, IndexError):
+        use_markdown = 0
+
+    # Resolve the feed_items row id so _flush_queue dispatches with the
+    # full item metadata (images, content_html, categories) the way the
+    # Reader Compose enqueue does. A miss (pruned rows, cold feeds) is NOT
+    # fatal: the queued row still carries its rendered content, and
+    # _flush_queue already tolerates NULL there.
+    metadata_feed_item_id: int | None = None
+    with get_db() as db:
+        fi_row = db.execute(
+            "SELECT id FROM feed_items WHERE feed_id = ? AND item_id = ?",
+            (feed_id, item_id),
+        ).fetchone()
+        if fi_row:
+            metadata_feed_item_id = fi_row["id"]
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as db:
         # One-shot echo at enqueue time so crash-recovery retries reuse the
         # same echo_id (idempotency key for _claim_post), mirroring the
         # Reader Compose desk's insert. The stored content carries the real
-        # text; this echoed row is inert for re-rendering.
+        # text; this echoed row is inert for re-rendering. The parent's
+        # content warning / markdown flag are carried over so dispatch
+        # keeps the echo's configured voice.
         new_echo_id = db.execute(
             """
             INSERT INTO echoes (feed_id, destination_type, destination_id, template,
-                                visibility, attach_image, enabled, one_shot, deleted_at, user_id)
-            VALUES (?, ?, ?, '{{ title }}', ?, ?, 0, 1, ?, ?) RETURNING id
+                                visibility, attach_image, content_warning, use_markdown,
+                                enabled, one_shot, deleted_at, user_id)
+            VALUES (?, ?, ?, '{{ title }}', ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id
             """,
-            (feed_id, echo["destination_type"], echo["destination_id"], visibility, attach_image, now_utc, user_id),
+            (feed_id, echo["destination_type"], echo["destination_id"], visibility,
+             attach_image, content_warning, use_markdown, now_utc, user_id),
         ).fetchone()["id"]
+
+        # Prefer the freshly-read feed_items id when we got one; fall back
+        # to whatever the caller supplied (tests pass items without rows).
+        supplied = None
+        try:
+            supplied = item.get("feed_item_id")
+        except AttributeError:
+            pass
+        queued_feed_item_id = metadata_feed_item_id or supplied
 
         if mode == "review":
             target_time = _now()
@@ -1068,7 +1105,7 @@ def _enqueue_for_queue_mode(
             """,
             (
                 user_id,
-                None,  # compute path has no feed_items row id; _flush_queue tolerates NULL
+                queued_feed_item_id,
                 item_id,
                 feed_id,
                 echo["destination_type"],

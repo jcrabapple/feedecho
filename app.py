@@ -101,6 +101,7 @@ from webhook import (
     parse_headers as webhook_parse_headers,
     test_connection as test_webhook_connection,
 )
+import scheduler  # noqa: E402 — module-qualified access (tests monkeypatch through it)
 from scheduler import (
     start_scheduler,
     stop_scheduler,
@@ -2191,7 +2192,7 @@ def queue_post_now(request: Request, post_id: int):
             """
             UPDATE queued_posts
                SET status = 'sending', claim_token = ?, claimed_at = ?
-             WHERE id = ? AND user_id = ? AND status = 'queued'
+             WHERE id = ? AND user_id = ? AND status IN ('queued', 'draft')
             """,
             (claim_token, now_utc, post_id, uid),
         )
@@ -4809,7 +4810,7 @@ def _resolve_feed_url(url: str) -> str:
 
 
 @app.post("/api/feeds")
-async def add_feed(
+def add_feed(
     request: Request,
     name: str = Form(...),
     url: str = Form(...),
@@ -4820,6 +4821,15 @@ async def add_feed(
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     target_folder_id = _filter_int(folder_id)
+
+    # HTML link autodiscovery (F4) runs BEFORE any DB work: it does blocking
+    # network I/O (httpx + DNS), and sync `def` routes run in the threadpool
+    # instead of on the event loop, while a `with get_db()` block held open
+    # across the fetch would tie up a connection on both dialects. Resolve
+    # first so the plan-cap and upsert checks below see the final URL (a
+    # re-add via a home-page paste upserts instead of 402ing at the cap);
+    # any discovery failure keeps the raw input.
+    url = _resolve_feed_url(url)
     with get_db() as db:
         if target_folder_id is not None:
             folder = db.execute(
@@ -4830,7 +4840,9 @@ async def add_feed(
                 target_folder_id = None
         if settings.MULTI:
             # Cap NEW rows only: re-adding an existing URL is an upsert that
-            # changes nothing the cap measures.
+            # changes nothing the cap measures. The re-add check runs on the
+            # RESOLVED url so a home-page paste of an already-stored feed
+            # isn't misread as a new feed (and 402ed) at the plan cap.
             existing_feed = db.execute(
                 "SELECT id FROM feeds"
                 " WHERE user_id = ? AND url = ? AND deleted_at IS NULL",
@@ -4851,15 +4863,6 @@ async def add_feed(
                 poll_interval = plans.clamp_poll_interval(
                     poll_interval, _user_plan(db, uid)
                 )
-        # HTML link autodiscovery (F4): a NEW feed whose pasted URL points at
-        # a site page resolves to the real feed URL. Re-adds (upserts) keep
-        # the stored URL; any discovery failure falls back to the raw input.
-        existing_row = db.execute(
-            "SELECT id FROM feeds WHERE user_id = ? AND url = ? AND deleted_at IS NULL",
-            (uid, url),
-        ).fetchone()
-        if existing_row is None:
-            url = _resolve_feed_url(url)
         db.execute(
             """
             INSERT INTO feeds (name, url, poll_interval, user_id, folder_id)
@@ -5067,7 +5070,7 @@ def import_opml(
 
 
 @app.post("/api/feeds/{feed_id}/edit")
-async def edit_feed(
+def edit_feed(
     request: Request,
     feed_id: int,
     name: str = Form(...),
@@ -5092,6 +5095,21 @@ async def edit_feed(
     poll_interval = max(1, min(poll_interval, 1440))
     mute_keywords = (mute_keywords or "").strip()
     target_folder_id = _filter_int(folder_id) if folder_id is not None else None
+
+    # Discovery (F4) runs BEFORE the DB transaction — blocking network I/O
+    # in a sync `def` route stays in the threadpool, off the event loop.
+    with get_db() as db:
+        stored_url = db.execute(
+            "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        ).fetchone()
+        if not stored_url:
+            raise HTTPException(status_code=404, detail="Feed not found")
+    if stored_url["url"] != url:
+        # URL change: resolve a pasted site page to its feed URL (F4).
+        # Failure falls back to the raw input, same as add_feed.
+        url = _resolve_feed_url(url)
+
     with get_db() as db:
         if target_folder_id is not None:
             fol = db.execute(
@@ -5112,14 +5130,12 @@ async def edit_feed(
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
+        url_changed = feed["url"] != url
 
         # If folder_id was omitted entirely from the form, preserve existing folder
         final_folder_id = target_folder_id if folder_id is not None else feed["folder_id"]
 
-        if feed["url"] != url:
-            # URL change: resolve a pasted site page to its feed URL (F4).
-            # Failure falls back to the raw input, same as add_feed.
-            url = _resolve_feed_url(url)
+        if url_changed:
             db.execute(
                 """
                 UPDATE feeds
@@ -5227,7 +5243,7 @@ def discover_feed_api(request: Request, url: str = Query(...)):
     url = validate_url(url)
     try:
         info = discover_feed_url(url)
-    except (httpx.HTTPError, SSRFError) as e:
+    except (httpx.HTTPError, SSRFError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"Could not discover feeds for {url}: {e}")
     return {
         "found": bool(info.get("url")),

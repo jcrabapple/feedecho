@@ -699,6 +699,9 @@ class _DiscoveryHTMLParser(HTMLParser):
         self.links: list[tuple[str, str, str]] = []  # (rel, type, href)
         self.title = ""
         self._in_title = False
+        # The FIRST <title> in the document is the page title; later ones
+        # (inline SVG <title>, noscript fallbacks) must not append to it.
+        self._title_done = False
 
     def handle_starttag(self, tag, attrs):
         if tag == "link":
@@ -710,12 +713,13 @@ class _DiscoveryHTMLParser(HTMLParser):
                     attr.get("href") or "",
                 )
             )
-        elif tag == "title":
+        elif tag == "title" and not self._title_done:
             self._in_title = True
 
     def handle_endtag(self, tag):
-        if tag == "title":
+        if tag == "title" and self._in_title:
             self._in_title = False
+            self._title_done = True
 
     def handle_data(self, data):
         if self._in_title:
@@ -781,7 +785,7 @@ def discover_feed_url(url: str, max_page_bytes: int = 2 * 1024 * 1024) -> dict:
     for rel, link_type, href in parser.links:
         if (rel or "").strip().lower() != "alternate":
             continue
-        mime = (link_type or "").strip().lower()
+        mime = (link_type or "").split(";")[0].strip().lower()
         if mime not in _FEED_LINK_TYPES and not (
             mime == "application/json" and (href or "").lower().endswith(".json")
         ):

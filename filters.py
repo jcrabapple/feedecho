@@ -13,21 +13,24 @@ from __future__ import annotations
 import re
 
 # Field-scoped clause: "tag:posse", "author:jane", "url:/notes/", "link:...",
-# "content:...". Unknown prefixes (e.g. a legacy keyword like "release:2")
-# stay bare keywords; a recognized prefix with an empty value ("tag:") also
-# falls back to a bare keyword (legacy safety).
-_FIELD_CLAUSE_RE = re.compile(r"^(tag|author|url|link|content):(.+)$")
+# "content:...". Case-insensitive on the PREFIX (users type Tag:/URL:/Author:
+# freely); the VALUE keeps its original case and is compared casefolded
+# downstream. Unknown prefixes (e.g. a legacy keyword like "release:2") stay
+# bare keywords; a recognized prefix with an empty value ("tag:") also falls
+# back to a bare keyword (legacy safety).
+_FIELD_CLAUSE_RE = re.compile(r"^(tag|author|url|link|content):(.+)$", re.IGNORECASE)
 
 
 def split_clause(part: str) -> tuple[str | None, str]:
     """Split a parsed keyword into a (field, value) clause or a bare keyword.
 
     Returns ``(field, value)`` for a recognized field-scoped clause (with a
-    non-empty value), or ``(None, part)`` for a bare keyword.
+    non-empty value; the field name is lowercased), or ``(None, part)`` for
+    a bare keyword.
     """
     m = _FIELD_CLAUSE_RE.match(part)
     if m and m.group(2).strip():
-        return m.group(1), m.group(2).strip()
+        return m.group(1).lower(), m.group(2).strip()
     return None, part
 
 

@@ -1,0 +1,212 @@
+"""Tests for F2: auto-queue + review delivery modes in scheduler.py."""
+
+import datetime as dt_module
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+import database
+import plans
+import scheduler
+
+
+def _item(**overrides):
+    item = {
+        "id": "item-1",
+        "title": "Weekly giveaway roundup",
+        "link": "https://example.com/post/1",
+        "summary": "Our weekly roundup of giveaway deals.",
+    }
+    item.update(overrides)
+    return item
+
+
+def _seed_echo(db, delivery_mode, **echo_overrides):
+    db.execute(
+        "INSERT INTO accounts (name, username, instance, access_token) VALUES (?, ?, ?, ?)",
+        ("main", "user", "https://mastodon.social", "tok"),
+    )
+    db.execute(
+        "INSERT INTO feeds (name, url) VALUES (?, ?)", ("f", "https://example.com/feed")
+    )
+    db.execute(
+        """INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                               visibility, delivery_mode, enabled)
+           VALUES (1, 'mastodon', 1, '{{ title }}', 'public', ?, 1)""",
+        (delivery_mode,),
+    )
+    echo = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+    return echo
+
+
+class TestQueueMode:
+    def test_queue_mode_enqueues_without_dispatch(self, db_tmp, monkeypatch):
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+
+        with database.get_db() as db:
+            echo = _seed_echo(db, "queue")
+
+        ok = scheduler.process_echo(echo, _item())
+        assert ok is True
+        assert sent == [], "queue mode must never dispatch via the sender"
+
+        with database.get_db() as db:
+            qp = db.execute("SELECT * FROM queued_posts").fetchall()
+            assert len(qp) == 1
+            row = qp[0]
+            assert row["status"] == "queued"
+            assert row["destination_type"] == "mastodon"
+            assert row["destination_id"] == 1
+            assert row["content"] == "Weekly giveaway roundup"
+            assert row["echo_id"] is not None
+            new_echo = db.execute(
+                "SELECT * FROM echoes WHERE id = ?", (row["echo_id"],)
+            ).fetchone()
+            assert new_echo["one_shot"] == 1
+            assert new_echo["enabled"] == 0
+
+            pi = db.execute(
+                "SELECT status FROM posted_items WHERE echo_id = 1 AND item_id = 'item-1'"
+            ).fetchone()
+            assert pi is not None
+            assert pi["status"] == "queued", "cursor must advance; not 'success'"
+
+    def test_review_mode_stores_draft(self, db_tmp, monkeypatch):
+        sent = []
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+        )
+
+        with database.get_db() as db:
+            echo = _seed_echo(db, "review")
+
+        ok = scheduler.process_echo(echo, _item())
+        assert ok is True
+        assert sent == []
+
+        with database.get_db() as db:
+            rows = db.execute("SELECT * FROM queued_posts").fetchall()
+            assert len(rows) == 1
+            assert rows[0]["status"] == "draft"
+            assert rows[0]["content"] == "Weekly giveaway roundup"
+
+    def test_review_draft_excluded_from_flush_select(self, db_tmp, monkeypatch):
+        with database.get_db() as db:
+            echo = _seed_echo(db, "review")
+
+        scheduler.process_echo(echo, _item())
+
+        with database.get_db() as db:
+            draft = db.execute(
+                "SELECT id FROM queued_posts WHERE status = 'draft'"
+            ).fetchone()
+            due = db.execute(
+                "SELECT id FROM queued_posts WHERE status = 'queued' AND scheduled_at <= ?",
+                (scheduler._now(),),
+            ).fetchall()
+        assert draft is not None
+        assert draft["id"] not in [r["id"] for r in due]
+
+    def test_drip_limit_bypassed_for_queue_mode(self, db_tmp, monkeypatch):
+        monkeypatch.setattr(
+            scheduler, "post_status", lambda **kw: {"id": "1"}
+        )
+
+        with database.get_db() as db:
+            echo = _seed_echo(db, "queue", drip_limit=3)
+            # Re-fetch with drip_limit applied
+            db.execute(
+                "UPDATE echoes SET drip_limit = 3 WHERE id = 1"
+            )
+            echo = db.execute("SELECT * FROM echoes WHERE id = 1").fetchone()
+
+        ok = scheduler.process_echo(echo, _item())
+        assert ok is True
+
+        with database.get_db() as db:
+            assert db.execute("SELECT COUNT(*) AS n FROM queued_posts").fetchone()["n"] == 1
+            assert db.execute("SELECT COUNT(*) AS n FROM drip_items").fetchone()["n"] == 0
+
+    def test_cursor_counts_queued_as_terminal(self, db_tmp, monkeypatch):
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "1"})
+
+        with database.get_db() as db:
+            echo = _seed_echo(db, "queue")
+
+        scheduler.process_echo(echo, _item())
+        assert scheduler._post_succeeded(1, "item-1") is True
+
+
+class TestNextFreeSlot:
+    def _fixed_clock(self, monkeypatch, when):
+        class FixedDateTime(dt_module.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return when.replace(tzinfo=tz) if tz else when
+
+        monkeypatch.setattr(scheduler, "datetime", FixedDateTime)
+
+    def test_default_settings_yield_now_plus_240(self, db_tmp, monkeypatch):
+        now = datetime(2026, 10, 18, 10, 0)
+        self._fixed_clock(monkeypatch, now)
+        with database.get_db() as db:
+            slot = scheduler.next_free_slot(db, 1, "mastodon", 1)
+        assert slot == "2026-10-18 14:00:00"
+
+    def test_queue_settings_interval(self, db_tmp, monkeypatch):
+        now = datetime(2026, 10, 18, 10, 0)
+        self._fixed_clock(monkeypatch, now)
+        with database.get_db() as db:
+            db.execute(
+                "INSERT INTO queue_settings (user_id, destination_key, queue_interval_minutes)"
+                " VALUES (1, 'mastodon:1', 60)"
+            )
+            slot = scheduler.next_free_slot(db, 1, "mastodon", 1)
+        assert slot == "2026-10-18 11:00:00"
+
+    def test_active_hours_snap_to_next_day_start(self, db_tmp, monkeypatch):
+        now = datetime(2026, 10, 18, 20, 0)
+        self._fixed_clock(monkeypatch, now)
+        with database.get_db() as db:
+            # 20:00 + 240min = next day 00:00, outside 09:00-21:00 → snaps to 09:00
+            slot = scheduler.next_free_slot(db, 1, "mastodon", 1)
+        assert slot == "2026-10-19 09:00:00"
+
+
+class TestPlanCap:
+    def test_plan_cap_fails_loudly(self, db_tmp, monkeypatch):
+        monkeypatch.setattr("settings.MULTI", True)
+        # Real check_queue_allowance against the real trial-plan queue_depth cap.
+        monkeypatch.setattr(scheduler.plans, "check_queue_allowance", plans.check_queue_allowance)
+        monkeypatch.setattr(scheduler, "post_status", lambda **kw: {"id": "1"})
+
+        with database.get_db() as db:
+            echo = _seed_echo(db, "queue")
+            # Fill the trial plan's queue depth (10)
+            for i in range(10):
+                db.execute(
+                    """INSERT INTO queued_posts (
+                           user_id, item_id, feed_id, destination_type, destination_id,
+                           content, scheduled_at, status, echo_id)
+                       VALUES (1, ?, 1, 'mastodon', 1, 'x', '2026-10-19 09:00:00', 'queued', NULL)""",
+                    (f"filler-{i}",),
+                )
+
+        ok = scheduler.process_echo(echo, _item())
+
+        with database.get_db() as db:
+            pi = db.execute(
+                "SELECT status, error_message FROM posted_items WHERE echo_id = 1 AND item_id = 'item-1'"
+            ).fetchone()
+            n = db.execute("SELECT COUNT(*) AS n FROM queued_posts").fetchone()["n"]
+
+        assert pi is not None
+        assert pi["status"] == "failed"
+        assert "queue limit" in (pi["error_message"] or "")
+        assert n == 10, "no new queued row may be inserted past the cap"
+        # The failure must be loud-but-terminal-for-cursor only after retries;
+        # the important part is it was NOT silently dropped as a queued row.
+        assert ok is False

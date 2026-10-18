@@ -420,7 +420,7 @@ function editEcho(echoId) {
             </div>
             <div class="form-row">
                 <label>Keyword filter
-                    <input type="text" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, giveaway, nsfw">
+                    <input type="text" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason">
                 </label>
                 <label>Filter mode
                     <select name="filter_mode">
@@ -437,11 +437,13 @@ function editEcho(echoId) {
                     <input type="checkbox" name="attach_image" value="true"${attachImage ? ' checked' : ''}>
                 </label>
             </div>
-            <div class="form-row" id="edit-digest-fields-${echoId}" style="${emailStyle}">
+            <div class="form-row" id="edit-digest-fields-${echoId}">
                 <label>Delivery mode
                     <select name="delivery_mode" onchange="toggleEditDest(${echoId})">
-                        <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (one email per item)</option>
+                        <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (post each item as it arrives)</option>
                         <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
+                        <option value="queue"${deliveryMode === 'queue' ? ' selected' : ''}>Auto-queue (schedule into the curation queue)</option>
+                        <option value="review"${deliveryMode === 'review' ? ' selected' : ''}>Review (stage in the queue as a draft for approval)</option>
                     </select>
                 </label>
             </div>
@@ -498,11 +500,15 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-telegram-fields-${echoId}`).style.display = destType === 'telegram' ? '' : 'none';
     document.getElementById(`edit-webhook-fields-${echoId}`).style.display = destType === 'webhook' ? '' : 'none';
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
-    if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
+    // The delivery-mode row is always visible; digest is only selectable for
+    // email destinations, and the drip row applies to instant mode alone.
+    if (digestFields) digestFields.style.display = '';
+    const digestOption = digestFields?.querySelector('option[value="digest"]');
+    if (digestOption) digestOption.disabled = destType !== 'email';
     const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);
     if (dripFields) {
-        const deliveryMode = document.querySelector(`#edit-digest-fields-${echoId} select[name="delivery_mode"]`);
-        dripFields.style.display = (deliveryMode && deliveryMode.value === 'digest') ? 'none' : '';
+        const deliveryMode = digestFields?.querySelector('select[name="delivery_mode"]');
+        dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
     }
     // render_html checkboxes live in BOTH the email and Matrix edit rows;
     // hidden ones still submit, so disable them to prevent a hidden row's
@@ -1759,3 +1765,51 @@ function folderConfirmDelete(form) {
     var name = (form.dataset.folderName || '').trim();
     return confirm('Delete folder \'' + name + '\'? Feeds inside will become uncategorized.');
 }
+
+// ── Feed discovery (F4): resolve a pasted site URL to its feed URL ─────────
+
+function discoverFeed(btn) {
+    var form = document.querySelector('form[action="/api/feeds"]');
+    if (!form) return Promise.resolve();
+    var urlInput = document.getElementById('feed-url');
+    var nameInput = document.getElementById('feed-name');
+    var statusEl = document.getElementById('feed-discover-status');
+    var raw = (urlInput.value || '').trim();
+    if (!raw) {
+        if (statusEl) { statusEl.hidden = false; statusEl.textContent = 'Paste a page or feed URL first.'; }
+        return Promise.resolve();
+    }
+    if (btn) btn.disabled = true;
+    return fetch('/api/feeds/discover?url=' + encodeURIComponent(raw))
+        .then(function (r) { return r.ok ? r.json() : r.json().then(function (b) { throw new Error(b.detail || 'Discovery failed'); }); })
+        .then(function (data) {
+            if (!data.found || !data.url) {
+                if (statusEl) { statusEl.hidden = false; statusEl.textContent = 'No feed link found — using the URL as-is.'; }
+                return;
+            }
+            urlInput.value = data.url;
+            // Fill the name only when the user left it empty (or it came from
+            // the ?name= deep link, which seeded it from the page title).
+            if (nameInput && !nameInput.value.trim() && data.title) nameInput.value = data.title;
+            if (statusEl) { statusEl.hidden = false; statusEl.textContent = 'Found feed: ' + data.url; }
+        })
+        .catch(function (e) {
+            // Degrade to a no-op: the pasted URL stays prefilled as-is.
+            if (statusEl) { statusEl.hidden = false; statusEl.textContent = 'Could not discover a feed — using the URL as-is.'; }
+        })
+        .finally(function () { if (btn) btn.disabled = false; });
+}
+
+// ?add=&name= deep-link bootstrap (bookmarklet): the template seeds the form
+// inputs plus the data-add-url/data-add-name attributes; here we resolve the
+// pasted page URL to its feed and pull the title in as the name.
+document.addEventListener('DOMContentLoaded', function () {
+    var form = document.querySelector('form[action="/api/feeds"]');
+    if (!form) return;
+    var addUrl = form.dataset.addUrl || '';
+    var addName = form.dataset.addName || '';
+    if (!addUrl) return;
+    var nameInput = document.getElementById('feed-name');
+    if (addName && nameInput && !nameInput.value.trim()) nameInput.value = addName;
+    discoverFeed(null);
+});

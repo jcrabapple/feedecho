@@ -32,7 +32,7 @@
                 <p style="margin: 0; white-space: pre-wrap; font-size: 0.9rem;">{{ post.content }}</p>
             </td>
             <td data-label="Status">
-                <span class="badge {% if post.status == 'queued' %}badge-info{% elif post.status == 'sending' %}badge-warning{% elif post.status == 'failed' %}badge-danger{% else %}badge-muted{% endif %}">{{ post.status }}</span>
+                <span class="badge {% if post.status == 'queued' or post.status == 'draft' %}badge-info{% elif post.status == 'sending' %}badge-warning{% elif post.status == 'failed' %}badge-danger{% else %}badge-muted{% endif %}">{{ post.status }}</span>
                 {% if post.status == 'failed' and post.error_message %}<br><small style="color: var(--text-muted);">{{ post.error_message }}</small>{% endif %}
             </td>
             <td data-label="Actions" class="action-cell">

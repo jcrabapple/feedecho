@@ -99,7 +99,7 @@ _ECHO_COLS = [
 
 _VALID_VISIBILITY = ("public", "unlisted", "private", "direct")
 _VALID_FILTER_MODES = ("exclude", "include")
-_VALID_DELIVERY_MODES = ("instant", "digest")
+_VALID_DELIVERY_MODES = ("instant", "digest", "queue", "review")
 
 
 class ExportError(ValueError):

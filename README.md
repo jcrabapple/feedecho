@@ -27,6 +27,9 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
 - **Visibility settings** — public, unlisted, private, direct (Mastodon)
 - **Drip mode** — cap an echo at N posts per hour; bursts queue up and release as the sliding window allows instead of flooding your timeline
+- **Auto-queue mode** — send new items into the curation queue on a schedule instead of posting immediately
+- **Review-first mode** — stage new items in the curation queue as drafts and approve them before anything goes out
+- **Filter field prefixes** — echo filter keywords accept field scoping: plain text matches title and summary, while `tag:`, `author:`, `url:` (or `link:`), and `content:` match that field
 - **Content warnings** — per-echo CW text applied as Mastodon spoiler text
 - **Markdown posting** — per-echo flag on Mastodon destinations that sends `content_type=text/markdown`, so GoToSocial and other Markdown-capable servers render `**bold**` and `[links](url)`; stock Mastodon ignores the field and treats the body as plain text
 - **Image attachments** — automatically attach the feed item's images: up to 4 per post on Mastodon and Bluesky, up to 4 inline on email, and the first image on Matrix, micro.blog, Discord, and Telegram
@@ -197,7 +200,7 @@ On NixOS, see [`nix/README.md`](nix/README.md).
 5. **Add a Discord channel** — In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it under Connect Discord on `/accounts`.
 6. **Add a Telegram chat** — Create a bot with @BotFather (`/newbot` and copy the API token), add the bot to the target chat (for channels, make it an admin), then paste the token and the chat ID or `@channelname` under Connect Telegram on `/accounts`.
 7. **Add a webhook** — Under Connect Webhook on `/accounts`, enter any HTTP endpoint and optional custom headers (one per line, `Authorization: Bearer ...`). Each item arrives as one JSON object.
-8. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL.
+8. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL. A site home-page or article URL works too: FeedEcho autodiscovers the site's feed link via HTML `<link rel="alternate">` tags (and offers a bookmarklet that prefills the form from any page).
 9. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
 10. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
@@ -281,6 +284,9 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ content_link }}` | First outbound link inside the item's content (link-blogs) |
 | `{{ content_html }}` | Full content as sanitized HTML — links, formatting, and images kept; scripts/handlers/foreign schemes stripped at ingest. Renders in webhook bodies, email HTML parts (render_html echo flag), and Matrix formatted bodies. On Bluesky it converts to clean text with clickable link facets for article links. On Mastodon it embeds as HTML (Mastodon renders a safe subset); other plain-text destinations show the raw tags, so use `{{ content }}` there |
 | `{{ feed_name }}` | Name of the source feed |
+| `{{ link \| clean_url }}` | Strip UTM/tracking params from a URL (utm_*, fbclid, gclid, ...); everything else is preserved |
+| `{{ link \| utm('mastodon') }}` | Append tracking params to a URL: utm(source, medium=, campaign=, term=, content=) |
+| `{{ item['tags'] \| hashtags(exclude='internal,heartbeat') }}` | Convert a tag list to #hashtags, dropping the listed ones (comma/whitespace separated) |
 
 Legacy spellings `{{ date:iso }}` and `{{ date:short }}` keep working.
 

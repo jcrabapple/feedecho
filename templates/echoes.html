@@ -140,7 +140,7 @@
     <div class="form-row">
         <label>Keyword filter
             <input type="text" name="filter_keywords" placeholder="e.g. spoiler, giveaway, nsfw">
-            <span class="hint" style="margin: 0.2rem 0 0;">Comma-separated, case-insensitive, matched against item title and summary.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Comma-separated, case-insensitive. Plain text matches title and summary; prefixes <code>tag:</code>, <code>author:</code>, <code>url:</code> (or <code>link:</code>), and <code>content:</code> match that field.</span>
         </label>
         <label>Filter mode
             <select name="filter_mode">
@@ -208,13 +208,15 @@
             </select>
         </label>
     </div>
-    <div class="form-row" id="digest-fields" style="display: none;">
+    <div class="form-row" id="delivery-mode-fields">
         <label>Delivery mode
             <select name="delivery_mode" onchange="toggleDestFields()">
-                <option value="instant">Instant (one email per item)</option>
+                <option value="instant">Instant (post each item as it arrives)</option>
                 <option value="digest">Digest (batch items into one email, sent hourly)</option>
+                <option value="queue">Auto-queue (schedule into the curation queue)</option>
+                <option value="review">Review (stage in the queue as a draft for approval)</option>
             </select>
-            <span class="hint" style="margin: 0.2rem 0 0;">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only.</span>
+            <span class="hint" style="margin: 0.2rem 0 0;">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only. Auto-queue and Review stage items in the curation queue instead of posting immediately.</span>
         </label>
     </div>
     <div class="form-row" id="drip-fields">
@@ -298,6 +300,12 @@
                 {% endif %}
                 {% if echo.destination_type == 'mastodon' and echo.use_markdown %}
                 <br><span class="badge badge-info">MD</span>
+                {% endif %}
+                {% if echo.delivery_mode == 'queue' %}
+                <br><span class="badge badge-info">AUTO-QUEUE</span>
+                {% endif %}
+                {% if echo.delivery_mode == 'review' %}
+                <br><span class="badge badge-info">REVIEW</span>
                 {% endif %}
                 {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
                 <br><span class="badge badge-info">DIGEST</span>
@@ -388,12 +396,15 @@ function toggleDestFields() {
     document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
     document.getElementById('telegram-fields').style.display = destType === 'telegram' ? '' : 'none';
     document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
-    const digestFields = document.getElementById('digest-fields');
-    if (digestFields) digestFields.style.display = destType === 'email' ? '' : 'none';
+    // The delivery-mode row is always visible: digest is only selectable for
+    // email destinations (disabled otherwise), and the drip row applies to
+    // instant mode alone.
+    const digestOption = document.querySelector('select[name="delivery_mode"] option[value="digest"]');
+    if (digestOption) digestOption.disabled = destType !== 'email';
     const dripFields = document.getElementById('drip-fields');
     if (dripFields) {
         const deliveryMode = document.querySelector('select[name="delivery_mode"]');
-        dripFields.style.display = (deliveryMode && deliveryMode.value === 'digest') ? 'none' : '';
+        dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
     }
     // The render_html checkbox exists in BOTH the email and Matrix rows.
     // Hidden checkboxes still submit, so a destination switch would leak the

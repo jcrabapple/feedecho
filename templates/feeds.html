@@ -3,11 +3,23 @@
 {% block content %}
 <h1>Feeds</h1>
 
-<form method="post" action="/api/feeds" class="inline-form">
+<details class="account-section" id="bookmarklet-details">
+    <summary>Add from any page</summary>
+    <div style="padding: 0.5rem 0;">
+        <p class="hint">Drag this link to your bookmarks bar, then click it on any article or blog page to open FeedEcho with that page's URL prefilled — FeedEcho resolves the site's feed link automatically.</p>
+        <p><a href="javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ request.url.scheme }}://{{ request.url.netloc }}/feeds?add='+encodeURIComponent(u);})()" title="Drag me to your bookmarks bar">+ Subscribe</a></p>
+        <p>Or copy this snippet into a bookmark's URL field:</p>
+        {% raw %}<pre>javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ scheme }}://{{ netloc }}/feeds?add='+encodeURIComponent(u);})()</pre>{% endraw %}
+    </div>
+</details>
+
+<form method="post" action="/api/feeds" class="inline-form" data-add-url="{{ add_url | e }}" data-add-name="{{ add_name | e }}">
+    <div id="feed-discover-status" class="hint" role="status" {% if not add_url %}hidden{% endif %}></div>
     <label for="feed-name">Name</label>
-    <input type="text" name="name" id="feed-name" placeholder="Feed name" required>
+    <input type="text" name="name" id="feed-name" placeholder="Feed name" required{% if add_name %} value="{{ add_name | e }}"{% endif %}>
     <label for="feed-url">URL</label>
-    <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required>
+    <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required{% if add_url %} value="{{ add_url | e }}"{% endif %}>
+    <button type="button" class="btn-sm" onclick="discoverFeed(this)" title="If this is a site page, find its feed URL automatically">Find feed URL</button>
     <label for="feed-poll-interval">Poll interval (minutes)</label>
     <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
     <label for="feed-folder">Folder</label>

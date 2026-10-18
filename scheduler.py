@@ -17,7 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import settings
 import plans
-from database import get_db, timestamp_str, prune_feed_items
+from database import get_db, timestamp_str, prune_feed_items, as_utc_naive
 from email_sender import send_email
 from security import decrypt_secret, encrypt_secret
 from feed_parser import (
@@ -511,10 +511,21 @@ def _check_feed_with_lease(feed_id: int, lease_token: str) -> None:
         return
 
     # Reader ingestion is decoupled from echo delivery: store every parsed
-    # item regardless of echo config, so a read-enabled feed keeps its reading
-    # list even before (or without) any attached echo. The cursor/ordering
-    # logic below runs only when echoes exist and is otherwise unchanged.
-    if read_enabled:
+    # item regardless of echo config when reading is on, so a read-enabled
+    # feed keeps its reading list even before (or without) any attached
+    # echo. Queue/review echoes ALSO need the ingestion: the curation queue
+    # reconstructs item metadata (images, link cards, categories) from
+    # feed_items at dispatch, so a feed destined for the queue must have
+    # its items stored even without the reader. The cursor/ordering logic
+    # below runs only when echoes exist and is otherwise unchanged.
+    try:
+        ingest_items = read_enabled or any(
+            (e["delivery_mode"] or "instant") in ("queue", "review") for e in echoes
+        )
+    except (KeyError, IndexError):
+        # Malformed echo rows: fall back to the read-enabled gate only.
+        ingest_items = read_enabled
+    if ingest_items:
         _store_feed_items(feed_id, items)
 
     if not echoes:
@@ -832,6 +843,15 @@ def process_echo(
 
     posted_id, claim_token = claimed
 
+    try:
+        delivery_mode = echo["delivery_mode"] or "instant"
+    except (KeyError, IndexError):
+        delivery_mode = "instant"
+    if delivery_mode in ("queue", "review"):
+        return _enqueue_for_queue_mode(
+            echo, item, posted_id, claim_token, delivery_mode, feed_name=feed_name
+        )
+
     if _drip_applies(echo):
         # Serialize the rate check + dispatch per echo so the flush job
         # and feed checks cannot both see an open window and exceed the cap.
@@ -872,8 +892,9 @@ def _drip_limit(echo) -> int:
 def _drip_applies(echo) -> bool:
     """Drip applies to rate-limited echoes with instant delivery only.
 
-    Digest-mode echoes already batch on their own schedule, so a drip
-    limit would double-throttle them.
+    Digest-mode echoes already batch on their own schedule, and
+    queue/review modes buffer into the curation queue at a different
+    point, so a drip limit would double-throttle them.
     """
     if _drip_limit(echo) <= 0:
         return False
@@ -881,7 +902,7 @@ def _drip_applies(echo) -> bool:
         delivery_mode = echo["delivery_mode"] or "instant"
     except (KeyError, IndexError):
         delivery_mode = "instant"
-    return delivery_mode != "digest"
+    return delivery_mode == "instant"
 
 
 def _drip_rate(echo_id: int) -> int:
@@ -950,6 +971,240 @@ def _queue_for_drip(echo, item: FeedItem, posted_id: int, claim_token: str) -> b
         # suppress alerts for echoes that are not actually delivering.
         logger.info("Echo %s: item %s held for drip release", echo_id, item_id)
     return ok
+
+
+def _enqueue_for_queue_mode(
+    echo,
+    item: FeedItem,
+    posted_id: int,
+    claim_token: str,
+    mode: str,
+    feed_name: str = "",
+) -> bool:
+    """Bridge an auto-queue or review-mode echo item into the curation queue.
+
+    Never dispatches via the destination sender: renders the stored template,
+    inserts one queued_posts row (status 'queued' for auto-queue, 'draft' for
+    review), marks the posted_items row 'queued' so the feed cursor advances
+    (same terminal-hold semantics as drip/digest), and lets the existing
+    _flush_queue / post-now machinery handle delivery. feed_name is template
+    context only ({{ feed_name }}), mirroring the instant path.
+    """
+    echo_id = echo["id"]
+    item_id = item["id"]
+
+    # Defensive plan access mirroring _drip_applies: keys may be missing on
+    # test fixtures and plain-dict rows; fail closed at 'trial'.
+    try:
+        user_id = echo["user_id"]
+    except (KeyError, IndexError):
+        user_id = 1
+    try:
+        plan = echo["plan"] or "trial"
+    except (KeyError, IndexError):
+        plan = "trial"
+
+    with get_db() as db:
+        if settings.MULTI:
+            # Plan cap enforced like the Compose desk: fail LOUDLY, never
+            # silently drop the item. _check_allowance adds its own +1
+            # ("adding one more would exceed the cap"), so pass the raw
+            # count — passing n+1 double-counted and rejected at cap-1.
+            row = db.execute(
+                """
+                SELECT COUNT(*) AS n FROM queued_posts
+                 WHERE user_id = ?
+                   AND status IN ('queued', 'sending', 'draft')
+                """,
+                (user_id,),
+            ).fetchone()
+            try:
+                plans.check_queue_allowance(row["n"], plan)
+            except plans.PlanError:
+                return _fail_post(
+                    posted_id,
+                    claim_token,
+                    echo_id,
+                    "Echo auto-queue is at your plan's queue limit;"
+                    " free space or switch this echo back to Instant",
+                )
+
+    # Render the stored template into materialized text. The queued row
+    # carries the content verbatim from here on (same as Reader Compose).
+    try:
+        content = render_template(echo["template"], item, feed_name=feed_name)
+    except Exception as e:
+        logger.exception("Echo %s: template render failed for item %s", echo_id, item_id)
+        return _fail_post(posted_id, claim_token, echo_id, f"Template rendering failed: {e}")
+    if not content.strip():
+        return _fail_post(posted_id, claim_token, echo_id, "Rendered content was empty")
+
+    try:
+        visibility = echo["visibility"] or "public"
+    except (KeyError, IndexError):
+        visibility = "public"
+    try:
+        feed_id = echo["feed_id"]
+    except (KeyError, IndexError):
+        feed_id = 0
+    attach_image = _echo_attach_image(echo)
+    image_alt = item.get("image_alt") or ""
+    try:
+        content_warning = echo["content_warning"] or ""
+    except (KeyError, IndexError):
+        content_warning = ""
+    try:
+        use_markdown = 1 if echo["use_markdown"] else 0
+    except (KeyError, IndexError):
+        use_markdown = 0
+
+    # Resolve the feed_items row id so _flush_queue dispatches with the
+    # full item metadata (images, content_html, categories) the way the
+    # Reader Compose enqueue does. _check_feed_with_lease ingests items for
+    # ANY feed with a queue/review echo (the same condition that routes us
+    # here), but the row can still be absent (pruned by retention before a
+    # late slot, or the item fell out of the feed) — a miss is NOT fatal:
+    # the queued row carries its rendered content and _flush_queue
+    # tolerates NULL there (http metadata is then blank, matching the
+    # manual-compose fallback).
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as db:
+        fi_row = db.execute(
+            "SELECT id FROM feed_items WHERE feed_id = ? AND item_id = ?",
+            (feed_id, item_id),
+        ).fetchone()
+        metadata_feed_item_id = fi_row["id"] if fi_row else None
+
+        # One-shot echo at enqueue time so crash-recovery retries reuse the
+        # same echo_id (idempotency key for _claim_post), mirroring the
+        # Reader Compose desk's insert. The stored content carries the real
+        # text; this echoed row is inert for re-rendering. The parent's
+        # content warning / markdown flag are carried over so dispatch
+        # keeps the echo's configured voice.
+        new_echo_id = db.execute(
+            """
+            INSERT INTO echoes (feed_id, destination_type, destination_id, template,
+                                visibility, attach_image, content_warning, use_markdown,
+                                enabled, one_shot, deleted_at, user_id)
+            VALUES (?, ?, ?, '{{ title }}', ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id
+            """,
+            (feed_id, echo["destination_type"], echo["destination_id"], visibility,
+             attach_image, content_warning, use_markdown, now_utc, user_id),
+        ).fetchone()["id"]
+
+        # Prefer the freshly-read feed_items id when we got one; fall back
+        # to whatever the caller supplied (tests pass items without rows).
+        supplied = None
+        try:
+            supplied = item.get("feed_item_id")
+        except AttributeError:
+            pass
+        queued_feed_item_id = metadata_feed_item_id or supplied
+
+        if mode == "review":
+            target_time = _now()
+        else:
+            target_time = next_free_slot(
+                db, user_id, echo["destination_type"], echo["destination_id"]
+            )
+
+        db.execute(
+            """
+            INSERT INTO queued_posts (
+                user_id, feed_item_id, item_id, feed_id, destination_type, destination_id,
+                content, visibility, attach_image, image_alt, scheduled_at, status, echo_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                queued_feed_item_id,
+                item_id,
+                feed_id,
+                echo["destination_type"],
+                echo["destination_id"],
+                content,
+                visibility,
+                attach_image,
+                image_alt,
+                target_time,
+                "draft" if mode == "review" else "queued",
+                new_echo_id,
+            ),
+        )
+
+    ok = _update_post(posted_id, claim_token, "queued")
+    if ok:
+        # Deliberately no record_success() here: queueing is not a delivery,
+        # matching drip semantics.
+        logger.info(
+            "Echo %s: item %s enqueued for %s at %s",
+            echo_id,
+            item_id,
+            mode,
+            target_time,
+        )
+    return ok
+
+
+def next_free_slot(db, uid: int, dest_type: str, dest_id: int) -> str:
+    """Compute the next free scheduled_at timestamp for (uid, destination).
+
+    max(now, last scheduled_at) + interval_minutes.
+    Snaps into queue_active_hours ("HH:MM-HH:MM") in UTC.
+    """
+    dest_key = f"{dest_type}:{dest_id}"
+    setting = db.execute(
+        "SELECT queue_interval_minutes, queue_active_hours FROM queue_settings WHERE user_id = ? AND destination_key = ?",
+        (uid, dest_key),
+    ).fetchone()
+
+    interval = setting["queue_interval_minutes"] if setting else 240
+    active_hours = setting["queue_active_hours"] if setting else "09:00-21:00"
+
+    last_row = db.execute(
+        """
+        SELECT scheduled_at FROM queued_posts
+         WHERE user_id = ? AND destination_type = ? AND destination_id = ?
+           AND status IN ('queued', 'sending')
+         ORDER BY scheduled_at DESC LIMIT 1
+        """,
+        (uid, dest_type, dest_id),
+    ).fetchone()
+
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+    if last_row and last_row["scheduled_at"]:
+        last_dt = as_utc_naive(last_row["scheduled_at"])
+        base_dt = max(now_dt, last_dt) if last_dt else now_dt
+    else:
+        base_dt = now_dt
+
+    candidate = base_dt + timedelta(minutes=interval)
+
+    # Snap to active hours if configured
+    if active_hours and "-" in active_hours:
+        try:
+            start_str, end_str = active_hours.split("-", 1)
+            sh, sm = [int(p) for p in start_str.split(":", 1)]
+            eh, em = [int(p) for p in end_str.split(":", 1)]
+            start_mins = sh * 60 + sm
+            end_mins = eh * 60 + em
+            cand_mins = candidate.hour * 60 + candidate.minute
+
+            if start_mins <= end_mins:
+                # Same day window, e.g. 09:00 - 21:00
+                if cand_mins < start_mins:
+                    candidate = candidate.replace(hour=sh, minute=sm)
+                elif cand_mins > end_mins:
+                    # Move to next day start
+                    candidate = (candidate + timedelta(days=1)).replace(hour=sh, minute=sm)
+            else:
+                # Overnight window, e.g. 22:00 - 06:00
+                if end_mins < cand_mins < start_mins:
+                    candidate = candidate.replace(hour=sh, minute=sm)
+        except Exception:
+            pass
+
+    return candidate.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _reclaim_queued(echo_id: int, item_id: str) -> tuple[int, str] | None:

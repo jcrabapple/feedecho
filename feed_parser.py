@@ -13,6 +13,7 @@ import json
 import logging
 import socket
 import threading
+from html.parser import HTMLParser
 import httpx
 import nh3
 import feedparser
@@ -633,6 +634,10 @@ def _fetch_with_redirect_validation(
                 "status": response.status_code,
                 "etag": response.headers.get("etag"),
                 "last_modified": response.headers.get("last-modified"),
+                # Feed autodiscovery resolves relative <link href> values
+                # against the FINAL hop's URL, not the requested one; other
+                # callers simply ignore the extra key.
+                "final_url": url,
             }
             return b"".join(chunks), response.headers.get("content-type", ""), meta
 
@@ -669,6 +674,143 @@ def _fetch_via_fallback_proxy(
         )
     finally:
         client.close()
+
+
+# ── Feed autodiscovery (F4) ──────────────────────────────────────────────────
+
+_FEED_LINK_TYPES = (
+    "application/rss+xml",
+    "application/atom+xml",
+    "application/feed+json",
+)
+
+
+class _DiscoveryHTMLParser(HTMLParser):
+    """Collect <link rel="alternate"> candidates and the page <title>.
+
+    Mirrors the module's small-local-parser style: no dependencies, no error
+    recovery — a malformed page simply yields what it yields. With
+    ``convert_charrefs=True`` attribute values arrive entity-decoded, so a
+    href like ``/feed.xml?utm=1&amp;x=2`` is parsed correctly.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[tuple[str, str, str]] = []  # (rel, type, href)
+        self.title = ""
+        self._in_title = False
+        # The FIRST <title> in the document is the page title; later ones
+        # (inline SVG <title>, noscript fallbacks) must not append to it.
+        self._title_done = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "link":
+            attr = dict(attrs)
+            self.links.append(
+                (
+                    attr.get("rel") or "",
+                    attr.get("type") or "",
+                    attr.get("href") or "",
+                )
+            )
+        elif tag == "title" and not self._title_done:
+            self._in_title = True
+
+    def handle_endtag(self, tag):
+        if tag == "title" and self._in_title:
+            self._in_title = False
+            self._title_done = True
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data
+
+
+def discover_feed_url(url: str, max_page_bytes: int = 2 * 1024 * 1024) -> dict:
+    """Resolve a page URL to its feed URL via ``<link rel="alternate">``.
+
+    When the input URL itself is a feed (non-HTML content-type), it is
+    echoed back unchanged. Returns ``{"found", "url", "title", "alternates"}``
+    — ``alternates`` lists every valid feed link in document order (best
+    first), de-duplicated by URL with a trailing slash stripped.
+
+    Raises SSRFError for unsafe input URLs. SSRF-blocked *candidates* found
+    on the page are skipped silently, so one hostile link never poisons the
+    discovery of the legitimate ones. Raises httpx.HTTPError on network
+    failure — the caller decides whether to fall back to the raw URL.
+    """
+    validate_outbound_url(url)
+
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        client, backend = ssrf_client([url])
+        try:
+            content, content_type, meta = _fetch_with_redirect_validation(
+                client, url, headers, max_page_bytes, backend=backend
+            )
+        finally:
+            client.close()
+    except httpx.RemoteProtocolError:
+        # Same ALPN-hostile-edge retry as fetch_feed: some edge proxies drop
+        # connections advertising ALPN http/1.1 and only serve plain HTTP/1.1.
+        client, backend = ssrf_client([url], no_alpn=True)
+        try:
+            content, content_type, meta = _fetch_with_redirect_validation(
+                client, url, headers, max_page_bytes, backend=backend
+            )
+        finally:
+            client.close()
+
+    base_url = meta.get("final_url") or url
+    content_type = content_type.split(";")[0].strip().lower()
+
+    if content_type != "text/html":
+        # Non-HTML response: assume it IS a feed and echo the URL unchanged.
+        parsed = feedparser.parse(content)
+        title = ""
+        try:
+            title = parsed.feed.get("title", "") or ""
+        except AttributeError:
+            pass
+        found = not parsed.bozo or bool(parsed.version)
+        return {"found": found, "url": url, "title": title, "alternates": []}
+
+    parser = _DiscoveryHTMLParser()
+    parser.feed(content.decode("utf-8", errors="replace"))
+
+    page_title = html.unescape(parser.title).strip()
+
+    alternates: list[str] = []
+    seen: set[str] = set()
+    for rel, link_type, href in parser.links:
+        if (rel or "").strip().lower() != "alternate":
+            continue
+        mime = (link_type or "").split(";")[0].strip().lower()
+        if mime not in _FEED_LINK_TYPES and not (
+            mime == "application/json" and (href or "").lower().endswith(".json")
+        ):
+            continue
+        if not href:
+            continue
+        resolved = urljoin(base_url, href.strip())
+        try:
+            validate_outbound_url(resolved)
+        except SSRFError:
+            # A page advertising one 127.0.0.1 link and one real link must
+            # resolve the real one, not fail the whole discovery.
+            continue
+        key = resolved.rstrip("/")
+        if key in seen:
+            continue
+        seen.add(key)
+        alternates.append(resolved)
+
+    return {
+        "found": bool(alternates),
+        "url": alternates[0] if alternates else None,
+        "title": page_title,
+        "alternates": alternates,
+    }
 
 
 def _extract_categories(entry) -> dict[str, str]:

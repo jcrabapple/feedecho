@@ -25,7 +25,9 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlparse, urlencode
 
-from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File, BackgroundTasks
+import httpx
+
+from fastapi import FastAPI, Request, Form, HTTPException, Query, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 import xml.etree.ElementTree as ElementTree
 from xml.sax.saxutils import quoteattr
@@ -39,7 +41,7 @@ from _version import __version__ as APP_VERSION
 import auth
 from auth import current_user_id
 import security
-from feed_parser import fetch_feed, SSRFError, validate_outbound_url
+from feed_parser import discover_feed_url, fetch_feed, SSRFError, validate_outbound_url
 import plans
 import invites
 import import_export
@@ -99,7 +101,14 @@ from webhook import (
     parse_headers as webhook_parse_headers,
     test_connection as test_webhook_connection,
 )
-from scheduler import start_scheduler, stop_scheduler, check_feed, process_echo
+import scheduler  # noqa: E402 — module-qualified access (tests monkeypatch through it)
+from scheduler import (
+    start_scheduler,
+    stop_scheduler,
+    check_feed,
+    process_echo,
+    next_free_slot,
+)
 from oauth import get_authorize_url, exchange_code, verify_state
 from email_sender import get_smtp_settings, test_smtp_connection
 from utils import is_valid_email
@@ -2099,7 +2108,11 @@ async def admin_revoke_invite(request: Request):
 
 
 @app.get("/feeds", response_class=HTMLResponse)
-async def feeds_page(request: Request):
+async def feeds_page(
+    request: Request,
+    add: str = "",
+    name: str = "",
+):
     uid = current_user_id(request)
     with get_db() as db:
         folders = db.execute(
@@ -2116,7 +2129,15 @@ async def feeds_page(request: Request):
                 "SELECT COUNT(*) as c FROM echoes WHERE feed_id = ? AND deleted_at IS NULL AND user_id = ?",
                 (f["id"], uid),
             ).fetchone()["c"]
-    return render("feeds.html", request, feeds=feeds, folders=folders, feed_echoes=feed_echoes)
+    return render(
+        "feeds.html",
+        request,
+        feeds=feeds,
+        folders=folders,
+        feed_echoes=feed_echoes,
+        add_url=add or "",
+        add_name=name or "",
+    )
 
 
 @app.get("/queue", response_class=HTMLResponse)
@@ -2130,7 +2151,7 @@ async def queue_page(request: Request):
             SELECT q.*, f.name AS feed_name
               FROM queued_posts q
               LEFT JOIN feeds f ON q.feed_id = f.id
-             WHERE q.user_id = ? AND q.status IN ('queued', 'sending', 'failed')
+             WHERE q.user_id = ? AND q.status IN ('queued', 'sending', 'failed', 'draft')
              ORDER BY q.scheduled_at ASC
             """,
             (uid,),
@@ -2171,7 +2192,7 @@ def queue_post_now(request: Request, post_id: int):
             """
             UPDATE queued_posts
                SET status = 'sending', claim_token = ?, claimed_at = ?
-             WHERE id = ? AND user_id = ? AND status = 'queued'
+             WHERE id = ? AND user_id = ? AND status IN ('queued', 'draft')
             """,
             (claim_token, now_utc, post_id, uid),
         )
@@ -2294,7 +2315,9 @@ def queue_cancel(request: Request, post_id: int):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
-        if row["status"] not in ("queued", "failed"):
+        # draft rows (auto-queue staging) cancel like queued ones: they are
+        # still awaiting their first dispatch attempt.
+        if row["status"] not in ("queued", "failed", "draft"):
             raise HTTPException(status_code=400, detail="Cannot cancel post that is already sending or completed")
         # Delete the orphaned one-shot echo and any posted_items row, atomically
         # with the status check (same transaction).
@@ -2361,10 +2384,10 @@ def queue_edit(
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Queued post not found")
-        if row["status"] != "queued":
+        if row["status"] not in ("queued", "draft"):
             raise HTTPException(status_code=400, detail="Cannot edit post that is already sending or completed")
         db.execute(
-            "UPDATE queued_posts SET content = ?, scheduled_at = ? WHERE id = ? AND user_id = ? AND status = 'queued'",
+            "UPDATE queued_posts SET content = ?, scheduled_at = ? WHERE id = ? AND user_id = ? AND status IN ('queued', 'draft')",
             (content, normalized_scheduled_at, post_id, uid),
         )
     return RedirectResponse(url="/queue", status_code=303)
@@ -4763,69 +4786,31 @@ def reorder_folders(request: Request, ids: str = Form(...)):
 
 
 # ── Queue Slots Helper ──────────────────────────────────────────────────────
+# next_free_slot lives in scheduler.py (single source of truth, shared with
+# the dispatch loop); app.py imports it at module scope.
 
-def _next_free_slot(db, uid: int, dest_type: str, dest_id: int) -> str:
-    """Compute the next free scheduled_at timestamp for (uid, destination).
 
-    max(now, last scheduled_at) + interval_minutes.
-    Snaps into queue_active_hours ("HH:MM-HH:MM") in UTC.
+def _resolve_feed_url(url: str) -> str:
+    """Resolve a pasted site URL to its feed URL via HTML link autodiscovery.
+
+    Add/edit-time convenience only — never a gate. Any failure (network
+    error, SSRF block, malformed page) falls back to the pasted URL
+    unchanged, and the resolved URL is re-validated through app.validate_url
+    for scheme/host consistency before it is stored.
     """
-    dest_key = f"{dest_type}:{dest_id}"
-    setting = db.execute(
-        "SELECT queue_interval_minutes, queue_active_hours FROM queue_settings WHERE user_id = ? AND destination_key = ?",
-        (uid, dest_key),
-    ).fetchone()
+    try:
+        info = discover_feed_url(url)
+    except (httpx.HTTPError, SSRFError, ValueError):
+        return url
+    resolved = info.get("url") or url
+    try:
+        return validate_url(resolved)
+    except HTTPException:
+        return url
 
-    interval = setting["queue_interval_minutes"] if setting else 240
-    active_hours = setting["queue_active_hours"] if setting else "09:00-21:00"
-
-    last_row = db.execute(
-        """
-        SELECT scheduled_at FROM queued_posts
-         WHERE user_id = ? AND destination_type = ? AND destination_id = ?
-           AND status IN ('queued', 'sending')
-         ORDER BY scheduled_at DESC LIMIT 1
-        """,
-        (uid, dest_type, dest_id),
-    ).fetchone()
-
-    now_dt = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
-    if last_row and last_row["scheduled_at"]:
-        last_dt = as_utc_naive(last_row["scheduled_at"])
-        base_dt = max(now_dt, last_dt) if last_dt else now_dt
-    else:
-        base_dt = now_dt
-
-    candidate = base_dt + timedelta(minutes=interval)
-
-    # Snap to active hours if configured
-    if active_hours and "-" in active_hours:
-        try:
-            start_str, end_str = active_hours.split("-", 1)
-            sh, sm = [int(p) for p in start_str.split(":", 1)]
-            eh, em = [int(p) for p in end_str.split(":", 1)]
-            start_mins = sh * 60 + sm
-            end_mins = eh * 60 + em
-            cand_mins = candidate.hour * 60 + candidate.minute
-
-            if start_mins <= end_mins:
-                # Same day window, e.g. 09:00 - 21:00
-                if cand_mins < start_mins:
-                    candidate = candidate.replace(hour=sh, minute=sm)
-                elif cand_mins > end_mins:
-                    # Move to next day start
-                    candidate = (candidate + timedelta(days=1)).replace(hour=sh, minute=sm)
-            else:
-                # Overnight window, e.g. 22:00 - 06:00
-                if end_mins < cand_mins < start_mins:
-                    candidate = candidate.replace(hour=sh, minute=sm)
-        except Exception:
-            pass
-
-    return candidate.strftime("%Y-%m-%d %H:%M:%S")
 
 @app.post("/api/feeds")
-async def add_feed(
+def add_feed(
     request: Request,
     name: str = Form(...),
     url: str = Form(...),
@@ -4836,6 +4821,15 @@ async def add_feed(
     url = validate_url(url)
     poll_interval = max(1, min(poll_interval, 1440))
     target_folder_id = _filter_int(folder_id)
+
+    # HTML link autodiscovery (F4) runs BEFORE any DB work: it does blocking
+    # network I/O (httpx + DNS), and sync `def` routes run in the threadpool
+    # instead of on the event loop, while a `with get_db()` block held open
+    # across the fetch would tie up a connection on both dialects. Resolve
+    # first so the plan-cap and upsert checks below see the final URL (a
+    # re-add via a home-page paste upserts instead of 402ing at the cap);
+    # any discovery failure keeps the raw input.
+    url = _resolve_feed_url(url)
     with get_db() as db:
         if target_folder_id is not None:
             folder = db.execute(
@@ -4846,7 +4840,9 @@ async def add_feed(
                 target_folder_id = None
         if settings.MULTI:
             # Cap NEW rows only: re-adding an existing URL is an upsert that
-            # changes nothing the cap measures.
+            # changes nothing the cap measures. The re-add check runs on the
+            # RESOLVED url so a home-page paste of an already-stored feed
+            # isn't misread as a new feed (and 402ed) at the plan cap.
             existing_feed = db.execute(
                 "SELECT id FROM feeds"
                 " WHERE user_id = ? AND url = ? AND deleted_at IS NULL",
@@ -5074,7 +5070,7 @@ def import_opml(
 
 
 @app.post("/api/feeds/{feed_id}/edit")
-async def edit_feed(
+def edit_feed(
     request: Request,
     feed_id: int,
     name: str = Form(...),
@@ -5099,6 +5095,21 @@ async def edit_feed(
     poll_interval = max(1, min(poll_interval, 1440))
     mute_keywords = (mute_keywords or "").strip()
     target_folder_id = _filter_int(folder_id) if folder_id is not None else None
+
+    # Discovery (F4) runs BEFORE the DB transaction — blocking network I/O
+    # in a sync `def` route stays in the threadpool, off the event loop.
+    with get_db() as db:
+        stored_url = db.execute(
+            "SELECT url FROM feeds WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+            (feed_id, uid),
+        ).fetchone()
+        if not stored_url:
+            raise HTTPException(status_code=404, detail="Feed not found")
+    if stored_url["url"] != url:
+        # URL change: resolve a pasted site page to its feed URL (F4).
+        # Failure falls back to the raw input, same as add_feed.
+        url = _resolve_feed_url(url)
+
     with get_db() as db:
         if target_folder_id is not None:
             fol = db.execute(
@@ -5119,11 +5130,12 @@ async def edit_feed(
         ).fetchone()
         if not feed:
             raise HTTPException(status_code=404, detail="Feed not found")
+        url_changed = feed["url"] != url
 
         # If folder_id was omitted entirely from the form, preserve existing folder
         final_folder_id = target_folder_id if folder_id is not None else feed["folder_id"]
 
-        if feed["url"] != url:
+        if url_changed:
             db.execute(
                 """
                 UPDATE feeds
@@ -5186,7 +5198,7 @@ async def delete_feed(request: Request, feed_id: int):
             db.execute(
                 "UPDATE queued_posts SET status = 'failed',"
                 " error_message = 'Feed deleted'"
-                " WHERE feed_id = ? AND status = 'queued'",
+                " WHERE feed_id = ? AND status IN ('queued', 'draft')",
                 (feed_id,),
             )
     # Soft-deleting a feed changes which items saved-search counts cover
@@ -5207,13 +5219,47 @@ def test_feed(request: Request, feed_id: int):
         raise HTTPException(status_code=404, detail="Feed not found")
     try:
         feed_data = fetch_feed(feed["url"])
-        preview = {
-            "title": feed_data["title"],
-            "type": feed_data["type"],
-            "item_count": len(feed_data["items"]),
-            "items": feed_data["items"][:5],
-        }
-        return {"success": True, "preview": preview}
+        return {"success": True, "preview": _preview_payload(feed_data)}
+    except SSRFError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _preview_payload(feed_data: dict) -> dict:
+    """Shared item-preview shape for /api/feeds/{id}/test and /api/feeds/preview."""
+    return {
+        "title": feed_data["title"],
+        "type": feed_data["type"],
+        "item_count": len(feed_data["items"]),
+        "items": feed_data["items"][:5],
+    }
+
+
+@app.get("/api/feeds/discover")
+def discover_feed_api(request: Request, url: str = Query(...)):
+    """Resolve a pasted site URL to its feed URL via link autodiscovery (F4)."""
+    uid = current_user_id(request)
+    url = validate_url(url)
+    try:
+        info = discover_feed_url(url)
+    except (httpx.HTTPError, SSRFError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Could not discover feeds for {url}: {e}")
+    return {
+        "found": bool(info.get("url")),
+        "url": info.get("url"),
+        "title": info.get("title") or "",
+        "alternates": info.get("alternates") or [],
+    }
+
+
+@app.post("/api/feeds/preview")
+def test_feed_preview(request: Request, url: str = Form(...)):
+    """Preview a feed's items from a raw URL, without saving a feed row (F4)."""
+    url = validate_url(url)
+    try:
+        feed_data = fetch_feed(url)
+        return {"success": True, "preview": _preview_payload(feed_data)}
     except SSRFError as e:
         return {"success": False, "error": str(e)}
     except Exception as e:
@@ -5958,7 +6004,7 @@ def reader_compose(
                         raise HTTPException(status_code=400, detail="Cannot schedule more than 365 days ahead")
                     target_time = norm_dt.strftime("%Y-%m-%d %H:%M:%S")
                 else:
-                    target_time = _next_free_slot(db, uid, dest_type, destination_id)
+                    target_time = next_free_slot(db, uid, dest_type, destination_id)
 
                 # Create the one-shot echo once at enqueue time so crash-recovery
                 # retries reuse the same echo_id (idempotency key for _claim_post).
@@ -6082,6 +6128,10 @@ def reader_shout(
 VALID_VISIBILITY = {"public", "unlisted", "private", "direct"}
 VALID_DEST_TYPES = set(DESTINATION_TABLES_BY_TYPE)
 VALID_FILTER_MODES = {"exclude", "include"}
+# Delivery modes accepted at the echo routes. queue/review bridge scheduler
+# echoes into the curation queue (scheduler enforces the plan cap at enqueue,
+# not here); digest stays email-only.
+VALID_DELIVERY_MODES = ("instant", "digest", "queue", "review")
 
 
 def _revalidate_stored_templates() -> None:
@@ -6152,7 +6202,7 @@ async def add_echo(
         raise HTTPException(status_code=400, detail=f"Invalid visibility")
     if filter_mode not in VALID_FILTER_MODES:
         raise HTTPException(status_code=400, detail=f"Invalid filter mode")
-    if delivery_mode not in ("instant", "digest"):
+    if delivery_mode not in VALID_DELIVERY_MODES:
         raise HTTPException(status_code=400, detail="Invalid delivery mode")
     # Digest mode is email-only
     if delivery_mode == "digest" and destination_type != "email":
@@ -6383,7 +6433,7 @@ async def edit_echo(
         raise HTTPException(status_code=400, detail=f"Invalid visibility")
     if filter_mode not in VALID_FILTER_MODES:
         raise HTTPException(status_code=400, detail=f"Invalid filter mode")
-    if delivery_mode not in ("instant", "digest"):
+    if delivery_mode not in VALID_DELIVERY_MODES:
         raise HTTPException(status_code=400, detail="Invalid delivery mode")
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")

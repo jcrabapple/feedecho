@@ -30,6 +30,7 @@ import unicodedata
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from jinja2 import TemplateSyntaxError
 from jinja2.exceptions import SecurityError
@@ -170,6 +171,162 @@ def _format_hashtags(tags) -> str:
         seen.add(key)
         hashtags.append(f"#{clean}")
     return " ".join(hashtags)
+
+
+# ── URL hygiene + hashtag filters ────────────────────────────────────────────
+
+_DEFAULT_TRACKING = ("utm_source", "utm_medium", "utm_campaign", "utm_term",
+                     "utm_content", "fbclid", "gclid", "msclkid", "dclid",
+                     "mc_cid", "mc_eid", "igshid", "twclid", "vero_id", "spm")
+
+
+def _extra_tracking_keys(extra) -> set[str]:
+    """Normalize a `clean_url` extra argument (str, list, tuple, set) to keys."""
+    if extra is None:
+        return set()
+    if isinstance(extra, str):
+        if "," in extra or ";" in extra:
+            parts = extra.split(",")
+            parts = [p for piece in parts for p in piece.split(";")]
+        else:
+            parts = extra.split()
+    elif isinstance(extra, (list, tuple, set, frozenset)):
+        parts = list(extra)
+    else:
+        return set()
+    return {str(p).strip().lower() for p in parts if str(p).strip()}
+
+
+def _filter_clean_url(value, extra=None) -> str:
+    """Jinja filter: strip tracking params from a URL, preserving the rest.
+
+    Any query parameter whose key starts with ``utm_`` (case-insensitive,
+    percent-decoded) plus the keys in ``_DEFAULT_TRACKING`` is dropped;
+    ``extra`` (a comma-separated string or a list of key names, lowered)
+    adds more. Everything else survives byte-for-byte: parameter order,
+    percent-encoding, ``;``-separated oddities, and the fragment. If
+    nothing was stripped the input is returned byte-identical. Non-URLs,
+    empty values, and unparsable strings come back unchanged — filters
+    must never raise, templates post to real social accounts.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    strip = set(_DEFAULT_TRACKING) | _extra_tracking_keys(extra)
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if not parts.query:
+        return value
+    kept = []
+    dropped = False
+    for piece in parts.query.split("&"):
+        keypart = piece.split("=", 1)[0]
+        norm = unquote(keypart).lower()
+        if norm in strip or norm.startswith("utm_"):
+            dropped = True
+            continue
+        kept.append(piece)
+    if not dropped:
+        return value
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, "&".join(kept), parts.fragment)
+    )
+
+
+def _filter_utm(value, source=None, medium=None, campaign=None, term=None,
+                content=None) -> str:
+    """Jinja filter: append UTM parameters to a URL, merging with existing ones.
+
+    ``{{ link | utm('mastodon') }}`` or named
+    ``{{ link | utm(source=..., medium=..., campaign=..., term=..., content=...) }}``.
+    Only the five ``utm_*`` keys are produced; None/empty values are
+    skipped. Specified keys override same-named entries already in the
+    query; all other existing params keep their original order first,
+    then the utm additions. With no usable arguments the input is
+    returned byte-identical; garbage input comes back unchanged.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    additions = [
+        ("utm_" + key, val) for key, val in
+        (("source", source), ("medium", medium), ("campaign", campaign),
+         ("term", term), ("content", content))
+        if val is not None and str(val) != ""
+    ]
+    if not additions:
+        return value
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if not parts.netloc:
+        # Not an absolute URL (garbage or a relative path): leave it alone.
+        return value
+    overridden = {key for key, _ in additions}
+    # Case-insensitive override matching: a URL carrying ?UTM_SOURCE=... must
+    # not end up with both spellings after the merge.
+    overridden_lower = {key.lower() for key in overridden}
+    params = [
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() not in overridden_lower
+    ]
+    params.extend(additions)
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path,
+         urlencode(params, doseq=True, quote_via=quote), parts.fragment)
+    )
+
+
+def _tag_normalize(value) -> list[str] | None:
+    """Normalize a hashtags-filter value to a plain list of tag strings.
+
+    Accepts a list/tuple of tags or a comma/space/semicolon-separated
+    string. Returns None for anything else (unknown shape).
+    """
+    if isinstance(value, (list, tuple)):
+        return [str(t) for t in value if str(t).strip()]
+    if isinstance(value, str):
+        if "," in value or ";" in value:
+            pieces = [p for chunk in value.split(",") for p in chunk.split(";")]
+        else:
+            pieces = value.split()
+        return [p.strip() for p in pieces if p.strip()]
+    return None
+
+
+def _filter_hashtags(value, exclude=None) -> str:
+    """Jinja filter: convert a tag list to #hashtags, dropping excluded tags.
+
+    ``{{ item['tags'] | hashtags(exclude='internal,heartbeat') }}``. The
+    value and the exclude list may each be a list/tuple or a
+    comma/space/semicolon-separated string; matching is NFKC + casefold
+    after trimming. Cleaning, dedupe and unicode handling are delegated
+    to the existing ``_format_hashtags`` helper. Unknown or empty input
+    yields "" (never an exception). Note: the context variable
+    ``{{ hashtags }}`` and this filter live in separate Jinja namespaces
+    and are independent.
+    """
+    tags = _tag_normalize(value)
+    if not tags:
+        return ""
+    if exclude is not None:
+        excl = {
+            unicodedata.normalize("NFKC", t).casefold().strip().lstrip("#")
+            for t in (_tag_normalize(exclude) or [])
+            if t.strip()
+        }
+        tags = [
+            t for t in tags
+            if unicodedata.normalize("NFKC", t).casefold().strip().lstrip("#")
+            not in excl
+        ]
+    return _format_hashtags(tags)
+
+
+env.filters["clean_url"] = _filter_clean_url
+env.filters["utm"] = _filter_utm
+env.filters["hashtags"] = _filter_hashtags
 
 
 def _normalize(template: str) -> str:
@@ -486,4 +643,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ image_alt }}", "desc": "The image's alt text from the feed (may be empty)"},
         {"var": "{{ feed_name }}", "desc": "Name of the source feed"},
         {"var": "{{ item.title }}", "desc": "Any item field via the item dict"},
+        {"var": "{{ link | clean_url }}", "desc": "Strip UTM/tracking params from a URL (utm_*, fbclid, gclid, ...); everything else is preserved"},
+        {"var": "{{ link | utm('mastodon') }}", "desc": "Append tracking params to a URL: utm(source, medium=, campaign=, term=, content=)"},
+        {"var": "{{ item['tags'] | hashtags(exclude='internal,heartbeat') }}", "desc": "Convert a tag list to #hashtags, dropping the listed ones (comma/whitespace separated)"},
     ]

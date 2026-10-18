@@ -9,7 +9,7 @@
     <p>A feed is any RSS, Atom, or JSON feed URL — a blog, a news site, a podcast, a subreddit.</p>
     <ol class="howto-steps">
         <li>Open <a href="/feeds">Feeds</a>.</li>
-        <li>Paste the feed URL into the <strong>Add feed</strong> form.</li>
+        <li>Paste the feed URL into the <strong>Add feed</strong> form. Tip: you can paste the site's regular home-page or article URL instead — FeedEcho resolves the site's feed link automatically, and the /feeds page offers a bookmarklet that prefills the URL from any page you are reading.</li>
         <li>Set the <strong>poll interval</strong> — how often FeedEcho checks for new items (default 15 minutes). Lower intervals check more often; keep this reasonable for the feed's server.</li>
         <li>Click <strong>Add</strong>. FeedEcho records the newest item without posting it, so adding a feed never floods your accounts with the existing backlog.</li>
     </ol>
@@ -79,10 +79,10 @@
     <ol class="howto-steps">
         <li>Open <a href="/echoes">Echoes</a> and fill in the <strong>New echo</strong> form at the top of the page.</li>
         <li>Pick the <strong>feed</strong> and the <strong>account</strong>.</li>
-        <li>Write a <strong>template</strong> for the post. Variables like <code>{{ '{{ title }}' }}</code> and <code>{{ '{{ link }}' }}</code> pull from each feed item — the Echoes page lists the full set of available variables.</li>
+        <li>Write a <strong>template</strong> for the post. Variables like <code>{{ '{{ title }}' }}</code> and <code>{{ '{{ link }}' }}</code> pull from each feed item — the Echoes page lists the full set of available variables. URL hygiene filters are available too: <code>clean_url</code> strips tracking parameters, <code>utm(...)</code> appends UTM parameters, and <code>hashtags(exclude=...)</code> converts a tag list to #hashtags while dropping the listed ones.</li>
         <li>Optional rules:
             <ul>
-                <li><strong>Filter keywords</strong> — post only items containing a keyword, or skip items containing it.</li>
+                <li><strong>Filter keywords</strong> — post only items containing a keyword, or skip items containing it. Comma-separated, case-insensitive. Plain text matches title and summary; prefixes <code>tag:</code>, <code>author:</code>, <code>url:</code> (or <code>link:</code>), and <code>content:</code> match that field.</li>
                 <li><strong>Content warning</strong> — for Mastodon, adds a spoiler label and marks posts sensitive.</li>
                 <li><strong>Attach image</strong> — include the item's images with the post where the destination supports media uploads (up to 4 on Mastodon and Bluesky; email embeds up to 4 inline; Matrix, micro.blog, and Discord use the first).</li>
                 <li><strong>Render body as HTML</strong> — email destinations, instant mode only: the email's HTML part is your template output as-is. Combine with {% raw %}<code>{{ content_html }}</code>{% endraw %} in the template to keep the article's formatting and links. Digests stay text-only.</li>
@@ -90,6 +90,8 @@
                 <li><strong>Link cards</strong> — a Bluesky post without attached feed images gets a real link card for its first link: FeedEcho reads the page's Open Graph title and description and uses its <code>og:image</code> as the card thumbnail. A page without a thumbnail still shows a card; a page that cannot be fetched just posts without a card.</li>
                 <li><strong>Drip limit</strong> — cap the echo at N posts per hour; extra items wait in a queue and release as the window slides. 0 = off.</li>
                 <li><strong>Digest</strong> — email destinations only; batches items into one email per hour instead of sending per item.</li>
+                <li><strong>Auto-queue</strong> — instead of posting immediately, new items are scheduled into the <a href="/queue">curation queue</a> at your queue cadence and send automatically.</li>
+                <li><strong>Review</strong> — new items land in the queue as drafts for you to approve, edit, or discard before anything goes out.</li>
             </ul>
         </li>
         <li>Click <strong>Create Echo</strong>. New feed items post on the next poll, subject to the drip limit you set.</li>

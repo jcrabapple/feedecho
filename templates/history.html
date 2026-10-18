@@ -62,6 +62,8 @@
                 <span class="badge badge-warning">Filtered</span>
                 {% elif post.status == 'queued' %}
                 <span class="badge badge-info">Queued</span><br><small>held for drip rate limit</small>
+                {% elif post.status == 'draft' %}
+                <span class="badge badge-info">Draft</span>
                 {% elif post.status == 'pending' %}
                 <span class="badge badge-muted">Pending</span>
                 {% elif post.status == 'gave_up' %}

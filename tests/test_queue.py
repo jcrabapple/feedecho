@@ -8,7 +8,8 @@ import database
 import security
 import settings
 import scheduler
-from app import app, _next_free_slot
+from app import app
+from scheduler import next_free_slot as _next_free_slot
 
 
 @pytest.fixture

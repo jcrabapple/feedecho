@@ -1225,11 +1225,16 @@ def clean_html(html_str: str) -> str:
     return strip_html(html_str)
 
 
-def truncate(text: str, max_len: int = 500) -> str:
-    """Truncate text to max_len chars with ellipsis."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len - 1].rstrip() + "…"
+from utils import truncate_chars
+
+
+def truncate(text: str, max_len: int = 500, *, preserve_links: bool = True) -> str:
+    """Truncate text to max_len chars with ellipsis.
+
+    When preserve_links=True (default), preserves trailing URLs (and any trailing
+    hashtags/suffix) by truncating preceding text instead of severing the link.
+    """
+    return truncate_chars(text, max_len, preserve_links=preserve_links)
 
 
 def _extract_first_link(html_str: str, base_url: str = "") -> str:

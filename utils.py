@@ -58,14 +58,56 @@ def is_valid_email(email: str, *, require_domain_dot: bool = True) -> bool:
     return bool(pattern.match(email))
 
 
-def truncate_chars(text: str, max_chars: int) -> str:
+_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+
+
+def truncate_chars(text: str, max_chars: int, *, preserve_links: bool = True) -> str:
     """Truncate to max_chars without splitting trailing whitespace.
 
     Identical to the former discord.truncate_content and
-    matrix._truncate_body bodies.
+    matrix._truncate_body bodies. When preserve_links=True (default), preserves
+    trailing URLs by truncating preceding text instead of severing the link.
     """
     if len(text) <= max_chars:
         return text
+
+    if preserve_links:
+        urls = list(_URL_RE.finditer(text))
+        if urls:
+            last_url = urls[-1]
+            u_start = last_url.start()
+            u_end = last_url.end()
+            standard_cut = max_chars - 1
+
+            naive_head = text[:standard_cut].rstrip()
+            needs_preservation = False
+            if u_start > 0:
+                if u_end >= standard_cut:
+                    needs_preservation = True
+                elif naive_head.endswith(last_url.group(0)):
+                    needs_preservation = True
+
+            if needs_preservation:
+                tail = text[u_start:].rstrip()
+                if len(tail) > max_chars:
+                    tail = text[u_start:u_end].rstrip()
+
+                tail_len = len(tail)
+                if tail_len <= max_chars:
+                    head_budget = max_chars - tail_len - 2
+                    if head_budget > 0:
+                        head_str = text[:u_start][:head_budget].rstrip() + "\u2026"
+                        result = head_str.rstrip() + " " + tail.lstrip()
+                    elif tail_len <= max_chars - 2:
+                        result = "\u2026 " + tail.lstrip()
+                    elif tail_len <= max_chars - 1:
+                        result = "\u2026" + tail.lstrip()
+                    else:
+                        result = tail.strip()
+
+                    if len(result) <= max_chars:
+                        return result.rstrip()
+
     return text[: max_chars - 1].rstrip() + "\u2026"
 
 

@@ -47,6 +47,15 @@ def test_truncate_chars_over_limit_strips_then_appends_ellipsis():
     assert utils.truncate_chars("abcdef   tail", 10) == "abcdef\u2026"
 
 
+def test_truncate_chars_preserves_trailing_url():
+    url = "https://example.com/item"
+    text = "x" * 100 + " " + url
+    res = utils.truncate_chars(text, 50)
+    assert len(res) <= 50
+    assert res.endswith(url)
+    assert "\u2026" in res
+
+
 def test_json_error_detail_first_key_wins():
     r = FakeResponse({"message": "boom"})
     assert utils.json_error_detail(r, "message", "error") == "boom"

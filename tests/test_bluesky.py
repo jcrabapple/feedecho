@@ -251,6 +251,122 @@ class TestTruncateGraphemes:
         result = truncate_graphemes(text, 300)
         assert result == text
 
+    def test_trailing_url_preserved_when_text_exceeds_cap(self):
+        from bluesky import build_facets, truncate_graphemes, _grapheme_clusters
+
+        url = "https://smoitzheim.online/posts/snl-uk-hat-genau-die-fuck-around-and-find-out-mentalitat-die-dem-original-fehlt"
+        summary = "Im amerikanischen “Saturday Night Live” machte Comedian Shane Gillis kürzlich einen Witz über Frauen, die sich in Fitnessstudios wie “Huren” anziehen würden. Das erregte erwartungsgemäß einige Aufregung, jede Menge empörte..."
+        post = summary + " " + url
+
+        result = truncate_graphemes(post, 300)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert result.endswith(url)
+        assert "…" in result
+
+        facets = build_facets(result)
+        assert len(facets) == 1
+        assert facets[0]["features"][0]["uri"] == url
+
+    def test_trailing_url_with_hashtags_preserved(self):
+        from bluesky import build_facets, truncate_graphemes, _grapheme_clusters
+
+        url = "https://example.com/post"
+        post = "A" * 350 + " " + url + " #news #tech"
+
+        result = truncate_graphemes(post, 300)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert result.endswith(url + " #news #tech")
+        assert "…" in result
+
+        facets = build_facets(result)
+        assert len(facets) >= 1
+        link_facets = [f for f in facets if f["features"][0].get("uri") == url]
+        assert len(link_facets) == 1
+
+    def test_leading_url_not_damaged(self):
+        from bluesky import truncate_graphemes, _grapheme_clusters
+
+        url = "https://example.com/post"
+        post = url + " " + "A" * 350
+
+        result = truncate_graphemes(post, 300)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert result.startswith(url)
+        assert result.endswith("…")
+
+    def test_url_alone_exceeding_cap_falls_back(self):
+        from bluesky import truncate_graphemes, _grapheme_clusters
+
+        long_url = "https://example.com/" + "a" * 350
+        result = truncate_graphemes(long_url, 300)
+        assert len(_grapheme_clusters(result)) == 300
+        assert result.endswith("…")
+
+    def test_middle_url_straddling_cut_point_preserved(self):
+        from bluesky import truncate_graphemes, _grapheme_clusters, build_facets
+
+        # URL starts near the boundary and would be severed by naive right-side truncation
+        url = "https://example.com/long-permalink-slug"
+        post = "Start " + "B" * 260 + " " + url + " and more"
+        result = truncate_graphemes(post, 300)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert url in result
+
+        facets = build_facets(result)
+        link_facets = [f for f in facets if f["features"][0].get("uri") == url]
+        assert len(link_facets) == 1
+
+    def test_url_ending_exactly_at_standard_cut_preserved(self):
+        """Finding A: If a URL ends exactly at the cut point or only whitespace
+        follows before it, naive truncation would glue '…' to the URL and drop
+        the facet in build_facets. Link preservation must prevent this."""
+        from bluesky import build_facets, truncate_graphemes, _grapheme_clusters
+
+        url = "https://example.com/post"
+        # Total text is 310 clusters; url ends at cluster 299
+        prefix = "a" * (299 - len(url))
+        post = prefix + url + " " * 11
+        result = truncate_graphemes(post, 300)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert not result.endswith(url + "…")
+        assert result.endswith(url)
+
+        facets = build_facets(result)
+        assert len(facets) == 1
+        assert facets[0]["features"][0]["uri"] == url
+
+    def test_byte_cap_triggers_link_preservation(self):
+        """Finding B: Truncation triggered by max_bytes rather than max_graphemes
+        must still preserve trailing URLs."""
+        from bluesky import MAX_POST_BYTES, build_facets, truncate_graphemes, _grapheme_clusters
+
+        # Multi-codepoint emoji clusters: 100 clusters but ~1400 bytes
+        emoji = "\U0001F469‍\U0001F4BB"
+        url = "https://example.com/post"
+        # 250 emojis = ~3500 bytes (> 3000 bytes) but 250 clusters (< 300 clusters)
+        post = (emoji * 250) + " " + url
+
+        result = truncate_graphemes(post, 300, max_bytes=MAX_POST_BYTES)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert len(result.encode("utf-8")) <= MAX_POST_BYTES
+        assert result.endswith(url)
+
+        facets = build_facets(result)
+        assert len(facets) == 1
+        assert facets[0]["features"][0]["uri"] == url
+
+    def test_tight_tail_budget_still_includes_ellipsis(self):
+        """Finding D: When tail takes almost the entire budget (head_budget <= 0),
+        an ellipsis is still prepended if room allows."""
+        from bluesky import truncate_graphemes, _grapheme_clusters
+
+        url = "https://example.com/" + ("b" * 278)  # 298 chars
+        post = "Summary prefix " + url
+        result = truncate_graphemes(post, 300)
+        assert len(_grapheme_clusters(result)) <= 300
+        assert result.startswith("…")
+        assert result.endswith(url)
+
 # ── Facets ───────────────────────────────────────────────────────────────────
 
 class TestBuildFacets:

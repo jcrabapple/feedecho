@@ -121,6 +121,36 @@ class TestTruncate:
         result = truncate("hello world", 5)
         assert len(result) == 5
 
+    def test_trailing_url_preserved(self):
+        url = "https://example.com/permalink"
+        text = "x" * 600 + " " + url
+        result = truncate(text, 500)
+        assert len(result) <= 500
+        assert result.endswith(url)
+        assert "…" in result
+
+    def test_trailing_url_with_hashtags_preserved(self):
+        url = "https://example.com/permalink"
+        text = "x" * 600 + " " + url + " #tag1"
+        result = truncate(text, 500)
+        assert len(result) <= 500
+        assert result.endswith(url + " #tag1")
+        assert "…" in result
+
+    def test_leading_url_untouched(self):
+        url = "https://example.com/permalink"
+        text = url + " " + "x" * 600
+        result = truncate(text, 500)
+        assert len(result) <= 500
+        assert result.startswith(url)
+        assert result.endswith("…")
+
+    def test_oversized_url_falls_back(self):
+        url = "https://example.com/" + "x" * 600
+        result = truncate(url, 500)
+        assert len(result) == 500
+        assert result.endswith("…")
+
 
 class TestExtractRssImageMediaTypeFilter:
     """A video media:content entry must never be picked as the item's image.

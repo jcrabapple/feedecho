@@ -2413,6 +2413,11 @@ def _send_bluesky(
         # text that was never part of the anchor, so it's dropped. Anchors
         # containing a literal "…" elsewhere keep their facet.
         limit = len(text) - 1 if len(text) < len(content or "") else len(text)
+        # When middle truncation preserves a trailing URL (e.g. head + "… " + tail),
+        # rich links beyond the head cut point no longer align with characters in text.
+        # Restrict surviving rich links to those fully within the kept head prefix.
+        if "… " in text and len(text) < len(content or ""):
+            limit = min(limit, text.find("… "))
         rich_links = [
             (start, end, uri)
             for start, end, uri in (item.get("_rich_links") or [])

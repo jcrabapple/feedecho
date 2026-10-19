@@ -624,6 +624,8 @@ def truncate_graphemes(
     text: str,
     max_graphemes: int = MAX_POST_GRAPHEMES,
     max_bytes: int | None = None,
+    *,
+    preserve_links: bool = True,
 ) -> str:
     """Truncate to max_graphemes grapheme clusters, appending an ellipsis.
 
@@ -634,6 +636,10 @@ def truncate_graphemes(
     sequences). Byte truncation drops whole grapheme clusters from the end
     rather than slicing raw bytes, so it never splits a UTF-8 multi-byte
     sequence.
+
+    When preserve_links=True (default), if a trailing URL would be severed
+    or dropped by right-side truncation, preceding text is truncated instead
+    so the link remains intact and clickable.
     """
     clusters = _grapheme_clusters(text)
     fits_graphemes = len(clusters) <= max_graphemes
@@ -641,20 +647,93 @@ def truncate_graphemes(
     if fits_graphemes and fits_bytes:
         return text
 
-    def _assemble(n: int) -> str:
-        head = "".join(clusters[:n]).rstrip()
+    def _assemble_slice(cl: list[str], n: int) -> str:
+        head = "".join(cl[:n]).rstrip()
         # Don't leave a dangling ZWJ at the cut point -- it renders as a
         # broken sequence in most clients.
         while head.endswith(_ZWJ):
             head = head[:-1]
         return head + "…"
 
+    if preserve_links:
+        urls = list(_URL_RE.finditer(text))
+        if urls:
+            last_url = urls[-1]
+            u_start = last_url.start()
+            u_end = last_url.end()
+
+            char_idx = 0
+            u_start_cluster = None
+            u_end_cluster = None
+            for i, c in enumerate(clusters):
+                if u_start_cluster is None and char_idx <= u_start < char_idx + len(c):
+                    u_start_cluster = i
+                char_idx += len(c)
+                if char_idx >= u_end and u_end_cluster is None:
+                    u_end_cluster = i + 1
+
+            # Determine where naive right-side truncation would cut
+            naive_n = min(max_graphemes - 1, len(clusters)) if not fits_graphemes else len(clusters)
+            if max_bytes is not None:
+                while naive_n > 0 and len(_assemble_slice(clusters, naive_n).encode("utf-8")) > max_bytes:
+                    naive_n -= 1
+
+            naive_head = "".join(clusters[:naive_n]).rstrip()
+            needs_preservation = False
+            if u_start_cluster is not None and u_start_cluster > 0:
+                if u_end_cluster is not None and u_end_cluster >= naive_n:
+                    needs_preservation = True
+                elif naive_head.endswith(last_url.group(0)):
+                    needs_preservation = True
+
+            if needs_preservation and u_start_cluster is not None:
+                tail_clusters = clusters[u_start_cluster:]
+                tail_str = "".join(tail_clusters).rstrip()
+
+                # If tail with suffix exceeds limit, try just the URL itself
+                if len(_grapheme_clusters(tail_str)) > max_graphemes and u_end_cluster is not None:
+                    tail_clusters = clusters[u_start_cluster:u_end_cluster]
+                    tail_str = "".join(tail_clusters).rstrip()
+
+                tail_graphemes = len(_grapheme_clusters(tail_str))
+                if tail_graphemes <= max_graphemes:
+                    head_clusters = clusters[:u_start_cluster]
+                    head_budget = max_graphemes - tail_graphemes - 2
+                    if head_budget > 0:
+                        head_str = _assemble_slice(head_clusters, head_budget)
+                        result = head_str.rstrip() + " " + tail_str.lstrip()
+                    elif tail_graphemes <= max_graphemes - 2:
+                        result = "… " + tail_str.lstrip()
+                    elif tail_graphemes <= max_graphemes - 1:
+                        result = "…" + tail_str.lstrip()
+                    else:
+                        result = tail_str.strip()
+
+                    if max_bytes is not None:
+                        while len(result.encode("utf-8")) > max_bytes and head_budget > 0:
+                            head_budget -= 1
+                            if head_budget > 0:
+                                head_str = _assemble_slice(head_clusters, head_budget)
+                                result = head_str.rstrip() + " " + tail_str.lstrip()
+                            elif tail_graphemes <= max_graphemes - 2:
+                                result = "… " + tail_str.lstrip()
+                            elif tail_graphemes <= max_graphemes - 1:
+                                result = "…" + tail_str.lstrip()
+                            else:
+                                result = tail_str.strip()
+
+                    res_clusters = _grapheme_clusters(result)
+                    if len(res_clusters) <= max_graphemes and (
+                        max_bytes is None or len(result.encode("utf-8")) <= max_bytes
+                    ):
+                        return result.rstrip()
+
     n = min(max_graphemes - 1, len(clusters)) if not fits_graphemes else len(clusters)
-    result = _assemble(n)
+    result = _assemble_slice(clusters, n)
     if max_bytes is not None:
         while n > 0 and len(result.encode("utf-8")) > max_bytes:
             n -= 1
-            result = _assemble(n)
+            result = _assemble_slice(clusters, n)
     return result
 
 

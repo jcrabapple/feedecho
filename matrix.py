@@ -475,7 +475,9 @@ def send_message(
         # slice can sever a trailing tag — accepted as a backstop; the input
         # is nh3-sanitized markup, so a severed tag cannot execute anything.
         content["format"] = "org.matrix.custom.html"
-        content["formatted_body"] = truncate_chars(formatted, MAX_FORMATTED_BODY_CHARS)
+        content["formatted_body"] = truncate_chars(
+            formatted, MAX_FORMATTED_BODY_CHARS, preserve_links=False
+        )
     elif _URL_RE.search(text):
         content["format"] = "org.matrix.custom.html"
         content["formatted_body"] = html_body(text)

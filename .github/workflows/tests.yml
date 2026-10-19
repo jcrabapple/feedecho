@@ -5,6 +5,19 @@ on:
   pull_request:
 
 jobs:
+  regression-gates:
+    name: Regression gates (fix witness + ratchets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install signature backend
+        run: pip install "cryptography>=42.0.0"
+      - name: Documented-fix witness + audit ratchets
+        run: scripts/regression_gates.sh
+
   single:
     name: Single mode (sqlite)
     runs-on: ubuntu-latest

@@ -112,6 +112,13 @@ class TestFeedsPage:
             assert label, f"missing visible <label for={input_id}>"
             assert "sr-only" not in label.group(0), f"label for {input_id} must be visible"
 
+    def test_add_feed_form_splits_rows(self):
+        page = _tpl("feeds.html")
+        rows = re.findall(r'<div class="add-feed-row">(.*?)</div>', page, re.S)
+        assert len(rows) == 2, "add-feed form must split fields across two rows"
+        assert 'id="feed-name"' in rows[0] and 'id="feed-url"' in rows[0] and "discoverFeed" in rows[0]
+        assert 'id="feed-poll-interval"' in rows[1] and 'id="feed-folder"' in rows[1] and 'type="submit"' in rows[1]
+
     def test_feeds_page_renders_with_labels(self, single_env):
         page = _get("/feeds", "single")
         assert '<label for="feed-name">Name</label>' in page
@@ -378,4 +385,4 @@ class TestAppJsP2:
 
     def test_asset_versions_bumped(self):
         base = _tpl("base.html")
-        assert 'style.css?v=60' in base and 'app.js?v=58' in base
+        assert 'style.css?v=61' in base and 'app.js?v=58' in base

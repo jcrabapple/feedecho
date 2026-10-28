@@ -436,9 +436,14 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
 /* Forms */
 .inline-form {
     display: flex;
+    align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
     margin-bottom: 0.75rem;
+}
+.inline-form .btn-sm {
+    margin-right: 0;
+    margin-bottom: 0;
 }
 .inline-form input, .inline-form select, .inline-form button {
     padding: 0.5rem 0.75rem;
@@ -455,12 +460,37 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     outline: 2px solid var(--primary);
     outline-offset: 1px;
 }
-/* The URL field's placeholder ("https://example.com/feed.xml") is the
-   longest and most informative of the row's placeholders — give it more
-   of the row's width than poll-interval/folder need, instead of every
-   field getting an equal flex:1 share and truncating it. UX audit
-   finding 6 (2026-09-08). */
-#feed-url { flex: 2.5; }
+/* Feeds "Add Feed" form splits its 4 fields + 2 buttons across two rows so
+   Name/URL/Find-feed-URL have room on row 1 and Poll-interval/Folder/Add-Feed
+   fit comfortably on row 2 without truncating placeholders or "(No folder)". */
+.add-feed-form {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
+}
+.add-feed-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    width: 100%;
+}
+.add-feed-row label {
+    white-space: nowrap;
+}
+.add-feed-row input ~ label,
+.add-feed-row select ~ label,
+.add-feed-row button ~ label {
+    margin-left: 0.5rem;
+}
+.add-feed-row button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+#feed-name { flex: 1 1 12rem; }
+#feed-url { flex: 2 1 18rem; }
+#feed-poll-interval { flex: 0 0 6rem; width: 6rem; }
+#feed-folder { flex: 0 1 16rem; min-width: 11rem; }
 
 /* Accounts "add account" forms stack each field on its own line at every
    viewport width. .inline-form is row-flex by default, so a multi-field
@@ -730,8 +760,19 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         font-size: 0.85rem;
         color: var(--text-muted);
         margin-bottom: 0.15rem;
+        margin-left: 0;
+    }
+    .add-feed-row input ~ label,
+    .add-feed-row select ~ label,
+    .add-feed-row button ~ label {
+        margin-left: 0;
     }
     .inline-form input {
+        flex: 1 1 100%;
+        min-width: 0;
+        width: 100%;
+    }
+    .inline-form select {
         flex: 1 1 100%;
         min-width: 0;
         width: 100%;
@@ -739,6 +780,13 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     .inline-form input[type="number"] {
         flex: 0 1 auto;
         min-width: 5rem;
+    }
+    #feed-name,
+    #feed-url,
+    #feed-folder {
+        flex: 1 1 100%;
+        width: 100%;
+        max-width: none;
     }
     /* sr-only labels (before the P2 visible-label change) stay out of flow */
     .inline-form label.sr-only {

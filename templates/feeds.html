@@ -13,23 +13,27 @@
     </div>
 </details>
 
-<form method="post" action="/api/feeds" class="inline-form" data-add-url="{{ add_url | e }}" data-add-name="{{ add_name | e }}">
+<form method="post" action="/api/feeds" class="inline-form add-feed-form" data-add-url="{{ add_url | e }}" data-add-name="{{ add_name | e }}">
     <div id="feed-discover-status" class="hint" role="status" {% if not add_url %}hidden{% endif %}></div>
-    <label for="feed-name">Name</label>
-    <input type="text" name="name" id="feed-name" placeholder="Feed name" required{% if add_name %} value="{{ add_name | e }}"{% endif %}>
-    <label for="feed-url">URL</label>
-    <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required{% if add_url %} value="{{ add_url | e }}"{% endif %}>
-    <button type="button" class="btn-sm" onclick="discoverFeed(this)" title="If this is a site page, find its feed URL automatically">Find feed URL</button>
-    <label for="feed-poll-interval">Poll interval (minutes)</label>
-    <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
-    <label for="feed-folder">Folder</label>
-    <select name="folder_id" id="feed-folder">
-        <option value="">(No folder)</option>
-        {% for folder in folders %}
-        <option value="{{ folder.id }}">{{ folder.name }}</option>
-        {% endfor %}
-    </select>
-    <button type="submit">Add Feed</button>
+    <div class="add-feed-row">
+        <label for="feed-name">Name</label>
+        <input type="text" name="name" id="feed-name" placeholder="Feed name" required{% if add_name %} value="{{ add_name | e }}"{% endif %}>
+        <label for="feed-url">URL</label>
+        <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required{% if add_url %} value="{{ add_url | e }}"{% endif %}>
+        <button type="button" class="btn-sm" onclick="discoverFeed(this)" title="If this is a site page, find its feed URL automatically">Find feed URL</button>
+    </div>
+    <div class="add-feed-row">
+        <label for="feed-poll-interval">Poll interval (minutes)</label>
+        <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
+        <label for="feed-folder">Folder</label>
+        <select name="folder_id" id="feed-folder">
+            <option value="">(No folder)</option>
+            {% for folder in folders %}
+            <option value="{{ folder.id }}">{{ folder.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Add Feed</button>
+    </div>
 </form>
 
 <details class="account-section">

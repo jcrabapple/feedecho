@@ -84,7 +84,8 @@ surface. All calls sync `httpx` with `DEFAULT_REQUEST_TIMEOUT`.
   token cannot see it"; missing branch → message naming the repo's default
   branch. Connect-time validation is mandatory: a token that saves but cannot
   write fails at 6am inside the scheduler where nobody sees it.
-- `test_connection(account)` → re-runs the branch read, returns the head sha.
+- `test_connection(token, repo, branch)` → re-runs the branch read, returns
+  `(ok, message)`; on success the message carries the head sha.
 - `render_path(template, item, feed_name)` → render through
   `template_engine.render_template`, then `normalize_path`.
 - `normalize_path(rendered)` → raises `ValueError` on: empty result, absolute
@@ -95,7 +96,8 @@ surface. All calls sync `httpx` with `DEFAULT_REQUEST_TIMEOUT`.
 - `build_commit_message(template, item, feed_name)` → rendered, whitespace
   collapsed, capped at 200 chars, falls back to `Add {{ title }}` value or the
   path.
-- `send_file(token, repo, branch, path, content, message, committer=None)`:
+- `send_file(token, repo, branch, path, content, message, committer=None,
+  guard=None)`:
   1. `GET /repos/{repo}/contents/{quoted path}?ref={branch}` → 200 gives the
      blob `sha` (update), 404 means create.
   2. `PUT /repos/{repo}/contents/{quoted path}` with

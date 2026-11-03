@@ -53,13 +53,15 @@ def _gh_account_id(*, name="blog", repo="octo/blog", branch="main",
         return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
+_feed_seq = iter(range(1000))
+
+
 def _github_echo_id(account_id, *, path="posts/{{ title | slug }}.md",
                     commit="", user_id=UID):
     with get_db() as db:
         db.execute(
-            "INSERT INTO feeds (name, url, user_id) VALUES ('f',"
-            " 'https://example.com/rss', ?)",
-            (user_id,),
+            "INSERT INTO feeds (name, url, user_id) VALUES ('f', ?, ?)",
+            (f"https://example.com/rss{next(_feed_seq)}", user_id),
         )
         feed_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.execute(
@@ -1142,17 +1144,23 @@ class TestImportExport:
     def test_cleared_token_account_omitted_from_export(self, monkeypatch, db_tmp):
         # The `{}` sentinel stores ''; exporting that account would emit a
         # document the importer rejects wholesale, so the account and its
-        # echoes are omitted instead.
+        # echoes are omitted instead — and ONLY that account: a healthy
+        # account and its echo must survive the same export untouched.
         monkeypatch.setattr(database.settings, "MULTI", False)
-        account_id = _gh_account_id(user_id=1)
-        _github_echo_id(account_id, user_id=1)
+        cleared_id = _gh_account_id(user_id=1)
+        _github_echo_id(cleared_id, user_id=1)
+        healthy_id = _gh_account_id(name="docs", repo="octo/docs",
+                                    user_id=1)
+        healthy_echo = _github_echo_id(healthy_id,
+                                       path="docs/{{ title | slug }}.md",
+                                       user_id=1)
         with get_db() as db:
             db.execute(
                 "UPDATE github_accounts SET token = '' WHERE id = ?",
-                (account_id,))
+                (cleared_id,))
             payload = import_export.build_export(db, 1)
-        assert payload["accounts"]["github"] == []
-        assert payload["echoes"] == []
+        assert [a["name"] for a in payload["accounts"]["github"]] == ["docs"]
+        assert [e["id"] for e in payload["echoes"]] == [healthy_echo]
 
     def test_blank_token_account_skipped_on_import(self, monkeypatch, db_tmp):
         # A document produced before the export fix (or hand-edited) may still

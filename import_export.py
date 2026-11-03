@@ -103,9 +103,10 @@ _REQUIRED_ACCOUNT_FIELDS = {
 # The one credential a user can CLEAR without deleting the account row: the
 # github connect form's `{}` sentinel stores `token = ''`. Such an account can
 # neither deliver nor round-trip (import rejects a blank required token), so
-# exporting it would make the whole document unimportable. It — and the echoes
-# pointing at it — is skipped with a counter instead. Other destination types
-# keep the long-standing "missing required field raises ExportError" contract.
+# exporting it would make the whole document unimportable. build_export omits
+# the account and its echoes (README documents the omission); import_data
+# skips such an account with a counter. Other destination types keep the
+# long-standing "missing required field raises ExportError" contract.
 _CLEARABLE_CREDENTIALS = {"github": ("token",)}
 
 _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]

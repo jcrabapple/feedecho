@@ -272,6 +272,7 @@ On NixOS, see [`nix/README.md`](nix/README.md).
 - The file body is capped at 1 MB (base64-encoded): an over-cap item is a **permanent** failure rather than a silent truncation — truncating a backup file would corrupt it. Render/validation failures and GitHub refusals (401, non-rate-limit 403, 404, 409, 422) are permanent; rate limits (403/429 with a depleted budget or `Retry-After`) and 5xx ride the normal retry pipeline.
 - Success records the file's `html_url`, so post history links straight to the file on GitHub. Visibility, content-warning, and digest settings don't apply. Delivery happens in two steps — a read of the file's current blob, then the write — with the dispatch claim re-validated between them, so a paused or reconfigured echo can never half-write.
 - GitHub is deliberately **not offered in the Reader's Compose/Shout picker**: a compose post has no per-echo file path template, so there is no filename to write to. Use an echo (or the queue, for a github echo) to deliver to a repository.
+- A github account whose token was cleared with the `{}` sentinel on the connect form is **omitted from exports**, together with every echo pointing at it — a cleared token cannot pass import validation, and one blank required field would make the whole export document unimportable.
 
 ### FeedBooster details
 

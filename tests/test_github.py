@@ -139,52 +139,31 @@ class _FakeResponse:
         return self._payload if self._payload is not None else {}
 
 
-class _FakeClient:
-    """In-memory stand-in for httpx.Client's github.py surface."""
-
-    def __init__(self, responses, calls):
-        # Share the queue, don't copy it: github.py opens a fresh client per
-        # call, so a copy would re-serve the first response every time.
-        self._responses = responses
-        self._calls = calls
-
-    def get(self, url, headers=None, timeout=None):
-        self._calls.append(("GET", url))
-        assert self._responses, f"no queued response for GET {url}"
-        status, payload, hdrs = self._responses.pop(0)
-        return _FakeResponse(status, payload, hdrs)
-
-    def put(self, url, headers=None, json=None, timeout=None):
-        self._calls.append(("PUT", url, json))
-        assert self._responses, f"no queued response for PUT {url}"
-        status, payload, hdrs = self._responses.pop(0)
-        return _FakeResponse(status, payload, hdrs)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
 @pytest.fixture
 def fake_client(monkeypatch):
-    """Queue (status, payload, headers) tuples consumed GET/PUT in order."""
+    """Queue (status, payload, headers) tuples consumed in request order.
+
+    Mocks the pinned_request seam github.py routes every call through —
+    no real DNS or network.
+    """
     state = {"responses": [], "calls": []}
 
-    def _client_cls(**kwargs):
-        return _FakeClient(state["responses"], state["calls"])
+    def _pinned(method, url, **kwargs):
+        state["calls"].append((method, url, kwargs))
+        assert state["responses"], f"no queued response for {method} {url}"
+        status, payload, hdrs = state["responses"].pop(0)
+        return _FakeResponse(status, payload, hdrs)
 
-    monkeypatch.setattr(github.httpx, "Client", _client_cls)
+    monkeypatch.setattr(github, "pinned_request", _pinned)
     return state
 
 
 def _last_put(state):
-    return next(c for c in reversed(state["calls"]) if c[0] == "PUT")[2]
+    return next(c for c in reversed(state["calls"]) if c[0] == "PUT")[2]["json"]
 
 
 def _put_url(state):
-    return next(c[1] for c in reversed(state["calls"]) if c[0] == "PUT")
+    return next(c for c in reversed(state["calls"]) if c[0] == "PUT")[1]
 
 
 class TestParseRepo:

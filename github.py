@@ -35,6 +35,7 @@ from urllib.parse import quote
 import httpx
 
 import template_engine
+from feed_parser import SSRFError, pinned_request
 from utils import (
     DEFAULT_REQUEST_TIMEOUT,
     DestinationAuthError,
@@ -279,6 +280,24 @@ def _rate_limit_error(response) -> GitHubRateLimitError | None:
     return None
 
 
+def _request(method: str, url: str, **kwargs) -> httpx.Response:
+    """One pinned-transport request to the fixed api.github.com host.
+
+    ``pinned_request`` resolves and pins the IP for the life of the request
+    (closing the DNS-rebinding TOCTOU window) and never follows redirects.
+    Transport/SSRF failures are transient by nature — they map to
+    ``GitHubError`` so the dispatch retry pipeline handles them. Error text
+    is static: never the URL (no token in github URLs, unlike Telegram) and
+    never the response body.
+    """
+    try:
+        return pinned_request(
+            method, url, timeout=REQUEST_TIMEOUT, **kwargs)
+    except (SSRFError, httpx.HTTPError) as e:
+        raise GitHubError(
+            f"GitHub request failed ({type(e).__name__})") from None
+
+
 def _raise_api_error(response, *, not_found_is_create: bool = False) -> None:
     """Map a non-2xx Contents/Repo API response to the typed error ladder.
 
@@ -341,39 +360,39 @@ def connect(token: str, repo: str, branch: str) -> dict:
     if not branch:
         raise ValueError("Enter the branch name (for example main).")
 
-    with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-        resp = client.get(f"{API_BASE}/repos/{repo}", headers=_headers(token))
-        if resp.status_code == 401:
-            raise ValueError("GitHub rejected that token.")
-        if resp.status_code == 404:
-            raise ValueError(
-                "Repository not found, or this token cannot see it."
-            )
-        if resp.status_code != 200:
-            _raise_api_error(resp)
-        repo_info = resp.json()
-
-        perms = repo_info.get("permissions") or {}
-        if perms.get("push") is False:
-            raise ValueError(
-                "This token can read the repository but cannot push to it."
-                ' Give it the "Contents: Read and write" permission.'
-            )
-
-        default_branch = repo_info.get("default_branch") or "main"
-        full_name = repo_info.get("full_name") or repo
-
-        resp = client.get(
-            f"{API_BASE}/repos/{repo}/branches/{quote(branch, safe='')}",
-            headers=_headers(token),
+    resp = _request("GET", f"{API_BASE}/repos/{repo}", headers=_headers(token))
+    if resp.status_code == 401:
+        raise ValueError("GitHub rejected that token.")
+    if resp.status_code == 404:
+        raise ValueError(
+            "Repository not found, or this token cannot see it."
         )
-        if resp.status_code == 404:
-            raise ValueError(
-                f"Branch '{branch}' was not found in {full_name}."
-                f" The repository's default branch is '{default_branch}'."
-            )
-        if resp.status_code != 200:
-            _raise_api_error(resp)
+    if resp.status_code != 200:
+        _raise_api_error(resp)
+    repo_info = resp.json()
+
+    perms = repo_info.get("permissions") or {}
+    if perms.get("push") is False:
+        raise ValueError(
+            "This token can read the repository but cannot push to it."
+            ' Give it the "Contents: Read and write" permission.'
+        )
+
+    default_branch = repo_info.get("default_branch") or "main"
+    full_name = repo_info.get("full_name") or repo
+
+    resp = _request(
+        "GET",
+        f"{API_BASE}/repos/{repo}/branches/{quote(branch, safe='')}",
+        headers=_headers(token),
+    )
+    if resp.status_code == 404:
+        raise ValueError(
+            f"Branch '{branch}' was not found in {full_name}."
+            f" The repository's default branch is '{default_branch}'."
+        )
+    if resp.status_code != 200:
+        _raise_api_error(resp)
 
     return {
         "full_name": full_name,
@@ -387,11 +406,11 @@ def connect(token: str, repo: str, branch: str) -> dict:
 def read_branch_head(token: str, repo: str, branch: str) -> str:
     """Re-run the branch read; return the head commit sha. Backs the Test
     button and internal checks. Raises the typed error ladder."""
-    with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-        resp = client.get(
-            f"{API_BASE}/repos/{repo}/branches/{quote(branch, safe='')}",
-            headers=_headers(token),
-        )
+    resp = _request(
+        "GET",
+        f"{API_BASE}/repos/{repo}/branches/{quote(branch, safe='')}",
+        headers=_headers(token),
+    )
     if resp.status_code != 200:
         _raise_api_error(resp)
     data = resp.json()
@@ -422,11 +441,11 @@ def get_file_sha(token: str, repo: str, branch: str, path: str) -> str | None:
     The GET is idempotent: it may run before the dispatch claim guard.
     """
     quoted = _quote_path(path)
-    with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-        resp = client.get(
-            f"{API_BASE}/repos/{repo}/contents/{quoted}?ref={quote(branch, safe='')}",
-            headers=_headers(token),
-        )
+    resp = _request(
+        "GET",
+        f"{API_BASE}/repos/{repo}/contents/{quoted}?ref={quote(branch, safe='')}",
+        headers=_headers(token),
+    )
     if resp.status_code == 404:
         return None
     if resp.status_code != 200:
@@ -463,12 +482,12 @@ def put_file(
     if committer:
         body["committer"] = committer
     quoted = _quote_path(path)
-    with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-        resp = client.put(
-            f"{API_BASE}/repos/{repo}/contents/{quoted}",
-            headers=_headers(token),
-            json=body,
-        )
+    resp = _request(
+        "PUT",
+        f"{API_BASE}/repos/{repo}/contents/{quoted}",
+        headers=_headers(token),
+        json=body,
+    )
     if resp.status_code not in (200, 201):
         _raise_api_error(resp)
     data = resp.json()

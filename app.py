@@ -1283,7 +1283,12 @@ def _get_all_accounts(user_id: int = 1):
 def _shout_destinations(user_id: int):
     """One option per connected account, encoded ``type:id`` for the reader's
     Compose/Shout picker. Labels carry the type so a destination is unambiguous.
-    Includes per-destination character/grapheme limit."""
+    Includes per-destination character/grapheme limit.
+
+    GitHub is deliberately excluded: a Compose post has no per-echo file path
+    template, so there is no filename to write to. That deviation is documented
+    in the README's GitHub section; the picker does not offer a broken option.
+    """
     (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows, _github_rows) = _get_all_accounts(user_id)
     out = []
     for row in mastodon:
@@ -3366,6 +3371,12 @@ async def import_all(request: Request, file: UploadFile = File(...)):
             f"{summary['existing_feeds'] + summary['existing_accounts'] + summary['existing_echoes']}"
             " already present (skipped)"
         )
+    if summary.get("skipped_accounts"):
+        parts.append(
+            f"{summary['skipped_accounts']} account"
+            + ("s" if summary["skipped_accounts"] != 1 else "")
+            + " skipped (no stored credential)"
+        )
     if summary["skipped_echoes"]:
         parts.append(
             f"{summary['skipped_echoes']} echo"
@@ -4373,6 +4384,23 @@ def add_github_account(
         return _render_accounts_error(request, str(e))
     branch = (branch or "").strip() or "main"
 
+    token = token or ""
+    token_value = token.strip()
+    is_clear = token_value == "{}"
+    encrypted_new = ""
+    if token_value and not is_clear:
+        # Live validation runs BEFORE and OUTSIDE the DB block: connect can
+        # spend up to 2x30s on HTTP and must not hold a connection or a write
+        # lock. A token that cannot see the repo or lacks push permission is
+        # refused here, not at 6am in the scheduler.
+        try:
+            github.connect(token_value, repo, branch)
+        except ValueError as e:
+            return _render_accounts_error(request, str(e))
+        except github.GitHubError as e:
+            return _render_accounts_error(request, str(e))
+        encrypted_new = security.encrypt_secret(token_value)
+
     with get_db() as db:
         uid = current_user_id(request)
         # Cap counts NEW rows only: reconnecting the same repo+branch (to
@@ -4396,9 +4424,6 @@ def add_github_account(
             ).fetchone()
             stored_token = row["token"] if row else ""
 
-        token = token or ""
-        token_value = token.strip()
-        is_clear = token_value == "{}"
         if not token_value and not stored_token and not existing:
             return _render_accounts_error(
                 request, "Enter a GitHub personal access token."
@@ -4410,17 +4435,8 @@ def add_github_account(
             return _render_accounts_error(
                 request, "Enter a GitHub personal access token."
             )
-        if token_value and not is_clear:
-            # Live validation BEFORE the write: a token that cannot see the
-            # repo or lacks push permission is refused here, not at 6am in
-            # the scheduler.
-            try:
-                github.connect(token_value, repo, branch)
-            except ValueError as e:
-                return _render_accounts_error(request, str(e))
-            except github.GitHubError as e:
-                return _render_accounts_error(request, str(e))
-            encrypted = security.encrypt_secret(token_value)
+        if encrypted_new:
+            encrypted = encrypted_new
         elif is_clear:
             # Explicit clear, expressed in SQL as the sentinel value.
             encrypted = "{}"
@@ -6383,9 +6399,15 @@ def _github_echo_fields(destination_type: str, github_path: str, github_commit: 
     commit = (github_commit or "").strip()
     if commit:
         try:
-            github.build_commit_message(commit, github.SAMPLE_ITEM, path="content/sample.md")
+            # build_commit_message deliberately swallows render errors (a
+            # drifted stored template must never fail a delivery), so it
+            # cannot validate a new template. Render directly instead.
+            render_template(commit, github.SAMPLE_ITEM)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"GitHub commit message template is invalid: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"GitHub commit message template is invalid: {e}",
+            )
     return path, commit
 
 

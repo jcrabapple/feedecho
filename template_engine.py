@@ -659,7 +659,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ date_short }}", "desc": "Short date (2024-01-15)"},
         {"var": "{{ any | date_short }}", "desc": "Filter: format ISO/RFC822 date as YYYY-MM-DD"},
         {"var": "{{ any | date_iso }}", "desc": "Filter: format ISO/RFC822 date as YYYY-MM-DDTHH:MM:SS"},
-        {"var": "{{ any | slug }}", "desc": "Filter: make a string safe for filenames/URL paths — lowercase, spaces and underscores become dashes, punctuation dropped (use in GitHub path templates, e.g. {{ '{{ title | slug }}' }})"},
+        {"var": "{{ any | slug }}", "desc": "Filter: make a string safe for filenames/URL paths — lowercase, spaces and underscores become dashes, punctuation dropped (use in GitHub path templates, e.g. {{ title | slug }})"},
         {"var": "{{ tags }}", "desc": "Raw tag list"},
         {"var": "{{ hashtags }}", "desc": "Feed tags as #hashtags"},
         {"var": "{{ categories }}", "desc": "RSS/Atom categories keyed by domain (and #fragment); e.g. {{ categories['item-category-type'] }}"},

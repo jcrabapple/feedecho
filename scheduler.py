@@ -106,9 +106,8 @@ from github import (
     GitHubRejectedError,
     build_commit_message as github_build_commit_message,
     build_committer as github_build_committer,
-    get_file_sha as github_get_file_sha,
-    put_file as github_put_file,
     render_path as github_render_path,
+    send_file as github_send_file,
 )
 from notify import (
     max_attempts,
@@ -3163,10 +3162,23 @@ def _send_github(
             permanent=True,
         )
 
-    # The contents-API GET is idempotent (it only reads the blob sha), so it
-    # may run before the claim guard.
+    # send_file owns the two-step round trip: the contents-API GET (idempotent,
+    # it only reads the blob sha, so it may run before the claim guard), then
+    # the claim guard, then the irreversible PUT. Keeping the guard inside
+    # send_file means the shipped dispatch path is the path the tests drive.
+    def _claim_guard() -> bool:
+        return _guard_claim(
+            posted_id, claim_token, echo["id"], item["id"], "github"
+        )
+
     try:
-        sha = github_get_file_sha(token, account["repo"], account["branch"], path)
+        result = github_send_file(
+            token, account["repo"], account["branch"], path, content, message,
+            committer=github_build_committer(
+                account["committer_name"], account["committer_email"]
+            ),
+            guard=_claim_guard,
+        )
     except GitHubRateLimitError as e:
         return _fail_post(
             posted_id, claim_token, echo["id"], f"GitHub delivery rate-limited: {e}"
@@ -3178,49 +3190,20 @@ def _send_github(
             f"GitHub delivery refused: {e}", permanent=True,
         )
     except GitHubError as e:
-        logger.exception("Echo %s: github get failed", echo["id"])
+        logger.exception("Echo %s: github delivery failed", echo["id"])
         return _fail_post(
             posted_id, claim_token, echo["id"], f"GitHub delivery failed: {e}"
         )
     except Exception:
-        logger.exception("Echo %s: github get failed unexpectedly", echo["id"])
+        logger.exception("Echo %s: github delivery failed unexpectedly", echo["id"])
         return _fail_post(
             posted_id, claim_token, echo["id"], "GitHub delivery failed"
         )
 
-    # The PUT is the irreversible step: re-validate the claim between the
-    # GET and the write, after the slow network read.
-    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "github"):
+    if result is None:
+        # The claim lapsed between the GET and the PUT; another worker owns
+        # the row, so the write was skipped rather than duplicated.
         return False
-
-    try:
-        result = github_put_file(
-            token, account["repo"], account["branch"], path, content, message,
-            sha=sha,
-            committer=github_build_committer(
-                account["committer_name"], account["committer_email"]
-            ),
-        )
-    except GitHubRateLimitError as e:
-        return _fail_post(
-            posted_id, claim_token, echo["id"], f"GitHub delivery rate-limited: {e}"
-        )
-    except (GitHubAuthError, GitHubNotFoundError, GitHubRejectedError) as e:
-        logger.error("Echo %s: github write refused: %s", echo["id"], e)
-        return _fail_post(
-            posted_id, claim_token, echo["id"],
-            f"GitHub delivery refused: {e}", permanent=True,
-        )
-    except GitHubError as e:
-        logger.exception("Echo %s: github write failed", echo["id"])
-        return _fail_post(
-            posted_id, claim_token, echo["id"], f"GitHub delivery failed: {e}"
-        )
-    except Exception:
-        logger.exception("Echo %s: github write failed unexpectedly", echo["id"])
-        return _fail_post(
-            posted_id, claim_token, echo["id"], "GitHub delivery failed"
-        )
 
     return _finalize_success(
         posted_id, claim_token, echo["id"], post_url=result["html_url"]

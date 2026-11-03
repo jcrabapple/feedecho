@@ -29,7 +29,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 import httpx
@@ -64,13 +64,18 @@ MAX_COMMIT_MESSAGE_CHARS = 200
 
 DEFAULT_COMMIT_TEMPLATE = "Add {{ title }}"
 
-# Sample item for connect-time echo validation: deliberately nasty (a title
-# with a slash and a colon) so a naive `posts/{{ title }}.md` path fails AT
-# SAVE TIME with a pointer to the `| slug` filter instead of permanently
-# failing on the first real item.
+# Sample item for save-time echo validation: deliberately adversarial so a
+# naive `posts/{{ title }}.md` path fails AT SAVE TIME with a pointer to the
+# `| slug` filter instead of permanently failing on the first real item. The
+# title carries a newline (a control character normalize_path rejects), a
+# slash and a colon (legal path separators / illegal filename characters),
+# a `..` segment, and a 200-char tail. The tail length is deliberate: it must
+# keep `{{ title | slug }}` (capped at 255 chars) plus the member's
+# `_{{ date_iso }}.md` suffix inside the 255-char segment limit, so the
+# recommended templates still validate against this sample.
 SAMPLE_ITEM: dict = {
     "id": "sample-item",
-    "title": "Feed Echo: test/demo post",
+    "title": "Feed\nEcho: test/demo .. post " + "x" * 200,
     "link": "https://example.com/posts/1",
     "summary": "Line one\nLine two",
     "content": "",
@@ -126,7 +131,7 @@ def normalize_token(raw: str) -> str:
     if len(value) < 20:
         raise ValueError("GitHub tokens are at least 20 characters.")
     if len(value) > 200:
-        raise ValueError("GitHub tokens are shorter than 200 characters.")
+        raise ValueError("GitHub tokens are at most 200 characters.")
     if any(ch.isspace() for ch in value):
         raise ValueError("GitHub tokens cannot contain whitespace.")
     return value
@@ -160,6 +165,7 @@ def parse_repo(raw: str) -> str:
         len(parts) != 2
         or not parts[0]
         or not parts[1]
+        or any(p in (".", "..") or p.startswith(".") for p in parts)
         or any(any(c.isspace() for c in p) for p in parts)
         or any(any(c in p for c in "?#:@%") for p in parts)
     ):
@@ -173,21 +179,24 @@ def parse_repo(raw: str) -> str:
 def normalize_path(rendered: str) -> str:
     """Validate a rendered repo-relative path and return the stored form.
 
-    Normalizes ``\\`` to ``/`` and collapses ``//``; rejects (rather than
-    silently repairs) an empty result, an absolute path, ``.``/``..``
-    segments, control characters, a segment over 255 chars, or a total over
-    1024 chars. Appends ``.md`` when the last segment has no extension.
+    Normalizes ``\\`` to ``/``, strips every segment, and drops empty
+    segments (so ``"posts/"`` becomes ``"posts.md"`` rather than
+    ``"posts/.md"``). Rejects (rather than silently repairs) an empty
+    result, an absolute path, ``.``/``..`` segments, control characters, a
+    segment over 255 chars, or a total over 1024 chars. Appends ``.md`` when
+    the last segment has no extension.
     """
     if not rendered or not rendered.strip():
         raise ValueError("GitHub file path is empty.")
     if any(ord(c) < 32 or ord(c) == 127 for c in rendered):
         raise ValueError("GitHub file path contains a control character.")
     path = rendered.replace("\\", "/")
-    while "//" in path:
-        path = path.replace("//", "/")
     if path.startswith("/"):
         raise ValueError("GitHub file path must be relative, not absolute.")
-    segments = path.split("/")
+    segments = [seg.strip() for seg in path.split("/")]
+    segments = [seg for seg in segments if seg]
+    if not segments:
+        raise ValueError("GitHub file path is empty.")
     for seg in segments:
         if seg in (".", ".."):
             raise ValueError(
@@ -197,6 +206,7 @@ def normalize_path(rendered: str) -> str:
             raise ValueError(
                 f"GitHub file path segment is over {MAX_PATH_SEGMENT} characters."
             )
+    path = "/".join(segments)
     if len(path) > MAX_PATH_TOTAL:
         raise ValueError(
             f"GitHub file path is over {MAX_PATH_TOTAL} characters."
@@ -520,10 +530,19 @@ def send_file(
     content: str,
     message: str,
     committer: dict | None = None,
-) -> dict:
+    guard: Callable[[], bool] | None = None,
+) -> dict | None:
     """The full two-step Contents API round trip: read the blob sha (create
-    vs update), then PUT. Returns {sha, html_url, created}."""
+    vs update), then PUT. Returns {sha, html_url, created}.
+
+    ``guard`` is the dispatch claim check. It runs after the idempotent GET
+    and immediately before the irreversible PUT; returning False aborts the
+    write and this returns None. ``_send_github`` passes the real guard, so
+    the shipped dispatch path is the path these tests exercise.
+    """
     sha = get_file_sha(token, repo, branch, path)
+    if guard is not None and not guard():
+        return None
     return put_file(
         token, repo, branch, path, content, message,
         sha=sha, committer=committer,

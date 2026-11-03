@@ -100,6 +100,14 @@ _REQUIRED_ACCOUNT_FIELDS = {
     "github": ("name", "repo", "token"),
 }
 
+# The one credential a user can CLEAR without deleting the account row: the
+# github connect form's `{}` sentinel stores `token = ''`. Such an account can
+# neither deliver nor round-trip (import rejects a blank required token), so
+# exporting it would make the whole document unimportable. It — and the echoes
+# pointing at it — is skipped with a counter instead. Other destination types
+# keep the long-standing "missing required field raises ExportError" contract.
+_CLEARABLE_CREDENTIALS = {"github": ("token",)}
+
 _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
 
 _ECHO_COLS = [
@@ -149,21 +157,32 @@ def build_export(db, uid: int) -> dict:
     ).fetchall())
 
     accounts = {}
+    skipped_destinations: dict[str, set] = {}
     for section, table, cols, _ in _ACCOUNTS:
         rows = _rows_to_dicts(db.execute(
             f"SELECT id, {', '.join(cols)} FROM {table}"
             " WHERE user_id = ? ORDER BY id",
             (uid,),
         ).fetchall())
+        kept = []
         for row in rows:
             for col in _CREDENTIAL_COLS.get(section, frozenset()):
                 if row.get(col):
                     row[col] = decrypt_secret(row[col])
-        accounts[section] = rows
+            if any(not row.get(col) for col in _CLEARABLE_CREDENTIALS.get(section, ())):
+                # Cleared credential (the `{}` sentinel stores ''): the
+                # importer would reject this row, so omit the account and
+                # every echo aimed at it rather than emit a document that
+                # cannot be imported at all.
+                skipped_destinations.setdefault(section, set()).add(row["id"])
+                continue
+            kept.append(row)
+        accounts[section] = kept
 
     # Echoes reference feeds by feed_id; only emit echoes whose feed survives
     # the export (a soft-deleted feed is not exported, and an echo pointing at
-    # it would otherwise import with a dangling feed_id).
+    # it would otherwise import with a dangling feed_id). Echoes aimed at a
+    # skipped account are dropped for the same reason.
     echoes = _rows_to_dicts(db.execute(
         f"SELECT id, {', '.join(_ECHO_COLS)} FROM echoes"
         " WHERE user_id = ? AND deleted_at IS NULL"
@@ -171,6 +190,12 @@ def build_export(db, uid: int) -> dict:
         " ORDER BY id",
         (uid, uid),
     ).fetchall())
+    echoes = [
+        echo for echo in echoes
+        if echo.get("destination_id") not in skipped_destinations.get(
+            echo.get("destination_type") or "", ()
+        )
+    ]
 
     return {
         "format": FORMAT,
@@ -323,10 +348,13 @@ def _normalize_account(section: str, account: dict) -> None:
             account["body_template"] = ""
     if section == "github":
         # branch/committer_* are NOT NULL-with-defaults — same explicit-NULL
-        # coercion as base_url above. branch additionally falls back to the
-        # schema default's intent when blank.
-        if not isinstance(account.get("branch"), str) or not account["branch"]:
-            account["branch"] = "main"
+        # coercion as base_url above. branch is stripped and falls back to
+        # the schema default's intent when blank: an imported "  main  " would
+        # otherwise be stored verbatim and every delivery would 404.
+        branch = account.get("branch")
+        account["branch"] = (
+            branch.strip() if isinstance(branch, str) else ""
+        ) or "main"
         if not isinstance(account.get("committer_name"), str):
             account["committer_name"] = ""
         if not isinstance(account.get("committer_email"), str):
@@ -497,9 +525,19 @@ def import_data(db, uid: int, payload: dict) -> dict:
     first_account: dict[str, dict] = {s: {} for s in ACCOUNT_TYPES}
     account_oldids: dict[str, dict] = {s: {} for s in ACCOUNT_TYPES}
     new_account_keys: dict[str, list] = {s: [] for s in ACCOUNT_TYPES}
+    skipped_accounts_by_section: dict[str, int] = {s: 0 for s in ACCOUNT_TYPES}
     for section in ACCOUNT_TYPES:
         for account in doc["accounts"][section]:
             old_id = _record_id(account, "Account")
+            if any(
+                not str(account.get(col) or "").strip()
+                for col in _CLEARABLE_CREDENTIALS.get(section, ())
+            ):
+                # A cleared credential (the `{}` sentinel stores '') cannot
+                # deliver and cannot round-trip; skip the account, and its
+                # echoes below, with a counter rather than abort the import.
+                skipped_accounts_by_section[section] += 1
+                continue
             _normalize_account(section, account)
             _validate_account(section, account, old_id)
             existing = _existing_account_id(db, uid, section, account)
@@ -687,9 +725,12 @@ def import_data(db, uid: int, payload: dict) -> dict:
         "added_echoes": added_echoes,
         "existing_feeds": len(doc["feeds"]) - len(new_feed_urls),
         "existing_accounts": sum(
-            len(doc["accounts"][s]) - len(new_account_keys[s])
+            len(doc["accounts"][s])
+            - len(new_account_keys[s])
+            - skipped_accounts_by_section[s]
             for s in ACCOUNT_TYPES
         ),
         "existing_echoes": existing_echoes,
         "skipped_echoes": skipped_echoes,
+        "skipped_accounts": sum(skipped_accounts_by_section.values()),
     }

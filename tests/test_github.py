@@ -40,12 +40,15 @@ TEST_KEY = Fernet.generate_key().decode()
 
 
 def _gh_account_id(*, name="blog", repo="octo/blog", branch="main",
-                   token="ghp_" + "x" * 40, user_id=UID):
+                   token="ghp_" + "x" * 40, user_id=UID,
+                   committer_name="", committer_email=""):
     with get_db() as db:
         db.execute(
-            "INSERT INTO github_accounts (name, repo, branch, token, user_id)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (name, repo, branch, token, user_id),
+            "INSERT INTO github_accounts (name, repo, branch, token,"
+            " committer_name, committer_email, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (name, repo, branch, token, committer_name, committer_email,
+             user_id),
         )
         return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -166,6 +169,25 @@ def _put_url(state):
     return next(c for c in reversed(state["calls"]) if c[0] == "PUT")[1]
 
 
+def _capture(monkeypatch, module, name, *, result=None, error=None):
+    """Replace ``module.name`` with a stub that records every call.
+
+    Returns a list of ``(args, kwargs)`` tuples so dispatch tests can assert
+    exactly what the shipped path passed (a swapped content/message pair or an
+    un-normalized path must fail the test, not just "some call happened").
+    """
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        if error is not None:
+            raise error
+        return result
+
+    monkeypatch.setattr(module, name, fake)
+    return calls
+
+
 class TestParseRepo:
     def test_bare(self):
         assert github.parse_repo("octo/blog") == "octo/blog"
@@ -185,6 +207,7 @@ class TestParseRepo:
     @pytest.mark.parametrize("bad", [
         "", " ", "octo", "/blog", "octo/", "octo/blog/extra",
         "octo blog", "octo/../evil", "octo/%2e%2e",
+        "../repo", "./repo", "octo/.blog", "octo/..",
     ])
     def test_invalid(self, bad):
         with pytest.raises(ValueError):
@@ -218,10 +241,19 @@ class TestNormalizePath:
         # Windows-style separators normalize; the result stays repo-relative.
         assert github.normalize_path("C:\\temp\\x.md") == "C:/temp/x.md"
 
+    def test_segments_are_stripped_and_empties_dropped(self):
+        # A trailing slash must not become a ".md" filename inside the last
+        # directory ("posts/" -> "posts.md", not "posts/.md").
+        assert github.normalize_path("posts/") == "posts.md"
+        assert github.normalize_path("a/b.md ") == "a/b.md"
+        assert github.normalize_path(" posts//hello.md ") == "posts/hello.md"
+        assert github.normalize_path("a//b//c") == "a/b/c.md"
+
     @pytest.mark.parametrize("bad", [
         "/etc/passwd", "../evil.md", "a/../../evil.md",
         "bad\ttab.md", "bad\nnewline.md", "", "  ",
         "x" * 1025, "x" * 300 + "/ok.md",
+        "/", "//", " . ", " / ",
     ])
     def test_invalid(self, bad):
         with pytest.raises(ValueError):
@@ -268,6 +300,36 @@ class TestRenderPath:
     def test_absolute_after_render_rejected(self):
         with pytest.raises(ValueError):
             github.render_path("/{{ title }}.md", ITEM)
+
+
+class TestSampleItem:
+    """The save-time sample must be adversarial enough to catch a naive path.
+
+    `posts/{{ title }}.md` looks fine with a friendly title but permanently
+    fails on real titles containing a newline or a `..` segment, so the
+    sample exists to reject it at save time. The recommended slug forms must
+    still validate against the same sample.
+    """
+
+    def test_naive_path_template_is_rejected(self):
+        with pytest.raises(ValueError):
+            github.render_path("posts/{{ title }}.md", github.SAMPLE_ITEM)
+
+    def test_slug_path_template_passes(self):
+        path = github.render_path(
+            "posts/{{ title | slug }}.md", github.SAMPLE_ITEM)
+        assert path.startswith("posts/")
+        assert path.endswith(".md")
+        assert "\n" not in path
+
+    def test_member_shape_passes(self):
+        # Support ticket 13's path: slug + date_iso must stay inside the
+        # 255-char segment limit against the adversarial sample.
+        path = github.render_path(
+            "content/blog/{{ title | slug }}_{{ date_iso }}.md",
+            github.SAMPLE_ITEM)
+        assert path.startswith("content/blog/")
+        assert path.endswith(".md")
 
 
 class TestBuildCommitMessage:
@@ -434,10 +496,24 @@ class TestPutFile:
             github.put_file("tok", "octo/blog", "main", "p.md", "x", "m")
 
     def test_size_cap_rejected_before_network(self, fake_client):
-        big = "x" * (github.MAX_FILE_BYTES + 1)
+        # Fixed sizes, not github.MAX_FILE_BYTES: 750_001 bytes base64-encode
+        # to 1_000_004 chars, so raising the 1 MB constant (or breaking the
+        # comparison) makes this test go red instead of scaling with it.
+        big = "x" * 750_001
         with pytest.raises(github.GitHubRejectedError):
             github.put_file("tok", "octo/blog", "main", "p.md", big, "m")
         assert fake_client["calls"] == []
+
+    def test_content_just_under_cap_is_sent(self, fake_client):
+        # 749_000 bytes -> 998_668 base64 chars, under the 1 MB cap.
+        fake_client["responses"] = [
+            (201, {"commit": {"sha": "c1"},
+                   "content": {"html_url": "u"}}, {}),
+        ]
+        out = github.put_file(
+            "tok", "octo/blog", "main", "p.md", "x" * 749_000, "m")
+        assert out["sha"] == "c1"
+        assert len(_last_put(fake_client)["content"]) == 998_668
 
     def test_token_never_in_error_messages(self, fake_client, caplog):
         token = "ghp_secret_token_value"
@@ -473,6 +549,35 @@ class TestSendFile:
         assert out["created"] is False
         assert _last_put(fake_client)["sha"] == "abc123"
 
+    def test_guard_false_skips_the_put(self, fake_client):
+        fake_client["responses"] = [(200, {"sha": "abc123"}, {})]
+        out = github.send_file(
+            "tok", "octo/blog", "main", "posts/a.md", "body", "msg",
+            guard=lambda: False)
+        assert out is None
+        # The idempotent GET ran; the irreversible PUT did not.
+        assert [c[0] for c in fake_client["calls"]] == ["GET"]
+
+    def test_guard_true_allows_the_put(self, fake_client):
+        order = []
+
+        def guard():
+            order.append("guard")
+            return True
+
+        fake_client["responses"] = [
+            (200, {"sha": "abc123"}, {}),
+            (200, {"commit": {"sha": "c3"},
+                   "content": {"html_url": "u"}}, {}),
+        ]
+        out = github.send_file(
+            "tok", "octo/blog", "main", "posts/a.md", "body", "msg",
+            guard=guard)
+        assert out is not None
+        assert out["sha"] == "c3"
+        assert order == ["guard"]
+        assert [c[0] for c in fake_client["calls"]] == ["GET", "PUT"]
+
 
 def _echo_dict(echo_id):
     with get_db() as db:
@@ -491,9 +596,9 @@ class TestSchedulerDispatch:
     def test_happy_path(self, db_tmp, monkeypatch):
         account_id = _gh_account_id(user_id=1)
         echo_id = _github_echo_id(account_id, user_id=1)
-        monkeypatch.setattr(scheduler, "github_get_file_sha",
-                            lambda *a, **k: "abc123")
-        monkeypatch.setattr(scheduler, "github_put_file", lambda *a, **k: {
+        token = "ghp_" + "x" * 40
+        gets = _capture(monkeypatch, github, "get_file_sha", result="abc123")
+        puts = _capture(monkeypatch, github, "put_file", result={
             "sha": "c1",
             "html_url": "https://github.com/octo/blog/blob/main/posts/hello-world.md",
             "created": False,
@@ -502,8 +607,43 @@ class TestSchedulerDispatch:
         assert ok is True
         row = _posted_row()
         assert row["status"] == "success"
-        assert "posts/hello-world.md" in row["post_url"]
+        assert row["post_url"] == (
+            "https://github.com/octo/blog/blob/main/posts/hello-world.md"
+        )
         assert row["error_message"] is None
+        # The GET reads the rendered path on the account's repo + branch.
+        assert gets == [((token, "octo/blog", "main", "posts/hello-world.md"), {})]
+        # The PUT carries the rendered path, the rendered body, the default
+        # commit message, the sha from the GET, and no committer override.
+        assert len(puts) == 1
+        (put_args, put_kwargs) = puts[0]
+        assert put_args == (
+            token,
+            "octo/blog",
+            "main",
+            "posts/hello-world.md",
+            "Body text\nhttps://example.com/1",
+            "Add Hello World",
+        )
+        assert put_kwargs == {"sha": "abc123", "committer": None}
+
+    def test_committer_passed_from_account(self, db_tmp, monkeypatch):
+        account_id = _gh_account_id(
+            user_id=1, committer_name="Feed Bot",
+            committer_email="bot@example.com",
+        )
+        echo_id = _github_echo_id(account_id, user_id=1)
+        _capture(monkeypatch, github, "get_file_sha", result=None)
+        puts = _capture(monkeypatch, github, "put_file", result={
+            "sha": "c2", "html_url": "https://github.com/octo/blog/blob/main/posts/hello-world.md",
+            "created": True,
+        })
+        ok = scheduler.process_echo(_echo_dict(echo_id), ITEM, feed_name="f")
+        assert ok is True
+        assert puts[0][1]["committer"] == {
+            "name": "Feed Bot", "email": "bot@example.com",
+        }
+        assert puts[0][1]["sha"] is None
 
     def test_missing_account_gave_up(self, db_tmp, monkeypatch):
         echo_id = _github_echo_id(999, user_id=1)
@@ -519,9 +659,9 @@ class TestSchedulerDispatch:
         account_id = _gh_account_id(user_id=1)
         echo_id = _github_echo_id(account_id, user_id=1)
         order = []
-        monkeypatch.setattr(scheduler, "github_get_file_sha",
+        monkeypatch.setattr(github, "get_file_sha",
                             lambda *a, **k: order.append("get") or None)
-        monkeypatch.setattr(scheduler, "github_put_file", lambda *a, **k: (
+        monkeypatch.setattr(github, "put_file", lambda *a, **k: (
             order.append("put"),
             {"sha": "s", "html_url": "u", "created": True})[1])
 
@@ -539,7 +679,7 @@ class TestSchedulerDispatch:
         account_id = _gh_account_id(user_id=1)
         echo_id = _github_echo_id(account_id, path="../evil.md", user_id=1)
         called = []
-        monkeypatch.setattr(scheduler, "github_get_file_sha",
+        monkeypatch.setattr(github, "get_file_sha",
                             lambda *a, **k: called.append(1))
         ok = scheduler.process_echo(_echo_dict(echo_id), ITEM, feed_name="f")
         assert ok is True  # gave_up is terminal → handled
@@ -554,7 +694,7 @@ class TestSchedulerDispatch:
 
         def boom(*a, **k):
             raise github.GitHubRateLimitError(60)
-        monkeypatch.setattr(scheduler, "github_get_file_sha", boom)
+        monkeypatch.setattr(github, "get_file_sha", boom)
         ok = scheduler.process_echo(_echo_dict(echo_id), ITEM, feed_name="f")
         assert ok is False
         assert _posted_row()["status"] == "failed"
@@ -565,7 +705,7 @@ class TestSchedulerDispatch:
 
         def boom(*a, **k):
             raise github.GitHubError("bad gateway")
-        monkeypatch.setattr(scheduler, "github_get_file_sha", boom)
+        monkeypatch.setattr(github, "get_file_sha", boom)
         ok = scheduler.process_echo(_echo_dict(echo_id), ITEM, feed_name="f")
         assert ok is False
         assert _posted_row()["status"] == "failed"
@@ -574,7 +714,7 @@ class TestSchedulerDispatch:
         account_id = _gh_account_id(user_id=1)
         echo_id = _github_echo_id(account_id, user_id=1)
         called = []
-        monkeypatch.setattr(scheduler, "github_get_file_sha",
+        monkeypatch.setattr(github, "get_file_sha",
                             lambda *a, **k: called.append(1))
         # override_content bypasses the echo template render; the size is
         # chosen so base64(content) exceeds MAX_FILE_BYTES while staying
@@ -598,7 +738,7 @@ class TestSchedulerDispatch:
 
         def boom(*a, **k):
             raise github.GitHubAuthError("unauthorized")
-        monkeypatch.setattr(scheduler, "github_get_file_sha", boom)
+        monkeypatch.setattr(github, "get_file_sha", boom)
         scheduler.process_echo(_echo_dict(echo_id), ITEM, feed_name="f")
         row = _posted_row()
         assert token not in (row["error_message"] or "")
@@ -628,13 +768,18 @@ class TestAccountRoutes:
         assert "GitHub rejected that token." in r.text
 
     def test_connect_invalid_token_rejected(self, multi_client, monkeypatch):
-        def boom(*a, **k):
-            raise ValueError("Invalid GitHub token.")
-        monkeypatch.setattr(github, "connect", boom)
+        # No connect() monkeypatch: the real shape check must refuse a short
+        # token BEFORE any transport call, which is the no-network-on-bad-shape
+        # ordering we want pinned.
+        calls = []
+        monkeypatch.setattr(
+            github, "pinned_request",
+            lambda *a, **k: calls.append((a, k)))
         r = multi_client.post("/api/github-accounts", data={
             "repo": "octo/blog", "branch": "main", "token": "bad"})
         assert r.status_code == 200
-        assert "Invalid GitHub token" in r.text
+        assert "at least 20 characters" in r.text
+        assert calls == []
 
     def test_connect_live_validation_failure_rejected(self, multi_client,
                                                       monkeypatch):
@@ -800,6 +945,35 @@ class TestEchoRoutes:
         })
         assert r.status_code == 400
 
+    def test_naive_path_template_rejected_at_save(self, multi_client):
+        # `posts/{{ title }}.md` passes with a friendly title but permanently
+        # fails on a real title with a newline / slash / `..` segment. The
+        # adversarial SAMPLE_ITEM must catch it at save time with the hint.
+        self._feed()
+        account_id = _gh_account_id()
+        r = multi_client.post("/api/echoes", data={
+            "feed_id": "1", "destination_type": "github",
+            "github_account_id": str(account_id), "template": "x",
+            "github_path": "posts/{{ title }}.md",
+        })
+        assert r.status_code == 400
+        assert "slug" in r.text
+
+    def test_bad_commit_template_rejected_at_save(self, multi_client):
+        # build_commit_message swallows render errors for delivery safety, so
+        # the save path validates the template directly; an unparseable one
+        # must be a 400 instead of silently falling back forever.
+        self._feed()
+        account_id = _gh_account_id()
+        r = multi_client.post("/api/echoes", data={
+            "feed_id": "1", "destination_type": "github",
+            "github_account_id": str(account_id), "template": "x",
+            "github_path": "posts/a.md",
+            "github_commit": "{{ title",
+        })
+        assert r.status_code == 400
+        assert "commit message template" in r.text
+
     def test_github_echo_happy_path(self, multi_client):
         self._feed()
         account_id = _gh_account_id()
@@ -957,10 +1131,72 @@ class TestImportExport:
         entry = payload["accounts"]["github"][0]
         assert entry["repo"] == "octo/blog"
         assert entry["branch"] == "main"
-        assert "token" in entry  # encrypted, present for the round trip
+        # build_export DECRYPTS credentials on purpose: the export file is a
+        # credential dump (an export without tokens could not migrate an
+        # account), so the token is present in plaintext for the round trip.
+        assert entry["token"] == "ghp_" + "x" * 40
         echo = payload["echoes"][0]
         assert echo["github_path"] == "posts/{{ title | slug }}.md"
         assert echo["github_commit"] == ""
+
+    def test_cleared_token_account_omitted_from_export(self, monkeypatch, db_tmp):
+        # The `{}` sentinel stores ''; exporting that account would emit a
+        # document the importer rejects wholesale, so the account and its
+        # echoes are omitted instead.
+        monkeypatch.setattr(database.settings, "MULTI", False)
+        account_id = _gh_account_id(user_id=1)
+        _github_echo_id(account_id, user_id=1)
+        with get_db() as db:
+            db.execute(
+                "UPDATE github_accounts SET token = '' WHERE id = ?",
+                (account_id,))
+            payload = import_export.build_export(db, 1)
+        assert payload["accounts"]["github"] == []
+        assert payload["echoes"] == []
+
+    def test_blank_token_account_skipped_on_import(self, monkeypatch, db_tmp):
+        # A document produced before the export fix (or hand-edited) may still
+        # carry a blank-token github account. Import skips it with a counter
+        # rather than aborting the whole document.
+        monkeypatch.setattr(database.settings, "MULTI", False)
+        payload = self._payload(
+            accounts={"github": [
+                {"id": 1, "name": "a", "repo": "o/a", "branch": "main",
+                 "token": ""},
+                {"id": 2, "name": "b", "repo": "o/b", "branch": "main",
+                 "token": "ghp_" + "x" * 36},
+            ]},
+            echoes=[
+                {"id": 1, "feed_id": 1, "destination_type": "github",
+                 "destination_id": 1, "template": "{{ content }}",
+                 "github_path": "posts/a.md"},
+                {"id": 2, "feed_id": 1, "destination_type": "github",
+                 "destination_id": 2, "template": "{{ content }}",
+                 "github_path": "posts/b.md"},
+            ],
+        )
+        with get_db() as db:
+            result = import_export.import_data(db, 1, payload)
+        assert result["added_accounts"] == 1
+        assert result["skipped_accounts"] == 1
+        assert result["existing_accounts"] == 0
+        assert result["added_echoes"] == 1
+        assert result["skipped_echoes"] == 1
+
+    def test_imported_branch_is_stripped(self, monkeypatch, db_tmp):
+        monkeypatch.setattr(database.settings, "MULTI", False)
+        payload = self._payload(
+            accounts={"github": [
+                {"id": 1, "name": "b", "repo": "octo/blog",
+                 "branch": "  main  ", "token": "ghp_" + "x" * 36},
+            ]},
+        )
+        with get_db() as db:
+            import_export.import_data(db, 1, payload)
+        with get_db() as db:
+            row = db.execute(
+                "SELECT branch FROM github_accounts").fetchone()
+        assert row["branch"] == "main"
 
     def test_destination_quota_counts_github_accounts(self, monkeypatch,
                                                      tmp_path):

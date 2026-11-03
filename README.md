@@ -271,6 +271,7 @@ On NixOS, see [`nix/README.md`](nix/README.md).
 - Optional committer name/email on the account control the commit author line; with both blank, commits are authored by the token's own GitHub user.
 - The file body is capped at 1 MB (base64-encoded): an over-cap item is a **permanent** failure rather than a silent truncation — truncating a backup file would corrupt it. Render/validation failures and GitHub refusals (401, non-rate-limit 403, 404, 409, 422) are permanent; rate limits (403/429 with a depleted budget or `Retry-After`) and 5xx ride the normal retry pipeline.
 - Success records the file's `html_url`, so post history links straight to the file on GitHub. Visibility, content-warning, and digest settings don't apply. Delivery happens in two steps — a read of the file's current blob, then the write — with the dispatch claim re-validated between them, so a paused or reconfigured echo can never half-write.
+- GitHub is deliberately **not offered in the Reader's Compose/Shout picker**: a compose post has no per-echo file path template, so there is no filename to write to. Use an echo (or the queue, for a github echo) to deliver to a repository.
 
 ### FeedBooster details
 
@@ -382,6 +383,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 - **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, Telegram bot tokens, Discord webhook URLs, GitHub personal access tokens, and OAuth client secrets** are scoped credentials — revoke any of them at the source platform without touching your main passwords. At rest they are encrypted (Fernet) whenever `FEEDECHO_CREDENTIAL_KEY` is set — required in multi-tenant mode, optional in single-tenant mode, where it keeps copied database backups from being credential dumps. Keep the key stable once set: rows encrypted under it are unreadable without it (reconnect the affected accounts if you lose it). Without a key, single-tenant mode stores credentials plaintext because you own the database and the encryption key would live beside it.
 - **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
+- **An export file is a credential dump.** Export decrypts every stored credential on purpose — an export that omitted tokens would be useless for moving an account — so the downloaded JSON holds your GitHub personal access tokens and every other destination credential in plaintext. Store and transfer it accordingly, and delete it once the migration is done.
 - The `FEEDECHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.
 
 ### Input handling

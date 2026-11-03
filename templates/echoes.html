@@ -335,7 +335,7 @@
                 <br><span class="badge badge-info">DIGEST</span>
                 {% endif %}
                 {% if echo.destination_type == 'github' and echo.github_path %}
-                <br><span class="badge badge-muted" title="GitHub file path template">{% raw %}{{ path }}{% endraw %}: {{ echo.github_path }}</span>
+                <br><span class="badge badge-muted" title="GitHub file path template">path: {{ echo.github_path }}</span>
                 {% endif %}
                 {% if echo.drip_limit and echo.delivery_mode != 'digest' %}
                 <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>

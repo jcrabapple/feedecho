@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import secrets
@@ -95,6 +96,19 @@ from webhook import (
     build_payload as webhook_build_payload,
     load_headers,
     send_webhook as webhook_send_webhook,
+)
+from github import (
+    MAX_FILE_BYTES as GITHUB_MAX_FILE_BYTES,
+    GitHubAuthError,
+    GitHubError,
+    GitHubNotFoundError,
+    GitHubRateLimitError,
+    GitHubRejectedError,
+    build_commit_message as github_build_commit_message,
+    build_committer as github_build_committer,
+    get_file_sha as github_get_file_sha,
+    put_file as github_put_file,
+    render_path as github_render_path,
 )
 from notify import (
     max_attempts,
@@ -3075,11 +3089,149 @@ def _send_webhook(
     return _finalize_success(posted_id, claim_token, echo["id"], post_url="")
 
 
-# Strategy registry: destination_type -> sender. All seven share the
+def _send_github(
+    echo,
+    item: FeedItem,
+    content: str,
+    account_id: int,
+    posted_id: int,
+    claim_token: str,
+) -> bool:
+    """Dispatch one rendered item to a GitHub repository as a markdown file.
+
+    The echo template IS the file body; the per-echo github_path template
+    renders to the repo-relative file path (overwriting an existing file at
+    that path via the contents API sha, so re-echoes and corrections land),
+    and github_commit renders to the commit message. Auth failures (401,
+    non-rate-limit 403), vanished repo/branch (404), and refused writes
+    (409/422, including the size cap) are permanent until the user fixes the
+    account; rate limits and 5xx ride the transient retry pipeline.
+
+    Success records the file's html_url as post_url, so history links
+    straight to the file on GitHub.
+    """
+    account, fail_result = _destination_account(
+        "github_accounts", account_id, echo, posted_id, claim_token,
+        "GitHub account", user_scoped=True,
+    )
+    if account is None:
+        return bool(fail_result)
+
+    try:
+        token = decrypt_secret(account["token"])
+    except ValueError:
+        logger.exception(
+            "Echo %s: github credential decryption failed", echo["id"]
+        )
+        return _fail_post(
+            posted_id, claim_token, echo["id"],
+            "GitHub credential could not be decrypted", permanent=True,
+        )
+
+    # feed_name resolves here (rather than through the registry signature,
+    # like _send_webhook's special case) so every dispatch flow — fresh
+    # items, drip flush, queue post-now — gets the same value.
+    feed_name = ""
+    with get_db() as db:
+        feed = db.execute(
+            "SELECT name FROM feeds WHERE id = ?", (echo["feed_id"],)
+        ).fetchone()
+    if feed is not None:
+        feed_name = feed["name"] or ""
+
+    # Render failures and the size cap are PERMANENT: a broken stored
+    # template can never heal on retry, and truncating a backup file
+    # silently corrupts it. The cap is checked BEFORE any network call.
+    try:
+        path = github_render_path(echo["github_path"], item, feed_name)
+        message = github_build_commit_message(
+            echo["github_commit"] if "github_commit" in echo.keys() else "",
+            item, feed_name, path=path,
+        )
+    except Exception as e:
+        logger.error(
+            "Echo %s: github path/commit template failed: %s", echo["id"], e
+        )
+        return _fail_post(
+            posted_id, claim_token, echo["id"],
+            f"GitHub path or commit template failed: {e}", permanent=True,
+        )
+    if len(base64.b64encode(content.encode("utf-8"))) > GITHUB_MAX_FILE_BYTES:
+        return _fail_post(
+            posted_id, claim_token, echo["id"],
+            f"GitHub file is over the {GITHUB_MAX_FILE_BYTES}-byte size cap",
+            permanent=True,
+        )
+
+    # The contents-API GET is idempotent (it only reads the blob sha), so it
+    # may run before the claim guard.
+    try:
+        sha = github_get_file_sha(token, account["repo"], account["branch"], path)
+    except GitHubRateLimitError as e:
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"GitHub delivery rate-limited: {e}"
+        )
+    except (GitHubAuthError, GitHubNotFoundError, GitHubRejectedError) as e:
+        logger.error("Echo %s: github delivery refused: %s", echo["id"], e)
+        return _fail_post(
+            posted_id, claim_token, echo["id"],
+            f"GitHub delivery refused: {e}", permanent=True,
+        )
+    except GitHubError as e:
+        logger.exception("Echo %s: github get failed", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"GitHub delivery failed: {e}"
+        )
+    except Exception:
+        logger.exception("Echo %s: github get failed unexpectedly", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], "GitHub delivery failed"
+        )
+
+    # The PUT is the irreversible step: re-validate the claim between the
+    # GET and the write, after the slow network read.
+    if not _guard_claim(posted_id, claim_token, echo["id"], item["id"], "github"):
+        return False
+
+    try:
+        result = github_put_file(
+            token, account["repo"], account["branch"], path, content, message,
+            sha=sha,
+            committer=github_build_committer(
+                account["committer_name"], account["committer_email"]
+            ),
+        )
+    except GitHubRateLimitError as e:
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"GitHub delivery rate-limited: {e}"
+        )
+    except (GitHubAuthError, GitHubNotFoundError, GitHubRejectedError) as e:
+        logger.error("Echo %s: github write refused: %s", echo["id"], e)
+        return _fail_post(
+            posted_id, claim_token, echo["id"],
+            f"GitHub delivery refused: {e}", permanent=True,
+        )
+    except GitHubError as e:
+        logger.exception("Echo %s: github write failed", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], f"GitHub delivery failed: {e}"
+        )
+    except Exception:
+        logger.exception("Echo %s: github write failed unexpectedly", echo["id"])
+        return _fail_post(
+            posted_id, claim_token, echo["id"], "GitHub delivery failed"
+        )
+
+    return _finalize_success(
+        posted_id, claim_token, echo["id"], post_url=result["html_url"]
+    )
+
+
+# Strategy registry: destination_type -> sender. All eight share the
 # (echo, item, content, account_id, posted_id, claim_token) -> bool shape
 # except _send_webhook, which additionally needs feed_name for its payload
 # template — handled as a special case in _render_and_dispatch rather than
-# forcing an unused parameter onto the other six. Replaces a 7-arm
+# forcing an unused parameter onto the other seven. Replaces an 8-arm
 # if/elif chain that was hand-copied in at least four other places
 # (add_echo/edit_echo's destination-field resolution, echoes.html's
 # destination-type badge, and the two account-table registries in app.py
@@ -3093,6 +3245,7 @@ _DESTINATION_HANDLERS: dict[str, Callable[[dict, FeedItem, str, int, int, str], 
     "matrix": _send_matrix,
     "discord": _send_discord,
     "telegram": _send_telegram,
+    "github": _send_github,
 }
 
 

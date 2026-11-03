@@ -72,6 +72,7 @@ class TestPostgresInit:
             "matrix_accounts",
             "discord_accounts",
             "webhook_accounts",
+            "github_accounts",
             "settings",
             "users",
             "posted_items",

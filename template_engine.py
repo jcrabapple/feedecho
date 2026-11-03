@@ -102,6 +102,28 @@ def _format_date(date_str: str | None, fmt: str) -> str:
     return dt.strftime(fmt)
 
 
+def _filter_slug(value) -> str:
+    """Jinja filter: make a string safe for use as a filename/URL component.
+
+    ``{{ title | slug }}``: NFKC + lowercase, whitespace and underscores
+    become ``-``, punctuation is dropped, runs collapse, leading/trailing
+    dashes strip. Unicode letters and numbers are kept (#Attualità stays
+    attualità). Empty or non-string input yields "" (never an exception),
+    and the result is capped at 255 chars for filesystem segments.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    text = unicodedata.normalize("NFKC", value).lower()
+    out: list[str] = []
+    for ch in text:
+        if ch.isalnum():
+            out.append(ch)
+        elif ch == "-" or ch.isspace() or ch == "_":
+            out.append("-")
+    slug = re.sub(r"-{2,}", "-", "".join(out)).strip("-")
+    return slug[:255]
+
+
 def _filter_date_short(value) -> str:
     """Jinja filter: format a date string as YYYY-MM-DD."""
     return _format_date(value if value is not None else "", "%Y-%m-%d")
@@ -327,6 +349,7 @@ def _filter_hashtags(value, exclude=None) -> str:
 env.filters["clean_url"] = _filter_clean_url
 env.filters["utm"] = _filter_utm
 env.filters["hashtags"] = _filter_hashtags
+env.filters["slug"] = _filter_slug
 
 
 def _normalize(template: str) -> str:
@@ -636,6 +659,7 @@ def available_variables() -> list[dict]:
         {"var": "{{ date_short }}", "desc": "Short date (2024-01-15)"},
         {"var": "{{ any | date_short }}", "desc": "Filter: format ISO/RFC822 date as YYYY-MM-DD"},
         {"var": "{{ any | date_iso }}", "desc": "Filter: format ISO/RFC822 date as YYYY-MM-DDTHH:MM:SS"},
+        {"var": "{{ any | slug }}", "desc": "Filter: make a string safe for filenames/URL paths — lowercase, spaces and underscores become dashes, punctuation dropped (use in GitHub path templates, e.g. {{ '{{ title | slug }}' }})"},
         {"var": "{{ tags }}", "desc": "Raw tag list"},
         {"var": "{{ hashtags }}", "desc": "Feed tags as #hashtags"},
         {"var": "{{ categories }}", "desc": "RSS/Atom categories keyed by domain (and #fragment); e.g. {{ categories['item-category-type'] }}"},

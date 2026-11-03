@@ -2,7 +2,7 @@
 {% block title %}How To — FeedEcho{% endblock %}
 {% block content %}
 <h1>How To</h1>
-<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, or any webhook. Everything is built from three pieces: feeds, accounts, and echoes.</p>
+<p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, a GitHub repository, or any webhook. Everything is built from three pieces: feeds, accounts, and echoes.</p>
 
 <section>
     <h2>1. Add a feed</h2>
@@ -71,6 +71,22 @@
         <li>Each item arrives as one JSON object; the Echoes page lists the fields you can use in your template.</li>
         <li>Optional: give the endpoint a <strong>custom JSON body</strong> — the same template variables as an echo, rendered to a JSON object and checked when you connect. For push services, the shape brrr (brrr.now) expects is {% raw %}<code>{"title": {{ title | tojson }}, "message": {{ (summary or title) | tojson }}, "open_url": {{ link | tojson }}, "thread_id": {{ feed_name | tojson }}}</code>{% endraw %}. Use the <code>tojson</code> filter with no surrounding quotes for any text value, so titles containing quotes or newlines stay valid JSON. Receivers that render markup can take {% raw %}<code>{{ content_html | tojson }}</code>{% endraw %} for the full sanitized article. Leave the field blank for the default payload; enter <code>{}</code> to remove a stored custom body.</li>
     </ol>
+    <h3>GitHub</h3>
+    <ol class="howto-steps">
+        <li>Create a fine-grained <a href="https://github.com/settings/personal-access-tokens/new" rel="noopener noreferrer">personal access token</a> with access to the repository and the <code>Contents: Read and write</code> permission.</li>
+        <li>Under <strong>Connect GitHub</strong>, paste the token with the repository (<code>owner/repo</code>) and branch. FeedEcho verifies the token, the repository, and the branch with read-only calls before saving — a token that cannot write is refused here, not on the first real item.</li>
+        <li>Treat the token like a password — anyone who has it can write to that repository. FeedEcho stores it encrypted and never shows it again; a blank token field on reconnect keeps the stored one, and <code>{}</code> removes it.</li>
+        <li>Create an echo to the GitHub destination and pick a <strong>file path template</strong> — for example {% raw %}<code>content/blog/{{ title | slug }}_{{ date_iso }}.md</code>{% endraw %}. The <code>slug</code> filter makes titles filename-safe (lowercase, spaces become dashes, punctuation dropped), and the path is checked when you save the echo. A file that already exists at the path is overwritten, so corrections update in place; nothing is ever deleted.</li>
+        <li>Your <strong>echo template is the file body</strong> — write any front matter directly in it. A typical static-site post:</li>
+    </ol>
+    {% raw %}<pre class="howto-code">---
+title: "{{ title }}"
+date: {{ date_iso }}
+tags: {{ tags }}
+---
+{{ content }}
+{{ link }}</pre>{% endraw %}
+    <p class="hint">The <strong>commit message template</strong> is optional and defaults to {% raw %}<code>Add {{ title }}</code>{% endraw %}. Successful deliveries link straight to the file on GitHub from post history.</p>
 </section>
 
 <section>

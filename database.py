@@ -668,6 +668,14 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(
             db, "echoes", "use_markdown", "INTEGER NOT NULL DEFAULT 0"
         )
+        # GitHub destination: per-echo file path and commit message templates
+        # ('' = not a github echo / default commit message).
+        _add_column_if_missing(
+            db, "echoes", "github_path", "TEXT NOT NULL DEFAULT ''"
+        )
+        _add_column_if_missing(
+            db, "echoes", "github_commit", "TEXT NOT NULL DEFAULT ''"
+        )
 
         db.execute("""
             CREATE TABLE IF NOT EXISTS digest_items (
@@ -839,6 +847,28 @@ def init_db_sqlite() -> None:
             )
         """)
 
+        # One row per target repository: the token is the credential
+        # (encrypted at rest by the app), repo is normalized owner/repo.
+        # UNIQUE(user_id, repo, branch) makes reconnecting the same target
+        # an in-place update instead of a duplicate row.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS github_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                branch TEXT NOT NULL DEFAULT 'main',
+                token TEXT NOT NULL,
+                committer_name TEXT DEFAULT '',
+                committer_email TEXT DEFAULT '',
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_user_repo_branch"
+            " ON github_accounts(user_id, repo, branch)"
+        )
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -861,7 +891,7 @@ def init_db_sqlite() -> None:
 
         # Owned tables carry user_id. Existing single-tenant databases
         # backfill to user 1 via the column default.
-        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts", "telegram_accounts", "webhook_accounts"):
+        for table in ("accounts", "feeds", "echoes", "email_accounts", "bluesky_accounts", "microblog_accounts", "matrix_accounts", "discord_accounts", "telegram_accounts", "webhook_accounts", "github_accounts"):
             _add_column_if_missing(
                 db, table, "user_id", "INTEGER NOT NULL DEFAULT 1"
             )
@@ -1255,6 +1285,25 @@ def init_db_postgres() -> None:
             )
         """)
 
+        # GitHub destination — see init_db_sqlite for the column notes.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS github_accounts (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                branch TEXT NOT NULL DEFAULT 'main',
+                token TEXT NOT NULL,
+                committer_name TEXT DEFAULT '',
+                committer_email TEXT DEFAULT '',
+                user_id BIGINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_user_repo_branch"
+            " ON github_accounts(user_id, repo, branch)"
+        )
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
                 id BIGSERIAL PRIMARY KEY,
@@ -1443,6 +1492,13 @@ def init_db_postgres() -> None:
         )
         _add_column_if_missing(
             db, "echoes", "use_markdown", "INTEGER NOT NULL DEFAULT 0"
+        )
+        # GitHub destination: per-echo file path and commit message templates.
+        _add_column_if_missing(
+            db, "echoes", "github_path", "TEXT NOT NULL DEFAULT ''"
+        )
+        _add_column_if_missing(
+            db, "echoes", "github_commit", "TEXT NOT NULL DEFAULT ''"
         )
         _add_column_if_missing(db, "echoes", "filter_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(

@@ -31,6 +31,12 @@ import settings
 from _version import __version__ as APP_VERSION
 from security import decrypt_secret, encrypt_secret, hash_secret
 from webhook import dump_headers, normalize_body_template as webhook_normalize_body_template
+from github import (
+    SAMPLE_ITEM,
+    normalize_token as github_normalize_token,
+    parse_repo as github_parse_repo,
+    render_path as github_render_path,
+)
 
 FORMAT = "feedecho-export"
 VERSION = 1
@@ -54,6 +60,9 @@ _ACCOUNTS = [
     ("discord", "discord_accounts", ["name", "webhook_url", "webhook_url_hash", "channel_id"], ("webhook_url_hash",)),
     ("telegram", "telegram_accounts", ["name", "bot_token", "chat_id"], ("chat_id",)),
     ("webhook", "webhook_accounts", ["name", "url", "headers", "body_template"], ("url",)),
+    ("github", "github_accounts", [
+        "name", "repo", "branch", "token", "committer_name", "committer_email",
+    ], ("repo", "branch")),
 ]
 
 ACCOUNT_TYPES = tuple(section for section, *_ in _ACCOUNTS)
@@ -70,6 +79,7 @@ _CREDENTIAL_COLS = {
     "matrix": {"access_token"},
     "discord": {"webhook_url"},
     "telegram": {"bot_token"},
+    "github": {"token"},
 }
 
 # Required columns per account section: NOT NULL in the schema (database.py)
@@ -87,6 +97,7 @@ _REQUIRED_ACCOUNT_FIELDS = {
     "discord": ("name", "webhook_url"),
     "telegram": ("name", "bot_token", "chat_id"),
     "webhook": ("name", "url"),
+    "github": ("name", "repo", "token"),
 }
 
 _FEED_COLS = ["name", "url", "feed_type", "poll_interval", "last_item_id", "paused", "read_enabled"]
@@ -95,6 +106,7 @@ _ECHO_COLS = [
     "feed_id", "destination_type", "destination_id", "template", "visibility",
     "enabled", "filter_keywords", "filter_mode", "content_warning",
     "attach_image", "render_html", "use_markdown", "delivery_mode", "drip_limit",
+    "github_path", "github_commit",
 ]
 
 _VALID_VISIBILITY = ("public", "unlisted", "private", "direct")
@@ -309,6 +321,22 @@ def _normalize_account(section: str, account: dict) -> None:
         body_template = account.get("body_template")
         if not isinstance(body_template, str):
             account["body_template"] = ""
+    if section == "github":
+        # branch/committer_* are NOT NULL-with-defaults — same explicit-NULL
+        # coercion as base_url above. branch additionally falls back to the
+        # schema default's intent when blank.
+        if not isinstance(account.get("branch"), str) or not account["branch"]:
+            account["branch"] = "main"
+        if not isinstance(account.get("committer_name"), str):
+            account["committer_name"] = ""
+        if not isinstance(account.get("committer_email"), str):
+            account["committer_email"] = ""
+        # Normalize the repo to lowercase owner/repo (accepts a github.com
+        # URL) so the dedup natural key agrees with the create route.
+        try:
+            account["repo"] = github_parse_repo(account.get("repo") or "")
+        except ValueError as e:
+            raise ExportError(f"github account has an invalid 'repo': {e}") from e
 
 
 def _validate_account(section: str, account: dict, record_id) -> None:
@@ -343,6 +371,13 @@ def _validate_account(section: str, account: dict, record_id) -> None:
                 account["body_template"] = webhook_normalize_body_template(body_template)
             except ValueError as e:
                 raise ExportError(f"{label} has an invalid 'body_template': {e}") from e
+    if section == "github":
+        # Shape-check the token like the connect route does (length, no
+        # whitespace) — no live call at import time.
+        try:
+            account["token"] = github_normalize_token(account.get("token") or "")
+        except ValueError as e:
+            raise ExportError(f"{label} has an invalid 'token': {e}") from e
 
 
 def _existing_account_id(db, uid: int, section: str, account: dict):
@@ -597,11 +632,31 @@ def import_data(db, uid: int, payload: dict) -> dict:
         delivery_mode = echo.get("delivery_mode") or "instant"
         if delivery_mode not in _VALID_DELIVERY_MODES:
             delivery_mode = "instant"
+        # github_path/github_commit ride along only for github echoes; any
+        # other destination type stores '' so a stale path can never leak
+        # onto a different destination (same rule as the edit route).
+        github_path = ""
+        github_commit = ""
+        if dest_type == "github":
+            candidate = str(echo.get("github_path") or "").strip()
+            if not candidate:
+                # A github echo without a path would permanently fail on the
+                # first item; skip it rather than import a known-bad row.
+                skipped_echoes += 1
+                continue
+            try:
+                github_render_path(candidate, SAMPLE_ITEM)
+            except Exception:
+                skipped_echoes += 1
+                continue
+            github_path = candidate
+            github_commit = str(echo.get("github_commit") or "").strip()
         db.execute(
             "INSERT INTO echoes (feed_id, destination_type, destination_id, template,"
             " visibility, enabled, filter_keywords, filter_mode, content_warning,"
-            " attach_image, render_html, use_markdown, delivery_mode, drip_limit, user_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " attach_image, render_html, use_markdown, delivery_mode, drip_limit,"
+            " github_path, github_commit, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 new_feed,
                 dest_type,
@@ -619,6 +674,8 @@ def import_data(db, uid: int, payload: dict) -> dict:
                 1 if echo.get("use_markdown") and dest_type == "mastodon" else 0,
                 delivery_mode,
                 drip,
+                github_path,
+                github_commit,
                 uid,
             ),
         )

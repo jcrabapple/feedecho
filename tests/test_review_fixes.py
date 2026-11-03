@@ -291,6 +291,10 @@ class TestNoBlockingCallsOnAsyncHandlers:
         # an unrelated whole-app refactor.
         "hash_password",
         "verify_password",
+        # github.connect issues blocking httpx reads of the GitHub API; the
+        # connect/test routes that call it are plain `def`, and this entry
+        # keeps a future async handler from calling it directly.
+        "connect",
     }
 
     def test_no_async_route_performs_blocking_io(self):

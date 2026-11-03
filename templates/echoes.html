@@ -7,9 +7,9 @@
 <div class="alert alert-error" role="alert">{{ error }}</div>
 {% endif %}
 
-<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, a generic webhook, or email) using a template.</p>
+<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, a generic webhook, a GitHub repository, or email) using a template.</p>
 
-{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or telegram_accounts or webhook_accounts %}
+{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or telegram_accounts or webhook_accounts or github_accounts %}
 {% if not feeds or not has_destination %}
 <p class="empty-state">
     You'll need
@@ -55,6 +55,9 @@
                 {% if webhook_accounts %}
                 <option value="webhook">Webhook</option>
                 {% endif %}
+                {% if github_accounts %}
+                <option value="github">GitHub Repository</option>
+                {% endif %}
             </select>
         </label>
     </div>
@@ -62,7 +65,7 @@
    first in the same if-chain below. Its field row must start visible and the
    rest hidden server-side: hiding only via the inline script flashes the
    Mastodon row on every load and leaves it wrong with JS disabled. #}
-{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('telegram' if telegram_accounts else ('webhook' if webhook_accounts else ''))))))) %}
+{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('telegram' if telegram_accounts else ('webhook' if webhook_accounts else ('github' if github_accounts else '')))))))) %}
 {% macro dest_hidden(dest) %}{% if dest != first_dest %} style="display: none;"{% endif %}{% endmacro %}
 <div class="form-row" id="mastodon-fields"{{ dest_hidden('mastodon') }}>
     <label>Mastodon Account
@@ -208,6 +211,23 @@
             </select>
         </label>
     </div>
+    <div class="form-row" id="github-fields"{{ dest_hidden('github') }}>
+        <label>GitHub Repository
+            <select name="github_account_id">
+                {% for account in github_accounts %}
+                <option value="{{ account.id }}">{{ account.name }} ({{ account.repo }}, {{ account.branch }})</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>File path template
+            {% raw %}<input type="text" name="github_path" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md">{% endraw %}
+            <span class="hint" style="margin: 0.2rem 0 0;">Repo-relative path for each item's file, rendered per item. Required — use <code>{% raw %}{{ title | slug }}{% endraw %}</code> for filename-safe titles and <code>{% raw %}{{ date_iso }}{% endraw %}</code>/<code>{% raw %}{{ date_short }}{% endraw %}</code> for dates. A file that already exists at the path is overwritten (re-echoes update in place). Paths containing <code>..</code> are rejected.</span>
+        </label>
+        <label>Commit message template (optional)
+            {% raw %}<input type="text" name="github_commit" placeholder="Add {{ title }}">{% endraw %}
+            <span class="hint" style="margin: 0.2rem 0 0;">Defaults to <code>{% raw %}Add {{ title }}{% endraw %}</code>. Your echo template becomes the file body — write any front matter there.</span>
+        </label>
+    </div>
     <div class="form-row" id="delivery-mode-fields">
         <label>Delivery mode
             <select name="delivery_mode" onchange="toggleDestFields()">
@@ -259,6 +279,8 @@
             data-use-markdown="{{ echo.use_markdown if echo.use_markdown is defined else 0 }}"
             data-delivery-mode="{{ echo.delivery_mode }}"
             data-drip-limit="{{ echo.drip_limit }}"
+            data-github-path="{{ echo.github_path | e if echo.github_path else '' }}"
+            data-github-commit="{{ echo.github_commit | e if echo.github_commit else '' }}"
             data-enabled="{{ echo.enabled }}">
             <td data-label="Feed">{{ echo.feed_name }}</td>
             <td data-label="Destination">
@@ -280,6 +302,8 @@
                         <span class="badge badge-info">Telegram</span>
                         {% elif echo.destination_type == 'webhook' %}
                         <span class="badge badge-info">Webhook</span>
+                        {% elif echo.destination_type == 'github' %}
+                        <span class="badge badge-info">GitHub</span>
                         {% endif %}
                     </span>
                     <code class="dest-name">{{ echo.destination_name }}</code>
@@ -310,11 +334,14 @@
                 {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
                 <br><span class="badge badge-info">DIGEST</span>
                 {% endif %}
+                {% if echo.destination_type == 'github' and echo.github_path %}
+                <br><span class="badge badge-muted" title="GitHub file path template">{% raw %}{{ path }}{% endraw %}: {{ echo.github_path }}</span>
+                {% endif %}
                 {% if echo.drip_limit and echo.delivery_mode != 'digest' %}
                 <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
                 {% endif %}
             </td>
-            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord', 'telegram', 'webhook') else echo.visibility }}</td>
+            <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord', 'telegram', 'webhook', 'github') else echo.visibility }}</td>
             <td data-label="Status">
                 {% if echo.enabled %}
                 <span class="badge badge-success">Enabled</span>
@@ -385,6 +412,10 @@
     {% for a in webhook_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
 
+<script id="github-options" type="text/html">
+    {% for a in github_accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ a.repo }}, {{ a.branch }})</option>{% endfor %}
+</script>
+
 <script>
 function toggleDestFields() {
     const destType = document.getElementById('destination-type').value;
@@ -396,6 +427,18 @@ function toggleDestFields() {
     document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
     document.getElementById('telegram-fields').style.display = destType === 'telegram' ? '' : 'none';
     document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
+    document.getElementById('github-fields').style.display = destType === 'github' ? '' : 'none';
+    // The github path/commit inputs must not ride along onto another
+    // destination type: hidden inputs still submit, so disable everything in
+    // the github row whenever it is not the selected destination. (The edit
+    // route ALSO normalizes github_path/github_commit to '' for non-github
+    // echoes — this is the belt, that is the suspenders.)
+    const githubRow = document.getElementById('github-fields');
+    if (githubRow) {
+        githubRow.querySelectorAll('input, select').forEach((el) => {
+            el.disabled = githubRow.style.display === 'none';
+        });
+    }
     // The delivery-mode row is always visible: digest is only selectable for
     // email destinations (disabled otherwise), and the drip row applies to
     // instant mode alone.

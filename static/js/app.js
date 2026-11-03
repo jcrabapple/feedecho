@@ -305,6 +305,8 @@ function editEcho(echoId) {
     const useMarkdown = row.dataset.useMarkdown === '1';
     const deliveryMode = row.dataset.deliveryMode || 'instant';
     const dripLimit = row.dataset.dripLimit || '0';
+    const githubPath = row.dataset.githubPath || '';
+    const githubCommit = row.dataset.githubCommit || '';
     const enabled = row.dataset.enabled === '1';
 
     // .trim(): an empty {% for %} still leaves newlines and indentation, which
@@ -319,6 +321,7 @@ function editEcho(echoId) {
     const discordOpts = document.getElementById('discord-options').innerHTML.trim();
     const telegramOpts = document.getElementById('telegram-options').innerHTML.trim();
     const webhookOpts = document.getElementById('webhook-options').innerHTML.trim();
+    const githubOpts = document.getElementById('github-options').innerHTML.trim();
 
     const mastoStyle = destType === 'mastodon' ? '' : 'display:none';
     const emailStyle = destType === 'email' ? '' : 'display:none';
@@ -328,6 +331,7 @@ function editEcho(echoId) {
     const discordStyle = destType === 'discord' ? '' : 'display:none';
     const telegramStyle = destType === 'telegram' ? '' : 'display:none';
     const webhookStyle = destType === 'webhook' ? '' : 'display:none';
+    const githubStyle = destType === 'github' ? '' : 'display:none';
 
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form" aria-label="Edit echo">
@@ -345,6 +349,7 @@ function editEcho(echoId) {
                         ${discordOpts ? '<option value="discord"' + (destType === 'discord' ? ' selected' : '') + '>Discord Channel</option>' : ''}
                         ${telegramOpts ? '<option value="telegram"' + (destType === 'telegram' ? ' selected' : '') + '>Telegram Chat</option>' : ''}
                         ${webhookOpts ? '<option value="webhook"' + (destType === 'webhook' ? ' selected' : '') + '>Webhook</option>' : ''}
+                        ${githubOpts ? '<option value="github"' + (destType === 'github' ? ' selected' : '') + '>GitHub Repository</option>' : ''}
                     </select>
                 </label>
             </div>
@@ -403,6 +408,17 @@ function editEcho(echoId) {
             <div class="form-row" id="edit-webhook-fields-${echoId}" style="${webhookStyle}">
                 <label>Webhook
                     <select name="webhook_account_id">${webhookOpts}</select>
+                </label>
+            </div>
+            <div class="form-row" id="edit-github-fields-${echoId}" style="${githubStyle}">
+                <label>GitHub Repository
+                    <select name="github_account_id">${githubOpts}</select>
+                </label>
+                <label>File path template
+                    <input type="text" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md">
+                </label>
+                <label>Commit message template (optional)
+                    <input type="text" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
                 </label>
             </div>
             <div class="form-row">
@@ -478,6 +494,8 @@ function editEcho(echoId) {
     if (telegramSelect) telegramSelect.value = destId;
     const webhookSelect = row.querySelector('select[name="webhook_account_id"]');
     if (webhookSelect) webhookSelect.value = destId;
+    const githubSelect = row.querySelector('select[name="github_account_id"]');
+    if (githubSelect) githubSelect.value = destId;
 
     // Sync conditional rows to the echo's current delivery mode: without this
     // a digest echo opens showing both "batch into one email" and "Max posts
@@ -499,6 +517,18 @@ function toggleEditDest(echoId) {
     document.getElementById(`edit-discord-fields-${echoId}`).style.display = destType === 'discord' ? '' : 'none';
     document.getElementById(`edit-telegram-fields-${echoId}`).style.display = destType === 'telegram' ? '' : 'none';
     document.getElementById(`edit-webhook-fields-${echoId}`).style.display = destType === 'webhook' ? '' : 'none';
+    document.getElementById(`edit-github-fields-${echoId}`).style.display = destType === 'github' ? '' : 'none';
+    // github path/commit inputs (and the account select) must not ride along
+    // onto another destination type: hidden inputs still submit, so disable
+    // everything in the github row whenever it is not the selected
+    // destination. The edit route also normalizes both to '' for non-github
+    // echoes — defense in depth against the stale-path leak.
+    const githubEditRow = document.getElementById(`edit-github-fields-${echoId}`);
+    if (githubEditRow) {
+        githubEditRow.querySelectorAll('input, select').forEach((el) => {
+            el.disabled = githubEditRow.style.display === 'none';
+        });
+    }
     const digestFields = document.getElementById(`edit-digest-fields-${echoId}`);
     // The delivery-mode row is always visible; digest is only selectable for
     // email destinations, and the drip row applies to instant mode alone.

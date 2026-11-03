@@ -4,7 +4,7 @@
   <p><em>Your feeds, echoed everywhere.</em></p>
 </div>
 
-Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, generic webhooks, and email using configurable templates.
+Self-hosted RSS feed cross-poster. Route items from RSS, Atom, and JSON feeds to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, generic webhooks, GitHub repositories, and email using configurable templates.
 
 Inspired by, and built as a replacement for [Echofeed](https://rknight.me/blog/shutting-down-echofeed/), which began shutting down in August 2026.
 
@@ -20,8 +20,9 @@ A hosted version with accounts, plans, and a 14-day free trial is live at [feede
 - **Discord support** — connect a channel with a webhook URL; posts land in the channel with an embed carrying the title, link, and image
 - **Telegram support** — connect a bot token + chat; posts land in the chat (public channels get a t.me link in post history)
 - **Generic webhooks** — POST items as JSON to any HTTP endpoint: Slack and Mattermost incoming webhooks, ntfy, Gotify, Zapier, n8n, push services like brrr, or anything you run yourself (optional custom JSON body template per endpoint)
+- **GitHub** — write each item as a markdown file into a repository through the contents API: a static-site content folder, a link log, or a feed backup. Each echo carries a file-path template (with the `| slug` filter for filename-safe titles) and an optional commit-message template; your echo template becomes the file body, so front matter is just template text
 - **Template engine** — sandboxed Jinja2 templates with conditionals, filters, and a live Preview button: `{{ title }}`, `{{ link }}`, `{{ content_link }}`, `{{ summary }}`, `{{ content }}`, `{{ content_html }}` (sanitized HTML passthrough for markup-aware destinations), `{{ author }}`, `{{ date }}`, `{{ date_iso }}`, `{{ date_short }}`, `{{ tags }}`, `{{ hashtags }}`, `{{ categories }}` (RSS/Atom category domains), `{{ image_url }}`, `{{ feed_name }}`, and the full `{{ item }}` dict
-- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, Telegram chats, and webhook endpoints
+- **Multiple accounts** — post to multiple Mastodon instances, Bluesky accounts, micro.blog blogs, Matrix rooms, Discord channels, Telegram chats, webhook endpoints, and GitHub repositories
 - **Per-feed poll intervals** — each feed checked on its own schedule
 - **Built-in feed reader** — read items in place instead of a third-party app: folders with OPML import/export, unread and starred tracking with CSV/JSON export of starred items, saved searches, a full-text view, and a compose desk that turns any item into a post without leaving FeedEcho
 - **Post history** with success/failure tracking, error messages, and per-feed / per-destination filtering
@@ -200,9 +201,10 @@ On NixOS, see [`nix/README.md`](nix/README.md).
 5. **Add a Discord channel** — In Discord, open the channel you want FeedEcho to post to, then Server Settings (or channel settings) → Integrations → Webhooks → New Webhook → Copy Webhook URL, and paste it under Connect Discord on `/accounts`.
 6. **Add a Telegram chat** — Create a bot with @BotFather (`/newbot` and copy the API token), add the bot to the target chat (for channels, make it an admin), then paste the token and the chat ID or `@channelname` under Connect Telegram on `/accounts`.
 7. **Add a webhook** — Under Connect Webhook on `/accounts`, enter any HTTP endpoint and optional custom headers (one per line, `Authorization: Bearer ...`). Each item arrives as one JSON object.
-8. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL. A site home-page or article URL works too: FeedEcho autodiscovers the site's feed link via HTML `<link rel="alternate">` tags (and offers a bookmarklet that prefills the form from any page).
-9. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`.
-10. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
+8. **Add a GitHub repository** — Create a fine-grained [personal access token](https://github.com/settings/personal-access-tokens/new) with access to the repository and the `Contents: Read and write` permission, then paste it with the repository (`owner/repo`) and branch under Connect GitHub on `/accounts`. FeedEcho verifies the token, the repository, and the branch with read-only calls before saving.
+9. **Add a feed** — Go to `/feeds`, paste an RSS/Atom/JSON feed URL. A site home-page or article URL works too: FeedEcho autodiscovers the site's feed link via HTML `<link rel="alternate">` tags (and offers a bookmarklet that prefills the form from any page).
+10. **Create an echo** — Go to `/echoes`, select a feed + destination, write a template like `{{ title }} {{ link }}`. For a GitHub destination also pick a file path template like `content/blog/{{ title | slug }}_{{ date_iso }}.md`; your template becomes the file body, so write any front matter there.
+11. **Watch it run** — The scheduler checks feeds every 2 minutes and posts new items.
 
 ### Bluesky details
 
@@ -248,6 +250,28 @@ On NixOS, see [`nix/README.md`](nix/README.md).
 - Self-hosted mode allows http and LAN/loopback targets (post to ntfy on your own network). The hosted service requires https and validates every URL against the SSRF guard, then sends through the pinned-IP transport, so a URL can never reach private addresses from our servers — and your header credentials never go out in cleartext.
 - Redirects are never followed. Auth failures (401/403), vanished endpoints (404/410), and rejected payloads (400/422) fail permanently until you reconnect; rate limits and 5xx ride the retry pipeline. No per-message URL in post history, and visibility/content-warning settings don't apply.
 
+### GitHub details
+
+- Accounts connect with a **personal access token** (a [fine-grained token](https://github.com/settings/personal-access-tokens/new) with access to the repository and the `Contents: Read and write` permission is the least-privilege shape), plus the repository as `owner/repo` and a branch. Connect runs two read-only calls — `GET /repos/{repo}` (which also refuses a read-only token up front) and `GET /repos/{repo}/branches/{branch}` — so a credential that cannot write fails at save time, not at 6am inside the scheduler. Reconnecting the same repo+branch updates the stored row; a blank token field keeps the stored token; `{}` clears it.
+- The token is encrypted at rest, never rendered back in the UI, and never appears in logs or delivery error messages. All calls go to the fixed `https://api.github.com` host — there is no user-supplied base URL, so GitHub delivery adds no new SSRF surface.
+- Each echo to a GitHub destination writes **one file per item** through the contents API. The per-echo **file path template** renders to the repo-relative path (validated at save time against a sample item, so a path that would permanently fail — bad syntax, a `..` segment, an over-limit segment — is refused with a pointer to the `| slug` filter). A file that already exists at the path is overwritten, so re-echoes and corrections update in place; nothing is ever deleted. The per-echo **commit message template** defaults to `Add {{ title }}`.
+- Your echo template **is the file body** — write any front matter directly in it. A typical blog shape:
+
+  ```
+  ---
+  title: "{{ title }}"
+  date: {{ date_iso }}
+  tags: {{ tags }}
+  ---
+  {{ content }}
+  {{ link }}
+  ```
+
+  with the path template `content/blog/{{ title | slug }}_{{ date_iso }}.md`.
+- Optional committer name/email on the account control the commit author line; with both blank, commits are authored by the token's own GitHub user.
+- The file body is capped at 1 MB (base64-encoded): an over-cap item is a **permanent** failure rather than a silent truncation — truncating a backup file would corrupt it. Render/validation failures and GitHub refusals (401, non-rate-limit 403, 404, 409, 422) are permanent; rate limits (403/429 with a depleted budget or `Retry-After`) and 5xx ride the normal retry pipeline.
+- Success records the file's `html_url`, so post history links straight to the file on GitHub. Visibility, content-warning, and digest settings don't apply. Delivery happens in two steps — a read of the file's current blob, then the write — with the dispatch claim re-validated between them, so a paused or reconfigured echo can never half-write.
+
 ### FeedBooster details
 
 - When a booster is configured (`FEEDECHO_BOOSTER_URL` + `FEEDECHO_BOOSTER_TOKEN`; the hosted service runs one at `@feedbooster@feedecho.net`), each Mastodon account row on `/accounts` gains a **Boost: On/Off** toggle.
@@ -277,6 +301,7 @@ or missing list raises at render time — use `| first` or `| default(...)`.
 | `{{ date_short }}` | Short date (2024-01-15) |
 | `{{ … \| date_short }}` | Filter: format any ISO 8601 or RFC 822 date string as `YYYY-MM-DD` (e.g. an RSS `pubDate`) |
 | `{{ … \| date_iso }}` | Filter: same input → `YYYY-MM-DDTHH:MM:SS` |
+| `{{ … \| slug }}` | Filter: make a string safe for filenames/URL paths — lowercase, spaces and underscores become dashes, punctuation dropped (`{{ title | slug }}` → `my-first-post`; use it in GitHub path templates) |
 | `{{ tags }}` | Raw tag list |
 | `{{ hashtags }}` | Feed tags as #hashtags |
 | `{{ categories }}` | Dict of RSS/Atom `<category domain="…">` values keyed by domain URI and by URL `#fragment` (e.g. AlboPOP `{{ categories['item-category-type'] }}`). Empty for JSON Feed / tags without a domain |
@@ -318,7 +343,7 @@ FeedEcho is ~19,000 lines of Python across 27 focused modules — no ORM, no bui
 - `database.py` — dual-dialect storage layer (SQLite WAL / Postgres) with idempotent migrations
 - `feed_parser.py` — feed fetching with SSRF validation, size caps, and normalized item shapes
 - `scheduler.py` — the dispatch engine: per-feed polling, atomic post claims, retries, drip/digest queues
-- `mastodon.py` / `bluesky.py` / `microblog.py` / `matrix.py` / `discord.py` / `webhook.py` — one client module per destination
+- `mastodon.py` / `bluesky.py` / `microblog.py` / `matrix.py` / `discord.py` / `webhook.py` / `github.py` — one client module per destination
 - `oauth.py` — Mastodon OAuth 2.0 flow with signed state
 - `reader` views live in `app.py` + `templates/reader*.html` + `static/js/app.js` (folders, unread/star state, saved searches, compose desk)
 - `plans.py` / `invites.py` — hosted-mode plan limits and registration gating (dormant in self-hosted mode)
@@ -354,7 +379,7 @@ Only the endpoints that require unauthenticated access (OAuth callback, health c
 
 ### Secrets handling
 
-- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, Telegram bot tokens, Discord webhook URLs, and OAuth client secrets** are scoped credentials — revoke any of them at the source platform without touching your main passwords. At rest they are encrypted (Fernet) whenever `FEEDECHO_CREDENTIAL_KEY` is set — required in multi-tenant mode, optional in single-tenant mode, where it keeps copied database backups from being credential dumps. Keep the key stable once set: rows encrypted under it are unreadable without it (reconnect the affected accounts if you lose it). Without a key, single-tenant mode stores credentials plaintext because you own the database and the encryption key would live beside it.
+- **Mastodon OAuth tokens, Bluesky app passwords and session JWTs, micro.blog app tokens, Matrix access tokens, Telegram bot tokens, Discord webhook URLs, GitHub personal access tokens, and OAuth client secrets** are scoped credentials — revoke any of them at the source platform without touching your main passwords. At rest they are encrypted (Fernet) whenever `FEEDECHO_CREDENTIAL_KEY` is set — required in multi-tenant mode, optional in single-tenant mode, where it keeps copied database backups from being credential dumps. Keep the key stable once set: rows encrypted under it are unreadable without it (reconnect the affected accounts if you lose it). Without a key, single-tenant mode stores credentials plaintext because you own the database and the encryption key would live beside it.
 - **SMTP passwords** are stored server-side and are **masked** in the web UI; saving the masked placeholder preserves the existing password.
 - FeedEcho **does not** log tokens, passwords, or secrets to the application log. Log messages contain echo IDs, feed names, and error messages only.
 - The `FEEDECHO_AUTH_TOKEN` env var doubles as the HMAC signing key for OAuth state tokens if set, so a single secret secures both layers.

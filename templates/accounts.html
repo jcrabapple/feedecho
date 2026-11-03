@@ -63,6 +63,14 @@
 <div class="alert alert-success" role="status">Webhook deleted.</div>
 {% endif %}
 
+{% if request.query_params.get('status') == 'github_connected' %}
+<div class="alert alert-success" role="status">GitHub repository connected successfully.</div>
+{% endif %}
+
+{% if request.query_params.get('status') == 'github_deleted' %}
+<div class="alert alert-success" role="status">GitHub repository deleted.</div>
+{% endif %}
+
 <div class="account-sections-toolbar">
     <button type="button" class="btn-sm" onclick="setAccountSections(true)">Expand all</button>
     <button type="button" class="btn-sm" onclick="setAccountSections(false)">Collapse all</button>
@@ -464,6 +472,68 @@
     </div>
 </details>
 
+<details class="account-section"{% if github_accounts %} open{% endif %}>
+    <summary>
+        <span class="account-section-title">GitHub</span>
+        <span class="account-count{% if github_accounts %} count-active{% endif %}">{% if github_accounts %}{{ github_accounts | length }} connected{% else %}Not connected{% endif %}</span>
+    </summary>
+    <div class="account-section-body">
+        <section>
+            <h2>Connect GitHub</h2>
+            <p class="hint">Write each echoed feed item as a markdown file into a GitHub repository — a static-site content folder, a backup, or a link log. Create a <a href="https://github.com/settings/personal-access-tokens/new">fine-grained personal access token</a> with access to the repository and the <code>Contents: Read and write</code> permission, then paste it here with the repository (<code>owner/repo</code>) and branch. The token is a secret — treat it like a password. It is checked against the repository when you connect; reconnecting the same repo+branch updates the stored row, a blank token field keeps the stored token, and <code>{}</code> removes it. Each echo then picks a file path template (for example <code>{% raw %}content/blog/{{ title | slug }}.md{% endraw %}</code>) and its template becomes the file body.</p>
+            <form method="post" action="/api/github-accounts" class="inline-form stacked">
+                <label for="github-repo">Repository</label>
+                <input type="text" name="repo" id="github-repo" placeholder="owner/repo" required autocomplete="off">
+                <label for="github-branch">Branch</label>
+                <input type="text" name="branch" id="github-branch" placeholder="main" autocomplete="off">
+                <label for="github-token">Personal access token</label>
+                <input type="password" name="token" id="github-token" placeholder="github_pat_…" autocomplete="off">
+                <label for="github-name">Display name (optional)</label>
+                <input type="text" name="name" id="github-name" placeholder="Blog content repo">
+                <label for="github-committer-name">Committer name (optional)</label>
+                <input type="text" name="committer_name" id="github-committer-name" placeholder="FeedEcho">
+                <label for="github-committer-email">Committer email (optional)</label>
+                <input type="text" name="committer_email" id="github-committer-email" placeholder="feedecho@example.com">
+                <p class="hint">The committer fields control the author line on the commits FeedEcho creates. Leave both blank to commit as the token's own GitHub user; filling only one falls back to the token identity (GitHub requires both).</p>
+                <button type="submit">Connect GitHub</button>
+            </form>
+        </section>
+
+        {% if github_accounts %}
+        <h2>GitHub Repositories</h2>
+        <div class="data-table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Repository</th>
+                    <th scope="col">Branch</th>
+                    <th scope="col">Added</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in github_accounts %}
+                <tr>
+                    <td data-label="Name">{{ account.name }}</td>
+                    <td data-label="Repository"><code>{{ account.repo }}</code></td>
+                    <td data-label="Branch"><code>{{ account.branch }}</code></td>
+                    <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
+                    <td data-label="Actions" class="action-cell">
+                        <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('github', {{ account.id }}, btn))">Test</button>
+                        <form method="post" action="/api/github-accounts/{{ account.id }}/delete" class="inline">
+                            <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this GitHub repository? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+</details>
+
 <details class="account-section"{% if telegram_accounts %} open{% endif %}>
     <summary>
         <span class="account-section-title">Telegram</span>
@@ -517,8 +587,8 @@
     </div>
 </details>
 
-{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts and not telegram_accounts and not webhook_accounts %}
-<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, Telegram chat, generic webhook, or add an email address above.</p>
+{% if not mastodon_accounts and not email_accounts and not bluesky_accounts and not microblog_accounts and not matrix_accounts and not discord_accounts and not telegram_accounts and not webhook_accounts and not github_accounts %}
+<p class="empty-state">No accounts yet. Connect a Mastodon instance, Bluesky account, micro.blog blog, Matrix room, Discord webhook, Telegram chat, generic webhook, or GitHub repository above, or add an email address above.</p>
 {% endif %}
 
 <script>

@@ -101,6 +101,7 @@ from webhook import (
     parse_headers as webhook_parse_headers,
     test_connection as test_webhook_connection,
 )
+import github
 import scheduler  # noqa: E402 — module-qualified access (tests monkeypatch through it)
 from scheduler import (
     start_scheduler,
@@ -193,6 +194,7 @@ DESTINATION_TABLES_BY_TYPE = {
     "discord": "discord_accounts",
     "telegram": "telegram_accounts",
     "webhook": "webhook_accounts",
+    "github": "github_accounts",
 }
 DESTINATION_TABLES = tuple(DESTINATION_TABLES_BY_TYPE.values())
 
@@ -205,6 +207,7 @@ DESTINATION_LIMITS = {
     "email": None,
     "microblog": None,
     "webhook": None,
+    "github": None,
 }
 
 OAUTH_SESSION_COOKIE = "feedecho_oauth_session"
@@ -1267,14 +1270,21 @@ def _get_all_accounts(user_id: int = 1):
                     "created_at": row["created_at"],
                 }
             )
-    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows
+        # GitHub rows: the token is the credential — never selected for
+        # display, so the accounts table can only ever show repo + branch.
+        github_rows = db.execute(
+            "SELECT id, name, repo, branch, created_at FROM github_accounts"
+            " WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        ).fetchall()
+    return mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows, github_rows
 
 
 def _shout_destinations(user_id: int):
     """One option per connected account, encoded ``type:id`` for the reader's
     Compose/Shout picker. Labels carry the type so a destination is unambiguous.
     Includes per-destination character/grapheme limit."""
-    (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows) = _get_all_accounts(user_id)
+    (mastodon, email, bluesky, microblog, matrix_rows, discord_rows, telegram_rows, webhook_rows, _github_rows) = _get_all_accounts(user_id)
     out = []
     for row in mastodon:
         out.append({"value": f"mastodon:{row['id']}", "label": f"Mastodon · {row['name']}", "limit": DESTINATION_LIMITS.get("mastodon")})
@@ -1307,6 +1317,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         discord_accounts,
         telegram_accounts,
         webhook_accounts,
+        github_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     return render(
@@ -1320,6 +1331,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
         discord_accounts=discord_accounts,
         telegram_accounts=telegram_accounts,
         webhook_accounts=webhook_accounts,
+        github_accounts=github_accounts,
         smtp_configured=bool(smtp_settings.get("smtp_host")),
         smtp_settings=smtp_settings,
         booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN),
@@ -1361,6 +1373,9 @@ async def dashboard(request: Request):
         webhook_accounts = db.execute(
             "SELECT COUNT(*) as c FROM webhook_accounts WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
+        github_accounts = db.execute(
+            "SELECT COUNT(*) as c FROM github_accounts WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
         feeds = db.execute(
             "SELECT * FROM feeds WHERE deleted_at IS NULL AND user_id = ? ORDER BY name",
             (uid,),
@@ -1376,6 +1391,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'discord' THEN dc.name
                      WHEN e.destination_type = 'telegram' THEN tg.name
                      WHEN e.destination_type = 'webhook' THEN wh.name
+                     WHEN e.destination_type = 'github' THEN gh.name
                    END as destination_name
             FROM echoes e
             JOIN feeds f ON e.feed_id = f.id
@@ -1387,6 +1403,7 @@ async def dashboard(request: Request):
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
             LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
             LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
+            LEFT JOIN github_accounts gh ON e.destination_type = 'github' AND e.destination_id = gh.id AND gh.user_id = e.user_id
             WHERE e.deleted_at IS NULL AND e.user_id = ?
             ORDER BY e.created_at DESC
         """, (uid,)).fetchall()
@@ -1401,6 +1418,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'discord' THEN dc.name
                      WHEN e.destination_type = 'telegram' THEN tg.name
                      WHEN e.destination_type = 'webhook' THEN wh.name
+                     WHEN e.destination_type = 'github' THEN gh.name
                    END as account_name,
                    CASE
                      WHEN e.destination_type = 'mastodon' THEN a.instance
@@ -1411,6 +1429,7 @@ async def dashboard(request: Request):
                      WHEN e.destination_type = 'discord' THEN dc.channel_id
                      WHEN e.destination_type = 'telegram' THEN tg.chat_id
                      WHEN e.destination_type = 'webhook' THEN wh.url
+                     WHEN e.destination_type = 'github' THEN gh.repo
                    END as instance
             FROM posted_items pi
             JOIN echoes e ON pi.echo_id = e.id
@@ -1423,6 +1442,7 @@ async def dashboard(request: Request):
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
             LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
             LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
+            LEFT JOIN github_accounts gh ON e.destination_type = 'github' AND e.destination_id = gh.id AND gh.user_id = e.user_id
             WHERE e.user_id = ?
             ORDER BY pi.posted_at DESC
             LIMIT 20
@@ -1439,6 +1459,7 @@ async def dashboard(request: Request):
                 + discord_accounts
                 + telegram_accounts
                 + webhook_accounts
+                + github_accounts
             ),
             "feeds": len(feeds),
             "echoes": len(echoes),
@@ -1622,7 +1643,9 @@ def _admin_usage(db) -> list:
             (SELECT COUNT(*) FROM telegram_accounts tg
               WHERE tg.user_id = u.id) +
             (SELECT COUNT(*) FROM webhook_accounts wh
-              WHERE wh.user_id = u.id) AS destinations,
+              WHERE wh.user_id = u.id) +
+            (SELECT COUNT(*) FROM github_accounts gh
+              WHERE gh.user_id = u.id) AS destinations,
             (SELECT COUNT(*) FROM posted_items pi
               JOIN echoes e2 ON pi.echo_id = e2.id
               WHERE e2.user_id = u.id AND pi.status = 'success'
@@ -2448,6 +2471,7 @@ async def accounts_page(request: Request):
         discord_accounts,
         telegram_accounts,
         webhook_accounts,
+        github_accounts,
     ) = _get_all_accounts(uid)
     smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
     smtp_configured = bool(smtp_settings.get("smtp_host"))
@@ -2460,6 +2484,7 @@ async def accounts_page(request: Request):
                   discord_accounts=discord_accounts,
                   telegram_accounts=telegram_accounts,
                   webhook_accounts=webhook_accounts,
+                  github_accounts=github_accounts,
                   smtp_configured=smtp_configured,
                   smtp_settings=smtp_settings,
                   booster_configured=bool(settings.BOOSTER_URL and settings.BOOSTER_TOKEN))
@@ -2483,6 +2508,7 @@ def _echoes_page_context(db, uid: int) -> dict:
                  WHEN e.destination_type = 'discord' THEN dc.name
                  WHEN e.destination_type = 'telegram' THEN tg.name
                  WHEN e.destination_type = 'webhook' THEN wh.name
+                 WHEN e.destination_type = 'github' THEN gh.name
                END as destination_name,
                a.booster_enabled as dest_booster_enabled
         FROM echoes e
@@ -2495,6 +2521,7 @@ def _echoes_page_context(db, uid: int) -> dict:
         LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
         LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
         LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
+        LEFT JOIN github_accounts gh ON e.destination_type = 'github' AND e.destination_id = gh.id AND gh.user_id = e.user_id
         WHERE e.deleted_at IS NULL AND e.user_id = ?
         ORDER BY e.created_at DESC
     """, (uid,)).fetchall()
@@ -2538,6 +2565,11 @@ def _echoes_page_context(db, uid: int) -> dict:
         " WHERE user_id = ? ORDER BY name",
         (uid,),
     ).fetchall()
+    github_accounts = db.execute(
+        "SELECT id, name, repo, branch FROM github_accounts"
+        " WHERE user_id = ? ORDER BY name",
+        (uid,),
+    ).fetchall()
     return {
         "echoes": echoes,
         "feeds": feeds,
@@ -2549,6 +2581,7 @@ def _echoes_page_context(db, uid: int) -> dict:
         "discord_accounts": discord_accounts,
         "telegram_accounts": telegram_accounts,
         "webhook_accounts": webhook_accounts,
+        "github_accounts": github_accounts,
     }
 
 
@@ -2598,6 +2631,7 @@ _HISTORY_ACCOUNT_LABEL_SQL = """CASE
                      WHEN e.destination_type = 'discord' THEN dc.name
                      WHEN e.destination_type = 'telegram' THEN tg.name
                      WHEN e.destination_type = 'webhook' THEN wh.name
+                     WHEN e.destination_type = 'github' THEN gh.name
                    END"""
 
 _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
@@ -2609,6 +2643,7 @@ _HISTORY_ACCOUNT_INSTANCE_SQL = """CASE
                      WHEN e.destination_type = 'discord' THEN dc.channel_id
                      WHEN e.destination_type = 'telegram' THEN tg.chat_id
                      WHEN e.destination_type = 'webhook' THEN wh.url
+                     WHEN e.destination_type = 'github' THEN gh.repo
                    END"""
 
 _HISTORY_DESTINATION_JOINS_SQL = """
@@ -2619,7 +2654,8 @@ _HISTORY_DESTINATION_JOINS_SQL = """
             LEFT JOIN matrix_accounts mx ON e.destination_type = 'matrix' AND e.destination_id = mx.id AND mx.user_id = e.user_id
             LEFT JOIN discord_accounts dc ON e.destination_type = 'discord' AND e.destination_id = dc.id AND dc.user_id = e.user_id
             LEFT JOIN telegram_accounts tg ON e.destination_type = 'telegram' AND e.destination_id = tg.id AND tg.user_id = e.user_id
-            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id"""
+            LEFT JOIN webhook_accounts wh ON e.destination_type = 'webhook' AND e.destination_id = wh.id AND wh.user_id = e.user_id
+            LEFT JOIN github_accounts gh ON e.destination_type = 'github' AND e.destination_id = gh.id AND gh.user_id = e.user_id"""
 
 
 def _filter_int(value: str) -> int | None:
@@ -3445,6 +3481,7 @@ def _hard_delete_user(db, uid: int) -> None:
         "discord_accounts",
         "telegram_accounts",
         "webhook_accounts",
+        "github_accounts",
     ):
         db.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM settings WHERE user_id = ?", (uid,))
@@ -4304,6 +4341,151 @@ def delete_webhook_account(request: Request, account_id: int):
             (account_id, uid),
         )
     return RedirectResponse(url="/accounts?status=webhook_deleted", status_code=303)
+
+
+@app.post("/api/github-accounts")
+def add_github_account(
+    request: Request,
+    repo: str = Form(...),
+    branch: str = Form("main"),
+    token: str = Form(""),
+    name: str = Form(""),
+    committer_name: str = Form(""),
+    committer_email: str = Form(""),
+):
+    """Validate a GitHub token against a repository and store one account row.
+
+    Synchronous route: connect runs two live read-only GitHub calls
+    (``GET /repos/{repo}`` proving the token, visibility, and push
+    permission, then ``GET /repos/{repo}/branches/{branch}`` proving the
+    branch), because a credential that saves but cannot write fails at 6am
+    inside the scheduler where nobody sees it. Reconnecting the same
+    repo+branch updates the stored row instead of duplicating it.
+
+    The token is a credential: it is encrypted before storage, never
+    selected for display, and a blank token field on reconnect leaves the
+    stored token untouched (the ``{}`` sentinel clears it). A fresh token
+    is re-validated with the same live read before it is stored.
+    """
+    try:
+        repo = github.parse_repo(repo)
+    except ValueError as e:
+        return _render_accounts_error(request, str(e))
+    branch = (branch or "").strip() or "main"
+
+    with get_db() as db:
+        uid = current_user_id(request)
+        # Cap counts NEW rows only: reconnecting the same repo+branch (to
+        # rotate a token) updates in place and must not be blocked at the cap.
+        existing = db.execute(
+            "SELECT id FROM github_accounts"
+            " WHERE user_id = ? AND repo = ? AND branch = ?",
+            (uid, repo, branch),
+        ).fetchone()
+        if not existing:
+            try:
+                _check_destination_cap(db, uid)
+            except PlanError as e:
+                return _render_accounts_error(request, str(e))
+
+        stored_token = ""
+        if existing:
+            row = db.execute(
+                "SELECT token FROM github_accounts WHERE id = ? AND user_id = ?",
+                (existing["id"], uid),
+            ).fetchone()
+            stored_token = row["token"] if row else ""
+
+        token = token or ""
+        token_value = token.strip()
+        is_clear = token_value == "{}"
+        if not token_value and not stored_token and not existing:
+            return _render_accounts_error(
+                request, "Enter a GitHub personal access token."
+            )
+        if is_clear and not existing:
+            # First connect has no stored credential to clear; the v1.65.0
+            # lesson applies in reverse — ON CONFLICT never fires on a fresh
+            # row, so the literal sentinel would be stored as the token.
+            return _render_accounts_error(
+                request, "Enter a GitHub personal access token."
+            )
+        if token_value and not is_clear:
+            # Live validation BEFORE the write: a token that cannot see the
+            # repo or lacks push permission is refused here, not at 6am in
+            # the scheduler.
+            try:
+                github.connect(token_value, repo, branch)
+            except ValueError as e:
+                return _render_accounts_error(request, str(e))
+            except github.GitHubError as e:
+                return _render_accounts_error(request, str(e))
+            encrypted = security.encrypt_secret(token_value)
+        elif is_clear:
+            # Explicit clear, expressed in SQL as the sentinel value.
+            encrypted = "{}"
+        else:
+            # Blank token keeps the stored credential (display-name-only edit).
+            encrypted = stored_token
+
+        display_name = name.strip()[:100] or repo
+        db.execute(
+            """
+            INSERT INTO github_accounts
+                (name, repo, branch, token, committer_name, committer_email, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, repo, branch) DO UPDATE SET
+                name = excluded.name,
+                token = CASE
+                    WHEN excluded.token = '{}' THEN ''
+                    WHEN excluded.token != '' THEN excluded.token
+                    ELSE github_accounts.token
+                END,
+                committer_name = excluded.committer_name,
+                committer_email = excluded.committer_email
+            """,
+            (
+                display_name, repo, branch, encrypted,
+                committer_name.strip()[:100], committer_email.strip()[:200], uid,
+            ),
+        )
+    return RedirectResponse(url="/accounts?status=github_connected", status_code=303)
+
+
+@app.post("/api/github-accounts/{account_id}/test")
+def test_github_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        account = db.execute(
+            "SELECT * FROM github_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not account:
+        raise HTTPException(status_code=404, detail="GitHub account not found")
+    # Read-only: re-reads the branch head with the stored token. Nothing is
+    # written to the repository.
+    try:
+        token = security.decrypt_secret(account["token"])
+    except ValueError:
+        return {"success": False, "message": "GitHub credential could not be decrypted"}
+    success, message = github.test_connection(token, account["repo"], account["branch"])
+    return {"success": success, "message": message}
+
+
+@app.post("/api/github-accounts/{account_id}/delete")
+def delete_github_account(request: Request, account_id: int):
+    uid = current_user_id(request)
+    with get_db() as db:
+        if _dependent_echo_count_tx(db, uid, "github", account_id):
+            return _render_accounts_error(
+                request,
+                "This GitHub account is used by echoes. Delete or reassign those echoes first.",
+            )
+        db.execute(
+            "DELETE FROM github_accounts WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        )
+    return RedirectResponse(url="/accounts?status=github_deleted", status_code=303)
 
 
 # ── API: Settings ───────────────────────────────────────────────────────────
@@ -6169,6 +6351,44 @@ def _validate_echo_template(template: str) -> None:
         raise HTTPException(status_code=400, detail=f"Template error: {e}")
 
 
+def _github_echo_fields(destination_type: str, github_path: str, github_commit: str) -> tuple[str, str]:
+    """Resolve the per-echo github_path / github_commit columns for a save.
+
+    Returns the two column values. A path is REQUIRED for github echoes and
+    is validated by rendering the deliberately-nasty SAMPLE_ITEM through it,
+    so a template that would permanently fail on the first real item (bad
+    syntax, or a path traversal / over-limit segment) is refused AT SAVE
+    TIME with a pointer to the ``| slug`` filter. The commit message is
+    optional (blank = the default ``Add {{ title }}``).
+
+    Non-github echoes always store '' for both: a stale path must never
+    ride along when the destination type changes (the hidden-input leak).
+    """
+    if destination_type != "github":
+        return "", ""
+    path = (github_path or "").strip()
+    if not path:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub echoes need a file path template, e.g. content/blog/{{ title | slug }}.md",
+        )
+    try:
+        github.render_path(path, github.SAMPLE_ITEM)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"GitHub path template is invalid: {e}"
+            " (use {{ title | slug }} for filename-safe titles)",
+        )
+    commit = (github_commit or "").strip()
+    if commit:
+        try:
+            github.build_commit_message(commit, github.SAMPLE_ITEM, path="content/sample.md")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"GitHub commit message template is invalid: {e}")
+    return path, commit
+
+
 @app.post("/api/echoes")
 async def add_echo(
     request: Request,
@@ -6182,6 +6402,9 @@ async def add_echo(
     discord_account_id: int = Form(None),
     telegram_account_id: int = Form(None),
     webhook_account_id: int = Form(None),
+    github_account_id: int = Form(None),
+    github_path: str = Form(""),
+    github_commit: str = Form(""),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -6204,6 +6427,13 @@ async def add_echo(
         raise HTTPException(status_code=400, detail=f"Invalid filter mode")
     if delivery_mode not in VALID_DELIVERY_MODES:
         raise HTTPException(status_code=400, detail="Invalid delivery mode")
+    # GitHub echoes clamp silently instead of erroring: digest is email-only
+    # (github delivery is per-item file writes, so digest collapses to
+    # instant) and file bodies never carry feed images.
+    if destination_type == "github":
+        if delivery_mode == "digest":
+            delivery_mode = "instant"
+        attach_image = ""
     # Digest mode is email-only
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
@@ -6267,10 +6497,18 @@ async def add_echo(
         destination_id = webhook_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="webhook_account_id required for webhook destination")
+    elif destination_type == "github":
+        destination_id = github_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="github_account_id required for github destination")
     else:
         # Unreachable (VALID_DEST_TYPES is checked above), kept explicit so a
         # future destination type cannot silently fall through.
         raise HTTPException(status_code=400, detail="Invalid destination type")
+
+    github_path_value, github_commit_value = _github_echo_fields(
+        destination_type, github_path, github_commit
+    )
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -6296,11 +6534,13 @@ async def add_echo(
         db.execute(
             """INSERT INTO echoes (feed_id, destination_type, destination_id, template, visibility,
                                    filter_keywords, filter_mode, content_warning, attach_image,
-                                   render_html, use_markdown, delivery_mode, drip_limit, enabled, user_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   render_html, use_markdown, delivery_mode, drip_limit, enabled,
+                                   github_path, github_commit, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             is_render_html, is_use_markdown, delivery_mode, drip_limit, is_enabled, uid),
+             is_render_html, is_use_markdown, delivery_mode, drip_limit, is_enabled,
+             github_path_value, github_commit_value, uid),
         )
     # Return to the originating surface. Allowlist rather than prefix checks:
     # the WHATWG URL parser treats backslashes as slashes, so a prefix check
@@ -6415,6 +6655,9 @@ async def edit_echo(
     discord_account_id: int = Form(None),
     telegram_account_id: int = Form(None),
     webhook_account_id: int = Form(None),
+    github_account_id: int = Form(None),
+    github_path: str = Form(""),
+    github_commit: str = Form(""),
     template: str = Form("{{ title }} {{ link }}"),
     visibility: str = Form("public"),
     filter_keywords: str = Form(""),
@@ -6435,6 +6678,13 @@ async def edit_echo(
         raise HTTPException(status_code=400, detail=f"Invalid filter mode")
     if delivery_mode not in VALID_DELIVERY_MODES:
         raise HTTPException(status_code=400, detail="Invalid delivery mode")
+    # GitHub echoes clamp silently instead of erroring: digest is email-only
+    # (github delivery is per-item file writes, so digest collapses to
+    # instant) and file bodies never carry feed images.
+    if destination_type == "github":
+        if delivery_mode == "digest":
+            delivery_mode = "instant"
+        attach_image = ""
     if delivery_mode == "digest" and destination_type != "email":
         raise HTTPException(status_code=400, detail="Digest mode is only available for email destinations")
     if drip_limit < 0 or drip_limit > 1000:
@@ -6496,10 +6746,18 @@ async def edit_echo(
         destination_id = webhook_account_id
         if not destination_id:
             raise HTTPException(status_code=400, detail="webhook_account_id required for webhook destination")
+    elif destination_type == "github":
+        destination_id = github_account_id
+        if not destination_id:
+            raise HTTPException(status_code=400, detail="github_account_id required for github destination")
     else:
         # Unreachable (VALID_DEST_TYPES is checked above), kept explicit so a
         # future destination type cannot silently fall through.
         raise HTTPException(status_code=400, detail="Invalid destination type")
+
+    github_path_value, github_commit_value = _github_echo_fields(
+        destination_type, github_path, github_commit
+    )
 
     is_enabled = 1 if enabled else 0
     is_attach_image = 1 if attach_image else 0
@@ -6533,11 +6791,14 @@ async def edit_echo(
                template = ?, visibility = ?, filter_keywords = ?, filter_mode = ?,
                content_warning = ?, attach_image = ?, render_html = ?, use_markdown = ?,
                delivery_mode = ?, drip_limit = ?,
+               github_path = ?, github_commit = ?,
                enabled = ?
                WHERE id = ? AND user_id = ?""",
             (feed_id, destination_type, destination_id, template, visibility,
              filter_keywords.strip(), filter_mode, content_warning.strip(), is_attach_image,
-             is_render_html, is_use_markdown, delivery_mode, drip_limit, is_enabled, echo_id, uid),
+             is_render_html, is_use_markdown, delivery_mode, drip_limit,
+             github_path_value, github_commit_value,
+             is_enabled, echo_id, uid),
         )
         if (
             echo["booster_enabled"]

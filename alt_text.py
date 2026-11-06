@@ -60,50 +60,33 @@ TEST_IMAGE_BYTES = base64.b64decode(
 
 # Phrases a vision model uses when it did not receive the image. Matched
 # case-insensitively against short answers only (see _claims_no_image).
-# A vision model that never received the image answers with a refusal that
-# OPENS the reply ("No image is attached. Please upload...", "I cannot see the
-# image"). A description of a real photo opens by framing a scene ("A
-# screenshot of a form whose button reads 'Please upload an image'"), so every
-# check below is anchored to the START of the answer.
-#
-# Structured parts, not an enumerated phrase list: hand-listing phrases misses
-# the article and verb variants ("please provide an image", "I don't see the
-# image") that a single model emits on different days.
-_IMAGE_REQUEST_VERBS = ("upload", "attach", "provide", "send", "share", "include")
-_NEGATED_SEEING = (
+# Cues that a vision model answered "I did not get an image" rather than
+# describing one. Deliberately NOT used on the posting path: a false positive
+# there would drop a real description, and no text heuristic is reliable enough
+# to be trusted with a member's alt text. It is a diagnostic for the settings
+# Test button, where the cost of a false positive is one confusing button press
+# and the model's own answer is quoted back to the tenant.
+_NO_IMAGE_CUES = (
+    "no image",
+    "not see",
     "cannot see",
-    "can not see",
     "can't see",
-    "cant see",
-    "could not see",
     "couldn't see",
-    "do not see",
-    "don't see",
-    "did not see",
-    "didn't see",
     "unable to see",
-    "do not have",
-    "don't have",
     "did not receive",
     "didn't receive",
-    "have not received",
-    "haven't received",
+    "not received",
     "was not provided",
     "wasn't provided",
+    "did not attach",
+    "didn't attach",
+    "did not upload",
+    "didn't upload",
 )
-
-# Openers that carry no signal about whether an image was seen; stripped before
-# the check so "I'm sorry, but no image was provided" still matches.
-_REFUSAL_LEADINS = (
-    "i'm sorry",
-    "i am sorry",
-    "im sorry",
-    "sorry",
-    "i apologize",
-    "i apologise",
-    "apologies",
-    "unfortunately",
-)
+# A refusal states its problem straight away, so a cue counts only when it lands
+# in the opening of the answer. A description that merely mentions a button
+# reading "Please upload an image" keeps the words far enough in to stay out.
+_NO_IMAGE_CUE_WINDOW = 30
 
 SYSTEM_PROMPT = (
     "You are an alt text generator for a social media platform. "
@@ -210,54 +193,31 @@ USER_PROMPT = (
 )
 
 
-def _claims_no_image(text: str) -> bool:
-    """True when the model answered that it received no image.
+def looks_like_no_image_answer(text: str) -> bool:
+    """True when an answer reads like "I received no image".
 
-    A vision endpoint can return HTTP 200 and a fluent sentence that means
-    "I could not see anything" (OpenAI gpt-6-astra on a 1x1 probe: "No image
-    is attached. Please upload the image..."). That is a failed vision call,
-    not alt text: posting it would caption someone's photo with a claim that
-    there is no image in it.
-
-    Anchored to the START of the answer, after any apology opener. A real
-    description of a screenshot can contain the same words further in ("A
-    screenshot of a form with a button that says 'Please upload an image'"),
-    and dropping that alt text would be the worse failure of the two.
+    Diagnostic only: the settings-page Test button uses it so a green result
+    means the model actually saw the probe, and quotes the model's answer back
+    when it did not (hosted tenant ticket 14, gpt-6-astra answered a 1x1 probe
+    with "No image is attached. Please upload the image..." while returning
+    HTTP 200). The posting path never calls this: dropping a genuine
+    description would be worse than posting a refusal, and no phrase heuristic
+    is reliable enough to make that call for a member's alt text.
     """
-    if not isinstance(text, str):
+    if not isinstance(text, str) or not text.strip():
         return False
-    head = (
+    lowered = (
         text.strip()
         .lower()
         .replace(chr(0x2019), "'")
         .replace(chr(0x2018), "'")
     )
-    head = head.lstrip(' \t\r\n"()[]{}*-')
-    for leadin in _REFUSAL_LEADINS:
-        if head.startswith(leadin):
-            head = head[len(leadin):].lstrip(' \t\r\n,.!:;-')
-            if head.startswith("but "):
-                head = head[4:].lstrip(' \t\r\n,.!:;-')
-            break
-
-    # "No image", "No image attached", "No image was provided" ...
-    if head.startswith("no image"):
+    if "image" not in lowered:
+        return False
+    if lowered.startswith("please") and "image" in lowered[:60]:
         return True
-    # "There is no image", "There's no image"
-    if head.startswith("there") and "no image" in head[:40]:
-        return True
-    # "Please upload an image so I can describe it"
-    if head.startswith("please") and "image" in head[:60]:
-        return any(verb in head[:60] for verb in _IMAGE_REQUEST_VERBS)
-    # "You didn't attach an image"
-    if head.startswith("you") and "image" in head[:60]:
-        return any(verb in head[:60] for verb in _IMAGE_REQUEST_VERBS)
-    # "I cannot see the image", "I didn't receive an image"
-    if (head.startswith("i ") or head.startswith("we ")) and "image" in head[:80]:
-        # Only the opening clause: "I took this photo through a rainy window;
-        # you cannot see the image clearly" is a description, not a refusal.
-        return any(phrase in head[:40] for phrase in _NEGATED_SEEING)
-    return False
+    opening = lowered[:_NO_IMAGE_CUE_WINDOW + 10]
+    return any(cue in opening for cue in _NO_IMAGE_CUES)
 
 
 def _get_settings(user_id: int = 1) -> dict[str, str]:
@@ -445,15 +405,6 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             if not isinstance(content, str) or not content.strip():
                 return "", "API returned an empty description"
             description = content.strip()
-            if _claims_no_image(description):
-                # HTTP 200 with "No image is attached" is a failed vision call.
-                # Logged because the posting caller discards the reason, and
-                # "why did this image post without alt text" needs a trace.
-                logger.warning(
-                    "Alt text API returned 200 but claimed no image was received: %s",
-                    description[:120],
-                )
-                return "", "API said it received no image (the image did not reach the model)"
             return description, ""
         except (
             httpx.HTTPStatusError,

@@ -806,97 +806,55 @@ class TestUnsupportedTokenParameter:
         assert description == "A dog."
         assert len(calls) == 2
 
-    def test_no_image_answer_is_not_returned_as_alt_text(self, db_tmp, monkeypatch, setup_echo):
-        """HTTP 200 + "No image is attached" is a failed vision call, not alt
-        text (hosted tenant ticket 14, gpt-6-astra on a 1x1 probe)."""
+    def test_posting_path_keeps_whatever_the_model_said(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        """The no-image detection is diagnostic only: a member's alt text is
+        never filtered by a phrase heuristic, because a false positive there
+        would silently drop a real description (review rounds 1-3)."""
         _set_alt_text_settings(db_tmp)
         import alt_text
 
+        text = "No image is attached. Please upload the image to generate alt text."
         client, _calls = self._fake_client(
-            alt_text,
-            [(
-                200,
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": "No image is attached. Please upload the image to "
-                                "generate alt text."
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ]
-                },
-            )],
+            alt_text, [(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]})]
         )
         monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
 
         description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+        assert description == text
+        assert reason == ""
 
-        assert description == ""
-        assert "received no image" in reason
-
-    def test_descriptions_of_upload_screenshots_are_kept(
-        self, db_tmp, monkeypatch, setup_echo
-    ):
-        """The refusal words appear inside real descriptions of screenshots and
-        dialog art; those must survive (review round 3, finding 1)."""
-        _set_alt_text_settings(db_tmp)
+    def test_no_image_detection_covers_the_common_refusals(self):
         import alt_text
 
-        kept = [
-            "A screenshot of a web form with a button that says 'Please upload an image'.",
-            "An error dialog on screen reading 'No image is attached'.",
-            "A sign at a passport photo kiosk reading: please provide an image.",
-            "An art museum exhibit showing a white frame with no image inside.",
-            "A person holds a phone showing an image of a red circle on a white background.",
-        ]
-        for text in kept:
-            client, _calls = self._fake_client(
-                alt_text,
-                [(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]})],
-            )
-            monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
-            description, _reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
-            assert description == text, text
-
-    def test_verbose_refusals_are_caught_too(self):
-        """A polite multi-sentence refusal is still a refusal (finding 2), and
-        the article/verb variants the reviewer listed must not slip through
-        (round 2, new finding 1)."""
-        import alt_text
-
-        assert alt_text._claims_no_image(
-            "I'm sorry, but there is no image attached to your message. Please upload "
-            "or attach the image file you would like me to describe, and I will gladly "
-            "provide an accurate alt text description for your post."
-        )
         for text in (
-            "No image was uploaded.",
+            "No image is attached. Please upload the image to generate alt text.",
+            "No image is visible. Please upload the image so I can describe it.",
+            "No image provided.",
+            "I cannot see the image.",
             "I can\u2019t see the image.",
-            "There's no image.",
-            "You didn't attach an image.",
-            "You didn't upload the image.",
-            "No image detected.",
+            "I'm unable to see an image.",
+            "I've not received an image.",
+            "An image was not provided.",
             "Please upload an image to generate alt text.",
-            "Please provide an image.",
-            "I do not see any image.",
-            "I don't see the image.",
-            "I am unable to see an image.",
-            "I am unable to see any image.",
-            "You did not attach the image.",
-            "I am sorry, but there is no image provided.",
+            "You didn't attach an image.",
             "I'm sorry,\nThere is no image attached.",
         ):
-            assert alt_text._claims_no_image(text), text
+            assert alt_text.looks_like_no_image_answer(text), text
 
-    def test_first_person_descriptions_are_kept(self):
-        """A description can contain a negation in a later clause; only the
-        opening clause decides (round 2, false-positive check)."""
+    def test_no_image_detection_lets_real_descriptions_through(self):
         import alt_text
 
-        text = "I took this photo through a rainy window; you cannot see the image clearly."
-        assert alt_text._claims_no_image(text) is False
+        for text in (
+            "A solid red circle centered on a plain white background.",
+            "Two people stand beside a wooded stream holding colorful cutout signs.",
+            "A person holds a phone showing an image of a red circle on a white background.",
+            "A screenshot of a web form with a button that says 'Please upload an image'.",
+            "An art museum exhibit showing a white frame.",
+            "",
+        ):
+            assert not alt_text.looks_like_no_image_answer(text), text
 
     def test_probe_image_is_visible_not_one_pixel(self):
         """The Test button's probe must be an image a vision model will

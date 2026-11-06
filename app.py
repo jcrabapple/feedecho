@@ -4742,6 +4742,17 @@ def test_alt_text(request: Request):
         result, reason = alt_text.attempt_alt_text(
             probe_png, "image/png", user_id=uid
         )
+        if result and alt_text.looks_like_no_image_answer(result):
+            # HTTP 200 with "No image is attached" means the probe never
+            # reached the model: report it as a failure and show what came
+            # back, instead of a green light over a sentence about no image.
+            return {
+                "success": False,
+                "message": (
+                    "API answered but reported no image: "
+                    f"{result[:160]}"
+                ),
+            }
         if result:
             return {"success": True, "message": f"API working. Response: {result[:100]}"}
         if reason:

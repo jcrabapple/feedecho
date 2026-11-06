@@ -473,6 +473,220 @@ class TestSchedulerAltTextIntegration:
         assert upload_calls[0]["description"] == ""
 
 
+def _set_feed_ai_alt_override(db_tmp, value=1, feed_id=1):
+    with db_tmp.get_db() as db:
+        db.execute(
+            "UPDATE feeds SET ai_alt_override = ? WHERE id = ?",
+            (value, feed_id),
+        )
+
+
+def _stub_mastodon_network(monkeypatch):
+    """Wire the Mastodon dispatch network seams; returns (upload_calls, sent)."""
+    import scheduler
+
+    sent = []
+    upload_calls = []
+    monkeypatch.setattr(
+        scheduler, "post_status", lambda **kw: sent.append(kw) or {"id": "1"}
+    )
+    monkeypatch.setattr(
+        scheduler, "fetch_image", lambda url: (b"img-bytes", "image/jpeg")
+    )
+    monkeypatch.setattr(
+        scheduler, "upload_media", lambda **kw: upload_calls.append(kw) or {"id": "m1"}
+    )
+    return upload_calls, sent
+
+
+class TestAiAltOverride:
+    """Per-feed feeds.ai_alt_override flips alt-text precedence to AI-first.
+
+    Default (flag off) behavior must not change: feed-provided alt wins and
+    AI generation never runs when the feed supplied alt text. With the flag
+    on, AI generation runs even with non-empty feed alt and wins on success;
+    on failure (or when alt text is disabled for the user) the feed-provided
+    alt is kept as the fallback.
+    """
+
+    def test_override_on_ai_replaces_feed_alt(self, db_tmp, monkeypatch, setup_echo):
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        monkeypatch.setattr(
+            alt_text, "generate_alt_text", lambda b, c, user_id=1: "AI words."
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+        _set_feed_ai_alt_override(db_tmp)
+
+        scheduler.process_echo(
+            echo, _item(image_url="https://example.com/pic.jpg", image_alt="Feed words.")
+        )
+
+        assert len(upload_calls) == 1
+        assert upload_calls[0]["description"] == "AI words."
+
+    def test_override_on_ai_failure_keeps_feed_alt(self, db_tmp, monkeypatch, setup_echo):
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        monkeypatch.setattr(
+            alt_text,
+            "generate_alt_text",
+            lambda b, c, user_id=1: (_ for _ in ()).throw(RuntimeError("API down")),
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+        _set_feed_ai_alt_override(db_tmp)
+
+        scheduler.process_echo(
+            echo, _item(image_url="https://example.com/pic.jpg", image_alt="Feed words.")
+        )
+
+        assert len(upload_calls) == 1
+        assert upload_calls[0]["description"] == "Feed words."
+
+    def test_override_on_disabled_user_keeps_feed_alt(self, db_tmp, monkeypatch, setup_echo):
+        """Flag on but alt text disabled for the user: feed alt, no generation."""
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp, enabled=False)
+        alt_calls = []
+        monkeypatch.setattr(
+            alt_text,
+            "generate_alt_text",
+            lambda b, c, user_id=1: alt_calls.append((b, c)) or "should not be called",
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+        _set_feed_ai_alt_override(db_tmp)
+
+        scheduler.process_echo(
+            echo, _item(image_url="https://example.com/pic.jpg", image_alt="Feed words.")
+        )
+
+        assert alt_calls == []
+        assert len(upload_calls) == 1
+        assert upload_calls[0]["description"] == "Feed words."
+
+    def test_override_on_is_enabled_error_keeps_feed_alt(self, db_tmp, monkeypatch, setup_echo):
+        """BUG pin (review LOW-2): a transient error inside alt_text.is_enabled
+        on the override path must degrade to the feed-provided alt, not
+        propagate out of _send_mastodon (which has no outer catch)."""
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        monkeypatch.setattr(
+            alt_text,
+            "is_enabled",
+            lambda user_id=1: (_ for _ in ()).throw(RuntimeError("settings DB down")),
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+        _set_feed_ai_alt_override(db_tmp)
+
+        scheduler.process_echo(
+            echo, _item(image_url="https://example.com/pic.jpg", image_alt="Feed words.")
+        )
+
+        assert len(upload_calls) == 1
+        assert upload_calls[0]["description"] == "Feed words."
+
+    def test_override_off_logs_no_override_message(self, db_tmp, monkeypatch, setup_echo, caplog):
+        """SEMANTICS pin (review LOW-1): the flag-off AI-fallback path must not
+        emit the override-specific log line; the flag-on path must."""
+        import logging
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        monkeypatch.setattr(
+            alt_text, "generate_alt_text", lambda b, c, user_id=1: "AI words."
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+
+        with caplog.at_level(logging.INFO):
+            scheduler.process_echo(
+                echo, _item(image_url="https://example.com/pic.jpg")
+            )
+
+        assert upload_calls[0]["description"] == "AI words."
+        assert "AI alt text override wins" not in caplog.text
+
+    def test_override_on_logs_override_message(self, db_tmp, monkeypatch, setup_echo, caplog):
+        import logging
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        monkeypatch.setattr(
+            alt_text, "generate_alt_text", lambda b, c, user_id=1: "AI words."
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+        _set_feed_ai_alt_override(db_tmp)
+
+        with caplog.at_level(logging.INFO):
+            scheduler.process_echo(
+                echo, _item(image_url="https://example.com/pic.jpg", image_alt="Feed words.")
+            )
+
+        assert upload_calls[0]["description"] == "AI words."
+        assert "AI alt text override wins" in caplog.text
+
+    def test_override_off_feed_alt_wins_no_generation(self, db_tmp, monkeypatch, setup_echo):
+        """No-regression: flag off (default), feed alt present → AI never runs.
+
+        The Mastodon path fetches the image bytes regardless (it uploads
+        them); only alt-text generation must be skipped when the feed
+        supplied alt text and the override is off.
+        """
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        alt_calls = []
+        monkeypatch.setattr(
+            alt_text,
+            "generate_alt_text",
+            lambda b, c, user_id=1: alt_calls.append((b, c)) or "AI words.",
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+        # ai_alt_override left at its DEFAULT 0 — no UPDATE.
+
+        scheduler.process_echo(
+            echo, _item(image_url="https://example.com/pic.jpg", image_alt="Feed words.")
+        )
+
+        assert alt_calls == []
+        assert len(upload_calls) == 1
+        assert upload_calls[0]["description"] == "Feed words."
+
+    def test_override_off_no_feed_alt_ai_fallback_unchanged(self, db_tmp, monkeypatch, setup_echo):
+        """No-regression: flag off, no feed alt → AI fallback still applies."""
+        import scheduler
+        import alt_text
+
+        _set_alt_text_settings(db_tmp)
+        monkeypatch.setattr(
+            alt_text, "generate_alt_text", lambda b, c, user_id=1: "AI words."
+        )
+        upload_calls, _ = _stub_mastodon_network(monkeypatch)
+        echo = setup_echo(attach_image=1)
+
+        scheduler.process_echo(echo, _item(image_url="https://example.com/pic.jpg"))
+
+        assert len(upload_calls) == 1
+        assert upload_calls[0]["description"] == "AI words."
+
+
 class TestUnsupportedTokenParameter:
     """Current OpenAI reasoning models reject the legacy `max_tokens` name.
 

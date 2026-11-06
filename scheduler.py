@@ -1548,6 +1548,10 @@ def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
     Returns the alt text to attach to an uploaded image ("" when neither
     source produced one). AI failures degrade to "" — the image still posts.
     """
+    # DECISION POINT (ai-alt-override): downstream wiring checks the feed's
+    # feeds.ai_alt_override flag here — when set, AI generation runs even
+    # with non-empty feed_alt and wins on success (feed_alt remains the
+    # fallback when AI fails or is disabled for the user).
     description = feed_alt
     if description:
         logger.info(
@@ -2588,6 +2592,9 @@ def _send_microblog(
         if image_url:
             photo_url = image_url
             # Feed-provided alt text wins; AI is the fallback.
+            # DECISION POINT (ai-alt-override): same precedence flip as
+            # _resolve_alt_text() — downstream wiring checks the feed's
+            # feeds.ai_alt_override flag here.
             photo_alt = (item.get("image_alt") or "").strip()
             try:
                 if not photo_alt and alt_text.is_enabled(user_id=echo["user_id"]):

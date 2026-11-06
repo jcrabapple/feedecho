@@ -153,7 +153,8 @@ class TestSchedulerPrefersFeedAlt:
         text = src.read_text(encoding="utf-8")
         assert 'photo_alt = (item.get("image_alt") or "").strip()' in text
         # AI generation is skipped entirely when the feed supplied alt text
-        assert "if not photo_alt and alt_text.is_enabled(" in text
+        # and the per-feed ai_alt_override flag is off (default).
+        assert "(ai_override or not photo_alt) and alt_text.is_enabled(" in text
 
 
 import re  # noqa: E402  (used by the source-level checks above)

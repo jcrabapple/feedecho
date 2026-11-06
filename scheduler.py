@@ -1542,18 +1542,80 @@ def _echo_use_markdown(echo) -> bool:
         return False
 
 
-def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
-    """Feed-provided alt text wins; AI generation is the fallback.
+def _feed_ai_alt_override(feed_id) -> bool:
+    """The feed's ai_alt_override flag, defaulting off for legacy/partial rows.
 
-    Returns the alt text to attach to an uploaded image ("" when neither
-    source produced one). AI failures degrade to "" — the image still posts.
+    Without the flag (missing column value, missing feed row, lookup
+    failure) the historical feed-alt-wins precedence applies, so every
+    failure mode here must read as False.
     """
-    # DECISION POINT (ai-alt-override): downstream wiring checks the feed's
-    # feeds.ai_alt_override flag here — when set, AI generation runs even
-    # with non-empty feed_alt and wins on success (feed_alt remains the
-    # fallback when AI fails or is disabled for the user).
+    if feed_id is None:
+        return False
+    try:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT ai_alt_override FROM feeds WHERE id = ?", (feed_id,)
+            ).fetchone()
+    except Exception:
+        logger.warning(
+            "Feed %s: ai_alt_override lookup failed; defaulting to off",
+            feed_id, exc_info=True,
+        )
+        return False
+    if not row:
+        return False
+    try:
+        return bool(row["ai_alt_override"])
+    except (KeyError, IndexError):
+        return False
+
+
+def _echo_feed_id(echo):
+    try:
+        return echo["feed_id"]
+    except (KeyError, IndexError):
+        return None
+
+
+def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
+    """Resolve the alt text to attach to an uploaded image ("" when neither).
+
+    Default precedence: feed-provided alt text wins; AI generation is the
+    fallback, degrading to an empty string on AI failure. When the feed's
+    feeds.ai_alt_override flag is set the precedence flips: AI generation
+    runs even with non-empty feed_alt and wins on success, with feed_alt
+    kept as the fallback when AI fails or is disabled for the user.
+    """
+    ai_override = _feed_ai_alt_override(_echo_feed_id(echo))
     description = feed_alt
-    if description:
+    if ai_override:
+        if alt_text.is_enabled(user_id=echo["user_id"]):
+            try:
+                generated = alt_text.generate_alt_text(
+                    img_bytes, img_type, user_id=echo["user_id"]
+                )
+                if generated:
+                    logger.info(
+                        "Echo %s: AI alt text override wins for item %s (%d chars)",
+                        echo["id"], item["id"], len(generated),
+                    )
+                    description = generated
+            except Exception:
+                # OPEN QUESTION (Jason): fallback-on-AI-failure to the
+                # feed-provided alt is the implemented default; confirm.
+                logger.warning(
+                    "Echo %s: alt text generation failed for item %s; "
+                    "falling back to feed-provided alt",
+                    echo["id"], item["id"],
+                    exc_info=True,
+                )
+        else:
+            logger.info(
+                "Echo %s: ai_alt_override set but alt text disabled for user; "
+                "keeping feed-provided alt for item %s",
+                echo["id"], item["id"],
+            )
+    elif description:
         logger.info(
             "Echo %s: using feed-provided alt text for item %s (%d chars)",
             echo["id"], item["id"], len(description),
@@ -2591,26 +2653,40 @@ def _send_microblog(
         image_url = item.get("image_url", "")
         if image_url:
             photo_url = image_url
-            # Feed-provided alt text wins; AI is the fallback.
-            # DECISION POINT (ai-alt-override): same precedence flip as
-            # _resolve_alt_text() — downstream wiring checks the feed's
-            # feeds.ai_alt_override flag here.
+            # Default precedence: feed-provided alt text wins; AI is the
+            # fallback. With the feed's ai_alt_override flag set, AI
+            # generation runs even with non-empty feed alt and wins on
+            # success (feed alt remains the fallback when AI fails or is
+            # disabled for the user).
             photo_alt = (item.get("image_alt") or "").strip()
             try:
-                if not photo_alt and alt_text.is_enabled(user_id=echo["user_id"]):
+                ai_override = _feed_ai_alt_override(_echo_feed_id(echo))
+                if (ai_override or not photo_alt) and alt_text.is_enabled(
+                    user_id=echo["user_id"]
+                ):
                     image_result = fetch_image(image_url)
                     if image_result:
                         img_bytes, img_type = image_result
                         try:
-                            photo_alt = (
+                            generated = (
                                 alt_text.generate_alt_text(
                                     img_bytes, img_type, user_id=echo["user_id"]
                                 )
                                 or ""
                             )
+                            if generated:
+                                logger.info(
+                                    "Echo %s: AI alt text override wins for item %s (%d chars)",
+                                    echo["id"], item["id"], len(generated),
+                                )
+                                photo_alt = generated
                         except Exception:
+                            # OPEN QUESTION (Jason): fallback-on-AI-failure
+                            # to the feed-provided alt is the implemented
+                            # default; confirm.
                             logger.warning(
-                                "Echo %s: alt text generation failed for item %s",
+                                "Echo %s: alt text generation failed for item %s; "
+                                "falling back to feed-provided alt",
                                 echo["id"],
                                 item["id"],
                                 exc_info=True,

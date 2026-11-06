@@ -309,6 +309,109 @@ class TestMicroblogDispatch:
         assert captured["photo_url"] == "https://example.com/cat.jpg"
         assert captured["photo_alt"] == "A cat"
 
+    def _capture_post(self, monkeypatch):
+        captured = {}
+
+        def fake_create_post(**kwargs):
+            captured.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(scheduler, "microblog_create_post", fake_create_post)
+        return captured
+
+    def _set_feed_ai_alt_override(self, db_tmp, value=1, feed_id=1):
+        with db_tmp.get_db() as db:
+            db.execute(
+                "UPDATE feeds SET ai_alt_override = ? WHERE id = ?",
+                (value, feed_id),
+            )
+
+    def test_override_on_ai_wins_over_feed_alt(self, db_tmp, monkeypatch):
+        echo = _setup_microblog_echo(db_tmp, {"attach_image": 1})
+        item = _item(
+            image_url="https://example.com/cat.jpg", image_alt="Feed-provided alt."
+        )
+        captured = self._capture_post(monkeypatch)
+        monkeypatch.setattr(scheduler.alt_text, "is_enabled", lambda user_id: True)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"img", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler.alt_text,
+            "generate_alt_text",
+            lambda data, typ, user_id: "AI cat",
+        )
+        self._set_feed_ai_alt_override(db_tmp)
+
+        assert scheduler.process_echo(echo, item)
+
+        assert captured["photo_alt"] == "AI cat"
+
+    def test_override_on_ai_failure_keeps_feed_alt(self, db_tmp, monkeypatch):
+        echo = _setup_microblog_echo(db_tmp, {"attach_image": 1})
+        item = _item(
+            image_url="https://example.com/cat.jpg", image_alt="Feed-provided alt."
+        )
+        captured = self._capture_post(monkeypatch)
+        monkeypatch.setattr(scheduler.alt_text, "is_enabled", lambda user_id: True)
+        monkeypatch.setattr(
+            scheduler, "fetch_image", lambda url: (b"img", "image/jpeg")
+        )
+        monkeypatch.setattr(
+            scheduler.alt_text,
+            "generate_alt_text",
+            lambda data, typ, user_id: (_ for _ in ()).throw(RuntimeError("API down")),
+        )
+        self._set_feed_ai_alt_override(db_tmp)
+
+        assert scheduler.process_echo(echo, item)
+
+        assert captured["photo_alt"] == "Feed-provided alt."
+
+    def test_override_on_disabled_user_keeps_feed_alt(self, db_tmp, monkeypatch):
+        """Flag on but alt text disabled: feed alt, no fetch, no generation."""
+        echo = _setup_microblog_echo(db_tmp, {"attach_image": 1})
+        item = _item(
+            image_url="https://example.com/cat.jpg", image_alt="Feed-provided alt."
+        )
+        captured = self._capture_post(monkeypatch)
+        monkeypatch.setattr(scheduler.alt_text, "is_enabled", lambda user_id: False)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_image",
+            lambda url: (_ for _ in ()).throw(
+                AssertionError("fetch_image must not run when alt text is disabled")
+            ),
+        )
+        self._set_feed_ai_alt_override(db_tmp)
+
+        assert scheduler.process_echo(echo, item)
+
+        assert captured["photo_alt"] == "Feed-provided alt."
+
+    def test_override_off_feed_alt_wins_no_fetch(self, db_tmp, monkeypatch):
+        """No-regression: flag off (default), feed alt present → no fetch/generate."""
+        echo = _setup_microblog_echo(db_tmp, {"attach_image": 1})
+        item = _item(
+            image_url="https://example.com/cat.jpg", image_alt="Feed-provided alt."
+        )
+        captured = self._capture_post(monkeypatch)
+        monkeypatch.setattr(scheduler.alt_text, "is_enabled", lambda user_id: True)
+        monkeypatch.setattr(
+            scheduler,
+            "fetch_image",
+            lambda url: (_ for _ in ()).throw(
+                AssertionError(
+                    "fetch_image must not run when feed alt exists and override is off"
+                )
+            ),
+        )
+        # ai_alt_override left at its DEFAULT 0 — no UPDATE.
+
+        assert scheduler.process_echo(echo, item)
+
+        assert captured["photo_alt"] == "Feed-provided alt."
+
     def test_missing_account_fails_permanently(self, db_tmp, monkeypatch):
         echo = _setup_microblog_echo(db_tmp)
         item = _item()

@@ -609,6 +609,46 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
 .echo-edit-form .form-row {
     margin-bottom: 0.4rem;
 }
+/* Feed edit row: Name, URL, poll interval, folder, mute keywords, the AI alt
+   checkbox and the Poke URL block. Every label was flex:1 with min-width:0, so
+   once the row held seven items they all shared one line and each input
+   collapsed to a couple of characters (hosted report, 2026-11-06, Safari /
+   Waterfox / Helium). Give the fields a real basis so the row wraps instead,
+   and let the two long blocks take a line of their own. Scoped to the feed
+   form: the echo edit form still uses .echo-edit-form and is laid out fine. */
+@media (min-width: 641px) {
+    /* Basis along the row axis only. In the <=640px column layout flex-basis
+       is a HEIGHT, so an unscoped 190px made every field 190px tall (review
+       finding, 2026-11-06); the mobile block below resets it explicitly. */
+    .feed-edit-form .form-row > label {
+        flex: 1 1 190px;
+        min-width: 170px;
+    }
+    .feed-edit-form .form-row > .form-full {
+        flex: 1 0 100%;
+        min-width: 0;
+    }
+}
+.feed-edit-form .check-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+.feed-edit-form .check-row > label {
+    flex: 0 0 auto;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9rem;
+    color: var(--text);
+}
+.feed-edit-form .check-row > label > input[type="checkbox"] {
+    margin-top: 0;
+}
+.feed-edit-form .check-row > .hint {
+    margin-bottom: 0;
+}
 
 @media (max-width: 640px) {
     /* Two rows: [brand | theme | account] on row 1; tab strip wraps to row 2.
@@ -807,6 +847,13 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
 @media (max-width: 640px) {
     .form-row { flex-direction: column; }
     .form-row label { width: 100%; }
+    /* Column direction makes flex-basis a height: undo the desktop basis. */
+    .feed-edit-form .form-row > label,
+    .feed-edit-form .form-row > .form-full {
+        flex: none;
+        min-width: 0;
+        width: 100%;
+    }
     /* A wrapping label next to a standalone <label for> (P2 visible-label
        pattern) puts the caption and control on separate lines; without a
        full-width basis the input shrinks to its content. */

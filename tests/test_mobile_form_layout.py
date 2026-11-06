@@ -83,7 +83,7 @@ class TestMobileFormLayout:
 
     def test_cache_buster_bumped(self):
         base = (REPO_ROOT / "templates" / "base.html").read_text(encoding="utf-8")
-        assert 'style.css?v=62' in base, "CSS changed; bump the cache-buster so phones pick it up"
+        assert 'style.css?v=63' in base, "CSS changed; bump the cache-buster so phones pick it up"
 
     def test_smtp_test_email_label_is_visible(self):
         page = (REPO_ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
@@ -91,3 +91,40 @@ class TestMobileFormLayout:
         assert m and "sr-only" not in m.group(0), (
             "the SMTP test-recipient input needs a visible label now that labels render on their own line"
         )
+
+
+class TestFeedEditRowWidths:
+    """Desktop widths for the feed edit row.
+
+    The row held five fields, then gained the AI alt checkbox and its hint,
+    then the Poke URL block: seven flex items, every label `flex: 1` with
+    `min-width: 0`, so they shared one line and each input collapsed to a
+    character or two (hosted report 2026-11-06, Safari / Waterfox / Helium).
+    The fields need a real flex-basis so the row wraps, and the two long
+    blocks need a line of their own.
+    """
+
+    def test_fields_have_a_flex_basis_and_wrap(self):
+        start = STYLE_CSS.index(".feed-edit-form .form-row > label")
+        block = STYLE_CSS[start:start + 200]
+        assert "flex: 1 1 190px" in block
+        assert "min-width: 170px" in block
+        assert "flex: 1 0 100%" in STYLE_CSS, "full-width blocks rule missing"
+
+    def test_basis_is_desktop_only_and_reset_on_mobile(self):
+        """In the <=640px column layout flex-basis is a HEIGHT: an unscoped
+        190px made every field 190px tall with ~120px of dead space and a
+        ~1330px form (review finding, 2026-11-06). Pin both halves."""
+        desktop_mq = STYLE_CSS.index("@media (min-width: 641px)")
+        basis = STYLE_CSS.index("flex: 1 1 190px")
+        assert basis > desktop_mq, "the flex-basis must sit inside the min-width:641px block"
+        reset = STYLE_CSS.index(".feed-edit-form .form-row > label,", basis)
+        tail = STYLE_CSS[reset:reset + 220]
+        assert "flex: none" in tail
+        assert "min-width: 0" in tail
+
+    def test_form_carries_the_feed_edit_scope_and_full_width_blocks(self):
+        js = (REPO_ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        assert 'class="echo-edit-form feed-edit-form"' in js
+        assert '<div class="form-full check-row">' in js
+        assert '<label class="form-full">Poke URL' in js

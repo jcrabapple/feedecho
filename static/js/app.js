@@ -172,7 +172,7 @@ function editFeed(feedId) {
     }
 
     row.innerHTML = `<td colspan="6">
-        <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form" aria-label="Edit feed">
+        <form method="post" action="/api/feeds/${feedId}/edit" class="echo-edit-form feed-edit-form" aria-label="Edit feed">
             <div class="form-row">
                 <label>Name
                     <input type="text" name="name" value="${escapeHTML(name)}" required>
@@ -192,12 +192,14 @@ function editFeed(feedId) {
                     <input type="text" id="feed-mute-input-${feedId}" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                     ${chipsHtml}
                 </label>
-                <label style="display:flex; align-items:center; gap:0.4rem;">
-                    <input type="checkbox" name="ai_alt_override" value="1" ${aiAltOverride ? 'checked' : ''}>
-                    Prefer AI alt text over the feed&rsquo;s own
-                </label>
-                <span class="hint">When on, AI-generated alt text replaces the alt text this feed provides for its images. AI alt text must be enabled in Settings.</span>
-                <label>Poke URL
+                <div class="form-full check-row">
+                    <label>
+                        <input type="checkbox" name="ai_alt_override" value="1" ${aiAltOverride ? 'checked' : ''}>
+                        Prefer AI alt text over the feed&rsquo;s own
+                    </label>
+                    <span class="hint">When on, AI-generated alt text replaces the alt text this feed provides for its images. AI alt text must be enabled in Settings.</span>
+                </div>
+                <label class="form-full">Poke URL
                     <div class="poke-row" style="display:flex; gap:0.4rem; align-items:center;">
                         <input type="text" id="poke-url-${feedId}" readonly value="" placeholder="${hasPokeToken ? 'Token active (click Reveal)' : 'Not generated'}" style="flex:1;">
                         <button type="button" class="btn-sm" onclick="generatePokeUrl(${feedId}, this)">${hasPokeToken ? 'Reveal' : 'Generate'}</button>

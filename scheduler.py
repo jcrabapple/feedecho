@@ -1601,8 +1601,9 @@ def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
                     )
                     description = generated
         except Exception:
-            # OPEN QUESTION (Jason): fallback-on-AI-failure to the
-            # feed-provided alt is the implemented default; confirm.
+            # A failed override keeps the feed-provided alt rather than
+            # posting the image with nothing. Documented in the v1.78.0 notes
+            # ("Feed descriptions remain the fallback").
             logger.warning(
                 "Echo %s: alt text override pipeline failed for item %s; "
                 "falling back to feed-provided alt",
@@ -2676,9 +2677,8 @@ def _send_microblog(
                                     )
                                 photo_alt = generated
                         except Exception:
-                            # OPEN QUESTION (Jason): fallback-on-AI-failure
-                            # to the feed-provided alt is the implemented
-                            # default; confirm.
+                            # A failed override keeps the feed-provided
+                            # alt rather than posting with nothing.
                             if ai_override:
                                 logger.warning(
                                     "Echo %s: alt text generation failed for item %s; "

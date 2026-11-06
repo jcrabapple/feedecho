@@ -111,6 +111,18 @@ class TestFeedEditRowWidths:
         assert "min-width: 170px" in block
         assert "flex: 1 0 100%" in STYLE_CSS, "full-width blocks rule missing"
 
+    def test_basis_is_desktop_only_and_reset_on_mobile(self):
+        """In the <=640px column layout flex-basis is a HEIGHT: an unscoped
+        190px made every field 190px tall with ~120px of dead space and a
+        ~1330px form (review finding, 2026-11-06). Pin both halves."""
+        desktop_mq = STYLE_CSS.index("@media (min-width: 641px)")
+        basis = STYLE_CSS.index("flex: 1 1 190px")
+        assert basis > desktop_mq, "the flex-basis must sit inside the min-width:641px block"
+        reset = STYLE_CSS.index(".feed-edit-form .form-row > label,", basis)
+        tail = STYLE_CSS[reset:reset + 220]
+        assert "flex: none" in tail
+        assert "min-width: 0" in tail
+
     def test_form_carries_the_feed_edit_scope_and_full_width_blocks(self):
         js = (REPO_ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
         assert 'class="echo-edit-form feed-edit-form"' in js

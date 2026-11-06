@@ -33,6 +33,14 @@ TIMEOUT_SECONDS = 30
 MAX_RETRIES = 2
 RETRY_DELAY = 2
 MAX_TOKENS = 300
+# Reasoning models (OpenAI's gpt-5.x / gpt-6 family, and anything else that
+# spends output budget on hidden reasoning) can burn the whole cap before
+# writing a word of description, so the retry that switches to
+# `max_completion_tokens` needs a budget with room for the reasoning.
+REASONING_MAX_TOKENS = 1200
+# How much of a provider's own error message to quote back to the tenant.
+MAX_REASON_DETAIL = 300
+
 DESCRIPTION_WORD_LIMIT = 50
 
 SYSTEM_PROMPT = (
@@ -70,6 +78,36 @@ def normalize_base_url(base_url: str) -> str:
     while url.endswith(_COMPLETIONS_SUFFIX):
         url = url[: -len(_COMPLETIONS_SUFFIX)].rstrip("/")
     return url
+
+
+def _upstream_error_message(exc: Exception) -> str:
+    """The provider's own ``error.message`` from a failed response, or "".
+
+    The settings-page Test button used to report a blanket "request rejected"
+    for every 4xx, which hid the one sentence that explains the failure
+    (OpenAI's "Unsupported parameter: 'max_tokens' …" is the case that made a
+    paid tenant's correct-looking config look like a network problem).
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        payload = response.json()
+    except Exception:
+        try:
+            return (response.text or "").strip()[:MAX_REASON_DETAIL]
+        except Exception:
+            return ""
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str):
+                return message.strip()[:MAX_REASON_DETAIL]
+        elif isinstance(error, str):
+            return error.strip()[:MAX_REASON_DETAIL]
+    return ""
+
 
 
 USER_PROMPT = (
@@ -159,6 +197,16 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
     b64 = base64.b64encode(image_bytes).decode("ascii")
     data_url = f"data:{content_type};base64,{b64}"
 
+    # The output cap goes out under the legacy `max_tokens` name. OpenAI's
+    # current reasoning models (gpt-5.x / gpt-6 family) reject that name
+    # outright — HTTP 400 `unsupported_parameter`, "Use
+    # 'max_completion_tokens' instead" — while every OpenAI-compatible server
+    # in the wild (Ollama, llama.cpp, LocalAI, Mistral) still speaks it. So
+    # send the legacy name and switch ONCE if the endpoint's own 400 names the
+    # parameter: a model-name prefix list would be wrong the day the next
+    # family ships, and this call runs for every image on every echo.
+    token_param = "max_tokens"
+
     body = {
         "model": model,
         "messages": [
@@ -171,7 +219,7 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
                 ],
             },
         ],
-        "max_tokens": MAX_TOKENS,
+        token_param: MAX_TOKENS,
     }
 
     endpoint = f"{base_url}/chat/completions"
@@ -231,6 +279,18 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
                 return "", "API response had no message object"
             content = message.get("content") or message.get("reasoning_content")
             if not isinstance(content, str) or not content.strip():
+                # A reasoning model whose hidden tokens ate the whole output
+                # cap returns empty content with finish_reason=length; saying
+                # "empty description" sends the tenant hunting for a bug in
+                # their config instead of the token budget.
+                finish_reason = (
+                    choices[0].get("finish_reason") if isinstance(choices[0], dict) else None
+                )
+                if finish_reason == "length":
+                    return "", (
+                        "API ran out of output tokens before writing a description "
+                        "(reasoning models spend the cap on reasoning first)"
+                    )
                 return "", "API returned an empty description"
             return content.strip(), ""
         except (
@@ -250,10 +310,34 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             # normal retry path unchanged. Error-handling audit finding 4.3
             # (docs/reviews/2026-09-08-error-handling-audit.md).
             status = getattr(getattr(e, "response", None), "status_code", None)
+            detail = _upstream_error_message(e)
+            # Current OpenAI reasoning models reject the legacy `max_tokens`
+            # parameter name. FeedEcho chose the parameter, not the tenant, so
+            # switch it once and try again instead of failing a config that is
+            # otherwise correct. Guarded by the endpoint's own message: an
+            # endpoint that does not name the parameter keeps its normal retry
+            # path.
+            if (
+                status == 400
+                and token_param == "max_tokens"
+                and "max_tokens" in detail
+                and "max_completion_tokens" in detail
+            ):
+                logger.info(
+                    "Alt text endpoint rejected max_tokens; retrying with "
+                    "max_completion_tokens: %s",
+                    detail,
+                )
+                body.pop(token_param, None)
+                token_param = "max_completion_tokens"
+                body[token_param] = REASONING_MAX_TOKENS
+                continue
             if status in (400, 401, 403, 404):
                 logger.warning(
-                    "Alt text API call failed permanently (HTTP %s), not retrying: %s",
-                    status, e,
+                    "Alt text API call failed permanently (HTTP %s), not retrying: %s%s",
+                    status,
+                    e,
+                    f" ({detail})" if detail else "",
                 )
                 hint = {
                     401: "API key rejected",
@@ -263,7 +347,7 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
                         "(use the API root, e.g. https://api.mistral.ai/v1)"
                     ),
                 }.get(status, "request rejected")
-                return "", f"HTTP {status}: {hint}"
+                return "", f"HTTP {status}: {detail or hint}"
             logger.warning(
                 "Alt text API call failed (attempt %d/%d): %s",
                 attempt,

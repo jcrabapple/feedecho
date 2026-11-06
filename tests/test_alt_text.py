@@ -3,6 +3,7 @@
 import os
 import tempfile
 import base64
+import json
 
 import pytest
 
@@ -470,3 +471,152 @@ class TestSchedulerAltTextIntegration:
 
         assert len(upload_calls) == 1
         assert upload_calls[0]["description"] == ""
+
+
+class TestUnsupportedTokenParameter:
+    """Current OpenAI reasoning models reject the legacy `max_tokens` name.
+
+    gpt-6-astra on api.openai.com answers 400 `unsupported_parameter`
+    ("Use 'max_completion_tokens' instead") for a request that is otherwise
+    valid, which is what a paying tenant hit on the settings page on
+    2026-11-06 while every field of their config was correct.
+    """
+
+    _UNSUPPORTED = (
+        "Unsupported parameter: 'max_tokens' is not supported with this model. "
+        "Use 'max_completion_tokens' instead."
+    )
+
+    def _fake_client(self, alt_text, responses):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, status, payload):
+                self.status_code = status
+                self._payload = payload
+                self.request = None
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise alt_text.httpx.HTTPStatusError(
+                        f"{self.status_code} error", request=None, response=self
+                    )
+
+            def json(self):
+                return self._payload
+
+            @property
+            def text(self):
+                return json.dumps(self._payload)
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                calls.append(dict(json))
+                status, payload = responses[min(len(calls), len(responses)) - 1]
+                return FakeResponse(status, payload)
+
+        return FakeClient, calls
+
+    def test_retries_with_max_completion_tokens(self, db_tmp, monkeypatch, setup_echo):
+        _set_alt_text_settings(db_tmp, base_url="https://api.openai.com/v1",
+                               model="gpt-6-astra")
+        import alt_text
+
+        ok = {"choices": [{"message": {"content": "A red bicycle."}, "finish_reason": "stop"}]}
+        client, calls = self._fake_client(
+            alt_text,
+            [
+                (400, {"error": {"message": self._UNSUPPORTED, "code": "unsupported_parameter"}}),
+                (200, ok),
+            ],
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        result = alt_text.generate_alt_text(b"fake-image", "image/jpeg")
+
+        assert result == "A red bicycle."
+        assert len(calls) == 2
+        assert calls[0]["max_tokens"] == alt_text.MAX_TOKENS
+        assert "max_tokens" not in calls[1]
+        assert calls[1]["max_completion_tokens"] == alt_text.REASONING_MAX_TOKENS
+
+    def test_switches_only_once_when_the_retry_is_rejected_too(self, db_tmp, monkeypatch, setup_echo):
+        _set_alt_text_settings(db_tmp, base_url="https://api.openai.com/v1",
+                               model="gpt-6-astra")
+        import alt_text
+
+        bad = (400, {"error": {"message": self._UNSUPPORTED}})
+        client, calls = self._fake_client(alt_text, [bad, bad, bad])
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+        monkeypatch.setattr(alt_text.time, "sleep", lambda s: None)
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert len(calls) == alt_text.MAX_RETRIES
+        assert "max_completion_tokens" in calls[1]
+        assert reason.startswith("HTTP 400:")
+
+    def test_other_client_errors_keep_max_tokens_and_surface_detail(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        """A 400 that does not name max_tokens is not the parameter bug: no
+        retry, and the provider's own sentence reaches the tenant instead of
+        the old blanket "request rejected"."""
+        _set_alt_text_settings(db_tmp, base_url="https://api.openai.com/v1",
+                               model="gpt-6-astra")
+        import alt_text
+
+        detail = "Invalid value for 'messages[1].content[1].image_url.url'."
+        client, calls = self._fake_client(
+            alt_text, [(400, {"error": {"message": detail}}), (200, {"choices": []})]
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert len(calls) == 1
+        assert calls[0]["max_tokens"] == alt_text.MAX_TOKENS
+        assert reason == f"HTTP 400: {detail}"
+
+    def test_generic_hint_survives_when_the_body_has_no_message(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, calls = self._fake_client(alt_text, [(401, {"detail": "nope"})])
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert len(calls) == 1
+        assert reason == "HTTP 401: API key rejected"
+
+    def test_length_finish_reason_reports_the_token_budget(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, calls = self._fake_client(
+            alt_text,
+            [(200, {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]})],
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert "output tokens" in reason

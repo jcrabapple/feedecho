@@ -243,6 +243,85 @@ class TestFeedEdit:
         assert "&lt;script&gt;" in page
 
 
+class TestFeedAiAltOverrideToggle:
+    """Per-feed AI alt override flag: edit form -> POST handler -> DB -> page.
+
+    The checkbox follows the echo-edit convention: a checked box posts its
+    value ("1"), an unchecked box posts nothing. Absent or unexpected values
+    must clamp to off, never persist garbage.
+    """
+
+    def test_default_off_for_new_feed(self, client, temp_db):
+        _seed()
+        assert _get_feed()["ai_alt_override"] == 0
+        page = client.get("/feeds").text
+        assert 'data-ai-alt-override="0"' in page
+
+    def test_toggle_on_persists_across_reload(self, client, temp_db):
+        _seed()
+        resp = client.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Test Feed",
+                "url": "https://example.com/feed.xml",
+                "poll_interval": "15",
+                "ai_alt_override": "1",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert _get_feed()["ai_alt_override"] == 1
+        # The feeds page re-renders from the DB on every load, so the row's
+        # data attribute is the persistence proof the edit form reads back.
+        page = client.get("/feeds").text
+        assert 'data-ai-alt-override="1"' in page
+
+    def test_toggle_survives_url_change_branch(self, client, temp_db):
+        _seed(cursor="item-5")
+        client.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Test Feed",
+                "url": "https://example.com/different.xml",
+                "poll_interval": "15",
+                "ai_alt_override": "1",
+            },
+        )
+        feed = _get_feed()
+        assert feed["ai_alt_override"] == 1
+        assert feed["last_item_id"] is None  # url-changed branch still resets
+
+    def test_absent_checkbox_turns_flag_off(self, client, temp_db):
+        _seed()
+        with get_db() as db:
+            db.execute("UPDATE feeds SET ai_alt_override = 1 WHERE id = 1")
+        # An unchecked checkbox posts no field at all.
+        client.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Test Feed",
+                "url": "https://example.com/feed.xml",
+                "poll_interval": "15",
+            },
+        )
+        assert _get_feed()["ai_alt_override"] == 0
+
+    def test_unexpected_value_clamps_to_off(self, client, temp_db):
+        _seed()
+        with get_db() as db:
+            db.execute("UPDATE feeds SET ai_alt_override = 1 WHERE id = 1")
+        client.post(
+            "/api/feeds/1/edit",
+            data={
+                "name": "Test Feed",
+                "url": "https://example.com/feed.xml",
+                "poll_interval": "15",
+                "ai_alt_override": "banana",
+            },
+        )
+        assert _get_feed()["ai_alt_override"] == 0
+
+
 class TestFeedEditInvalidatesSavedSearchCache:
     """Bug review 2026-09-09 finding #14: mute_keywords (and folder_id) are
     direct inputs to the saved-search unread-counts query, so edit_feed

@@ -147,6 +147,7 @@ function editFeed(feedId) {
     const muteKeywords = row.dataset.muteKeywords || '';
     const currentFolderId = row.dataset.folderId || '';
     const hasPokeToken = row.dataset.hasPokeToken === '1';
+    const aiAltOverride = row.dataset.aiAltOverride === '1';
 
     // Collect folder options from the page's feed-folder select if present
     let folderOptions = '<option value="">(No folder)</option>';
@@ -191,6 +192,11 @@ function editFeed(feedId) {
                     <input type="text" id="feed-mute-input-${feedId}" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                     ${chipsHtml}
                 </label>
+                <label style="display:flex; align-items:center; gap:0.4rem;">
+                    <input type="checkbox" name="ai_alt_override" value="1" ${aiAltOverride ? 'checked' : ''}>
+                    Prefer AI alt text over the feed&rsquo;s own
+                </label>
+                <span class="hint">When on, AI-generated alt text replaces the alt text this feed provides for its images. AI alt text must be enabled in Settings.</span>
                 <label>Poke URL
                     <div class="poke-row" style="display:flex; gap:0.4rem; align-items:center;">
                         <input type="text" id="poke-url-${feedId}" readonly value="" placeholder="${hasPokeToken ? 'Token active (click Reveal)' : 'Not generated'}" style="flex:1;">

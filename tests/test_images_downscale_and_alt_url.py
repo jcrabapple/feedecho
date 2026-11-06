@@ -367,7 +367,8 @@ class TestVisionTestEndpointReportsFailures:
         monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: _Client())
         body = single_client.post("/api/settings/alt-text/test").json()
         assert body["success"] is False
-        assert "no image" in body["message"].lower()
+        # The model's own answer must be quoted back, not just a generic prefix.
+        assert "Please upload the image" in body["message"]
 
     def test_working_endpoint_still_reports_success(
         self, single_client, monkeypatch

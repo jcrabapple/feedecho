@@ -58,8 +58,6 @@ TEST_IMAGE_BYTES = base64.b64decode(
     "oOQBBAgQIECAAAECJIAAAQIECBAgQPKTL6GYPNfMN32dAAAAAElFTkSuQmCC"
 )
 
-# Phrases a vision model uses when it did not receive the image. Matched
-# case-insensitively against short answers only (see _claims_no_image).
 # Cues that a vision model answered "I did not get an image" rather than
 # describing one. Deliberately NOT used on the posting path: a false positive
 # there would drop a real description, and no text heuristic is reliable enough
@@ -86,7 +84,7 @@ _NO_IMAGE_CUES = (
 # A refusal states its problem straight away, so a cue counts only when it lands
 # in the opening of the answer. A description that merely mentions a button
 # reading "Please upload an image" keeps the words far enough in to stay out.
-_NO_IMAGE_CUE_WINDOW = 30
+_NO_IMAGE_CUE_WINDOW = 40
 
 SYSTEM_PROMPT = (
     "You are an alt text generator for a social media platform. "
@@ -216,7 +214,7 @@ def looks_like_no_image_answer(text: str) -> bool:
         return False
     if lowered.startswith("please") and "image" in lowered[:60]:
         return True
-    opening = lowered[:_NO_IMAGE_CUE_WINDOW + 10]
+    opening = lowered[:_NO_IMAGE_CUE_WINDOW]
     return any(cue in opening for cue in _NO_IMAGE_CUES)
 
 
@@ -405,6 +403,14 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             if not isinstance(content, str) or not content.strip():
                 return "", "API returned an empty description"
             description = content.strip()
+            if looks_like_no_image_answer(description):
+                # Log only. Filtering here would risk dropping a real
+                # description; the tenant sees the message on the post itself.
+                logger.warning(
+                    "Alt text API returned an answer that reads like a "
+                    "missing-image refusal; posting it as-is: %s",
+                    description[:120],
+                )
             return description, ""
         except (
             httpx.HTTPStatusError,

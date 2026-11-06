@@ -1589,8 +1589,8 @@ def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
     ai_override = _feed_ai_alt_override(_echo_feed_id(echo))
     description = feed_alt
     if ai_override:
-        if alt_text.is_enabled(user_id=echo["user_id"]):
-            try:
+        try:
+            if alt_text.is_enabled(user_id=echo["user_id"]):
                 generated = alt_text.generate_alt_text(
                     img_bytes, img_type, user_id=echo["user_id"]
                 )
@@ -1600,20 +1600,14 @@ def _resolve_alt_text(echo, item, feed_alt: str, img_bytes, img_type) -> str:
                         echo["id"], item["id"], len(generated),
                     )
                     description = generated
-            except Exception:
-                # OPEN QUESTION (Jason): fallback-on-AI-failure to the
-                # feed-provided alt is the implemented default; confirm.
-                logger.warning(
-                    "Echo %s: alt text generation failed for item %s; "
-                    "falling back to feed-provided alt",
-                    echo["id"], item["id"],
-                    exc_info=True,
-                )
-        else:
-            logger.info(
-                "Echo %s: ai_alt_override set but alt text disabled for user; "
-                "keeping feed-provided alt for item %s",
+        except Exception:
+            # OPEN QUESTION (Jason): fallback-on-AI-failure to the
+            # feed-provided alt is the implemented default; confirm.
+            logger.warning(
+                "Echo %s: alt text override pipeline failed for item %s; "
+                "falling back to feed-provided alt",
                 echo["id"], item["id"],
+                exc_info=True,
             )
     elif description:
         logger.info(
@@ -2675,22 +2669,31 @@ def _send_microblog(
                                 or ""
                             )
                             if generated:
-                                logger.info(
-                                    "Echo %s: AI alt text override wins for item %s (%d chars)",
-                                    echo["id"], item["id"], len(generated),
-                                )
+                                if ai_override:
+                                    logger.info(
+                                        "Echo %s: AI alt text override wins for item %s (%d chars)",
+                                        echo["id"], item["id"], len(generated),
+                                    )
                                 photo_alt = generated
                         except Exception:
                             # OPEN QUESTION (Jason): fallback-on-AI-failure
                             # to the feed-provided alt is the implemented
                             # default; confirm.
-                            logger.warning(
-                                "Echo %s: alt text generation failed for item %s; "
-                                "falling back to feed-provided alt",
-                                echo["id"],
-                                item["id"],
-                                exc_info=True,
-                            )
+                            if ai_override:
+                                logger.warning(
+                                    "Echo %s: alt text generation failed for item %s; "
+                                    "falling back to feed-provided alt",
+                                    echo["id"],
+                                    item["id"],
+                                    exc_info=True,
+                                )
+                            else:
+                                logger.warning(
+                                    "Echo %s: alt text generation failed for item %s",
+                                    echo["id"],
+                                    item["id"],
+                                    exc_info=True,
+                                )
             except Exception:
                 logger.warning(
                     "Echo %s: micro.blog alt-text pipeline failed for item %s",

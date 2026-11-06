@@ -4725,11 +4725,13 @@ def test_alt_text(request: Request):
     if blocked:
         return {"success": False, "message": f"Address refused: {blocked}"}
     try:
-        # Use a tiny 1x1 PNG to test the API connection
-        import base64
-        tiny_png = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-        )
+        # The probe image is a 96x96 white canvas with a solid red circle, not
+        # a 1x1 pixel: current models (OpenAI's gpt-6 family confirmed
+        # 2026-11-06) answer a 1x1 with "No image is attached", so the button
+        # went green while proving nothing about whether vision actually
+        # works. A visible shape comes back as "A solid red circle centered on
+        # a plain white background", which is the proof the tenant wants.
+        probe_png = alt_text.TEST_IMAGE_BYTES
         # user_id is mandatory here: omitting it silently fell back to
         # tenant 1, so a tenant tested user 1's endpoint and spent user 1's
         # API key while their own config went unverified.
@@ -4738,8 +4740,19 @@ def test_alt_text(request: Request):
         # 404 (pasted full endpoint as base URL) tested green while every
         # real image silently posted without alt text.
         result, reason = alt_text.attempt_alt_text(
-            tiny_png, "image/png", user_id=uid
+            probe_png, "image/png", user_id=uid
         )
+        if result and alt_text.looks_like_no_image_answer(result):
+            # HTTP 200 with "No image is attached" means the probe never
+            # reached the model: report it as a failure and show what came
+            # back, instead of a green light over a sentence about no image.
+            return {
+                "success": False,
+                "message": (
+                    "API answered but reported no image: "
+                    f"{result[:160]}"
+                ),
+            }
         if result:
             return {"success": True, "message": f"API working. Response: {result[:100]}"}
         if reason:

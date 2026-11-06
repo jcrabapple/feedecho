@@ -16,6 +16,7 @@ is uploaded without alt text, which Mastodon accepts.
 
 import base64
 import logging
+import re
 import time
 from urllib.parse import urlsplit
 
@@ -42,6 +43,48 @@ REASONING_MAX_TOKENS = 1200
 MAX_REASON_DETAIL = 300
 
 DESCRIPTION_WORD_LIMIT = 50
+
+# Probe image for the settings-page Test button: 96x96, white canvas with a
+# solid red circle. It replaced a 1x1 PNG because current vision models refuse
+# to acknowledge a 1x1 ("No image is attached", OpenAI gpt-6-astra on
+# 2026-11-06), which made the button green while proving nothing. 330 bytes,
+# generated with stdlib zlib so no asset file has to ship or be kept in sync.
+TEST_IMAGE_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAABEUlEQVR42u3cuxUDIQwEQFXi2P1X"
+    "4a5w6ugSfpI8+64AmAzQXgx5TCAABAgQIECAAAESQIAAAQIECBAgyQT0eb0fvj8FekZJhRX5Xe5K"
+    "RS2a80xRkeYkU5TWOWAUpWkOMEUPnX1G0UZnk1F00tlhFM10lhtFP521RoCOAGXTWWgUXXVWGQHa"
+    "DJRZZ4kRoJ1A+XXmjQABugVURWfSCBAgQBmBaunMGAECBAgQIECAAAEC5KgBCBCgRkCuXAEB8nDo"
+    "ZTU9kOEFQAaojOABqgA0jAFXMVq7I1WE40BDmSWn0aaNKNRdBRoqmReZzqxcLTwT0KTUlaX6NUV6"
+    "oOQBBAgQIECAAAECJIAAAQIECBAgQPKTL6GYPNfMN32dAAAAAElFTkSuQmCC"
+)
+
+# Cues that a vision model answered "I did not get an image" rather than
+# describing one. Deliberately NOT used on the posting path: a false positive
+# there would drop a real description, and no text heuristic is reliable enough
+# to be trusted with a member's alt text. It is a diagnostic for the settings
+# Test button, where the cost of a false positive is one confusing button press
+# and the model's own answer is quoted back to the tenant.
+_NO_IMAGE_CUES = (
+    "no image",
+    "not see",
+    "cannot see",
+    "can't see",
+    "couldn't see",
+    "unable to see",
+    "did not receive",
+    "didn't receive",
+    "not received",
+    "was not provided",
+    "wasn't provided",
+    "did not attach",
+    "didn't attach",
+    "did not upload",
+    "didn't upload",
+)
+# A refusal states its problem straight away, so a cue counts only when it lands
+# in the opening of the answer. A description that merely mentions a button
+# reading "Please upload an image" keeps the words far enough in to stay out.
+_NO_IMAGE_CUE_WINDOW = 40
 
 SYSTEM_PROMPT = (
     "You are an alt text generator for a social media platform. "
@@ -146,6 +189,33 @@ USER_PROMPT = (
     "Ignore partial, cropped, or illegible text. "
     "Do not interpret the meaning of any visible text."
 )
+
+
+def looks_like_no_image_answer(text: str) -> bool:
+    """True when an answer reads like "I received no image".
+
+    Diagnostic only: the settings-page Test button uses it so a green result
+    means the model actually saw the probe, and quotes the model's answer back
+    when it did not (hosted tenant ticket 14, gpt-6-astra answered a 1x1 probe
+    with "No image is attached. Please upload the image..." while returning
+    HTTP 200). The posting path never calls this: dropping a genuine
+    description would be worse than posting a refusal, and no phrase heuristic
+    is reliable enough to make that call for a member's alt text.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return False
+    lowered = (
+        text.strip()
+        .lower()
+        .replace(chr(0x2019), "'")
+        .replace(chr(0x2018), "'")
+    )
+    if "image" not in lowered:
+        return False
+    if lowered.startswith("please") and "image" in lowered[:60]:
+        return True
+    opening = lowered[:_NO_IMAGE_CUE_WINDOW]
+    return any(cue in opening for cue in _NO_IMAGE_CUES)
 
 
 def _get_settings(user_id: int = 1) -> dict[str, str]:
@@ -332,7 +402,16 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             content = raw_content or message.get("reasoning_content")
             if not isinstance(content, str) or not content.strip():
                 return "", "API returned an empty description"
-            return content.strip(), ""
+            description = content.strip()
+            if looks_like_no_image_answer(description):
+                # Log only. Filtering here would risk dropping a real
+                # description; the tenant sees the message on the post itself.
+                logger.warning(
+                    "Alt text API returned an answer that reads like a "
+                    "missing-image refusal; posting it as-is: %s",
+                    description[:120],
+                )
+            return description, ""
         except (
             httpx.HTTPStatusError,
             httpx.RequestError,

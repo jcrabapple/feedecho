@@ -805,3 +805,64 @@ class TestUnsupportedTokenParameter:
 
         assert description == "A dog."
         assert len(calls) == 2
+
+    def test_posting_path_keeps_whatever_the_model_said(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        """The no-image detection is diagnostic only: a member's alt text is
+        never filtered by a phrase heuristic, because a false positive there
+        would silently drop a real description (review rounds 1-3)."""
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        text = "No image is attached. Please upload the image to generate alt text."
+        client, _calls = self._fake_client(
+            alt_text, [(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]})]
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+        assert description == text
+        assert reason == ""
+
+    def test_no_image_detection_covers_the_common_refusals(self):
+        import alt_text
+
+        for text in (
+            "No image is attached. Please upload the image to generate alt text.",
+            "No image is visible. Please upload the image so I can describe it.",
+            "No image provided.",
+            "I cannot see the image.",
+            "I can\u2019t see the image.",
+            "I'm unable to see an image.",
+            "I've not received an image.",
+            "An image was not provided.",
+            "Please upload an image to generate alt text.",
+            "You didn't attach an image.",
+            "I'm sorry,\nThere is no image attached.",
+        ):
+            assert alt_text.looks_like_no_image_answer(text), text
+
+    def test_no_image_detection_lets_real_descriptions_through(self):
+        import alt_text
+
+        for text in (
+            "A solid red circle centered on a plain white background.",
+            "Two people stand beside a wooded stream holding colorful cutout signs.",
+            "A person holds a phone showing an image of a red circle on a white background.",
+            "A screenshot of a web form with a button that says 'Please upload an image'.",
+            "An art museum exhibit showing a white frame.",
+            "",
+        ):
+            assert not alt_text.looks_like_no_image_answer(text), text
+
+    def test_probe_image_is_visible_not_one_pixel(self):
+        """The Test button's probe must be an image a vision model will
+        actually describe; a 1x1 returns "No image is attached"."""
+        import struct
+        import alt_text
+
+        probe = alt_text.TEST_IMAGE_BYTES
+        assert probe[:8] == b"\x89PNG\r\n\x1a\n"
+        width, height = struct.unpack(">II", probe[16:24])
+        assert width >= 32 and height >= 32

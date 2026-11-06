@@ -5276,8 +5276,10 @@ def edit_feed(
     poll_interval: int = Form(15),
     mute_keywords: str = Form(""),
     folder_id: str | None = Form(None),
+    ai_alt_override: str = Form(""),
 ):
-    """Update a feed's name, URL, poll interval, mute keywords, or folder (issues #3, #11).
+    """Update a feed's name, URL, poll interval, mute keywords, folder, or
+    AI-alt override flag (issues #3, #11).
 
     Changing the URL invalidates the cursor: last_item_id belonged to the
     old feed, and comparing it against the new feed's item IDs could
@@ -5293,6 +5295,10 @@ def edit_feed(
     poll_interval = max(1, min(poll_interval, 1440))
     mute_keywords = (mute_keywords or "").strip()
     target_folder_id = _filter_int(folder_id) if folder_id is not None else None
+    # Checkbox convention, same as the echo edit handler: a checked box posts
+    # its value, an unchecked box posts nothing. Only the known truthy tokens
+    # count as on; anything else (including absent) is off.
+    ai_alt_override_flag = 1 if ai_alt_override in ("1", "true", "on") else 0
 
     # Discovery (F4) runs BEFORE the DB transaction — blocking network I/O
     # in a sync `def` route stays in the threadpool, off the event loop.
@@ -5338,17 +5344,17 @@ def edit_feed(
                 """
                 UPDATE feeds
                    SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?,
-                       folder_id = ?, last_item_id = NULL,
+                       folder_id = ?, ai_alt_override = ?, last_item_id = NULL,
                        etag = NULL, last_modified = NULL
                  WHERE id = ? AND deleted_at IS NULL AND user_id = ?
                 """,
-                (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
+                (name, url, poll_interval, mute_keywords, final_folder_id, ai_alt_override_flag, feed_id, uid),
             )
         else:
             db.execute(
-                "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?, folder_id = ? "
-                "WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (name, url, poll_interval, mute_keywords, final_folder_id, feed_id, uid),
+                "UPDATE feeds SET name = ?, url = ?, poll_interval = ?, mute_keywords = ?, folder_id = ?, "
+                "ai_alt_override = ? WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+                (name, url, poll_interval, mute_keywords, final_folder_id, ai_alt_override_flag, feed_id, uid),
             )
     # Saved-search counts apply mute keywords and folder scoping, so editing
     # either changes them.

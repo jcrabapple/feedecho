@@ -112,6 +112,7 @@
             data-poll-interval="{{ feed.poll_interval }}"
             data-folder-id="{{ feed.folder_id or '' }}"
             data-mute-keywords="{{ (feed.mute_keywords or '') | e }}"
+            data-ai-alt-override="{{ 1 if feed.ai_alt_override else 0 }}"
             data-has-poke-token="{{ 1 if feed.poke_token else 0 }}">
             <td data-label="Name">
                 {{ feed.name }}

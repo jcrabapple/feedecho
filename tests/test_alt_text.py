@@ -861,7 +861,9 @@ class TestUnsupportedTokenParameter:
             assert description == text, text
 
     def test_verbose_refusals_are_caught_too(self):
-        """A polite multi-sentence refusal is still a refusal (finding 2)."""
+        """A polite multi-sentence refusal is still a refusal (finding 2), and
+        the article/verb variants the reviewer listed must not slip through
+        (round 2, new finding 1)."""
         import alt_text
 
         assert alt_text._claims_no_image(
@@ -869,11 +871,32 @@ class TestUnsupportedTokenParameter:
             "or attach the image file you would like me to describe, and I will gladly "
             "provide an accurate alt text description for your post."
         )
-        assert alt_text._claims_no_image("No image was uploaded.")
-        assert alt_text._claims_no_image("I can\u2019t see the image.")
-        assert alt_text._claims_no_image("There's no image.")
-        assert alt_text._claims_no_image("You didn't attach an image.")
-        assert alt_text._claims_no_image("No image detected.")
+        for text in (
+            "No image was uploaded.",
+            "I can\u2019t see the image.",
+            "There's no image.",
+            "You didn't attach an image.",
+            "You didn't upload the image.",
+            "No image detected.",
+            "Please upload an image to generate alt text.",
+            "Please provide an image.",
+            "I do not see any image.",
+            "I don't see the image.",
+            "I am unable to see an image.",
+            "I am unable to see any image.",
+            "You did not attach the image.",
+            "I am sorry, but there is no image provided.",
+            "I'm sorry,\nThere is no image attached.",
+        ):
+            assert alt_text._claims_no_image(text), text
+
+    def test_first_person_descriptions_are_kept(self):
+        """A description can contain a negation in a later clause; only the
+        opening clause decides (round 2, false-positive check)."""
+        import alt_text
+
+        text = "I took this photo through a rainy window; you cannot see the image clearly."
+        assert alt_text._claims_no_image(text) is False
 
     def test_probe_image_is_visible_not_one_pixel(self):
         """The Test button's probe must be an image a vision model will

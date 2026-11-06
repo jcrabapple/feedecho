@@ -60,51 +60,43 @@ TEST_IMAGE_BYTES = base64.b64decode(
 
 # Phrases a vision model uses when it did not receive the image. Matched
 # case-insensitively against short answers only (see _claims_no_image).
-_NO_IMAGE_OPENERS = (
-    "no image",
-    "there's no image",
-    "there is no image",
-    "there was no image",
-    "i cannot see the image",
-    "i cannot see an image",
-    "i cannot see any image",
-    "i can't see the image",
-    "i can't see an image",
-    "i can't see any image",
-    "i cant see the image",
-    "i cant see an image",
-    "i cant see any image",
-    "i could not see the image",
-    "i could not see any image",
-    "i couldn't see the image",
-    "i couldn't see an image",
-    "i couldn't see any image",
-    "i do not see an image",
-    "i don't see an image",
-    "i don't see any image",
-    "i am unable to see the image",
-    "i'm unable to see the image",
-    "i did not receive an image",
-    "i didn't receive an image",
-    "i have not received an image",
-    "i haven't received an image",
-    "you did not attach an image",
-    "you didn't attach an image",
-    "you did not upload an image",
-    "you didn't upload an image",
-    "you did not provide an image",
-    "you didn't provide an image",
-    "please upload the image",
-    "please attach the image",
-    "please provide the image",
-    "please send the image",
-    "please share the image",
+# A vision model that never received the image answers with a refusal that
+# OPENS the reply ("No image is attached. Please upload...", "I cannot see the
+# image"). A description of a real photo opens by framing a scene ("A
+# screenshot of a form whose button reads 'Please upload an image'"), so every
+# check below is anchored to the START of the answer.
+#
+# Structured parts, not an enumerated phrase list: hand-listing phrases misses
+# the article and verb variants ("please provide an image", "I don't see the
+# image") that a single model emits on different days.
+_IMAGE_REQUEST_VERBS = ("upload", "attach", "provide", "send", "share", "include")
+_NEGATED_SEEING = (
+    "cannot see",
+    "can not see",
+    "can't see",
+    "cant see",
+    "could not see",
+    "couldn't see",
+    "do not see",
+    "don't see",
+    "did not see",
+    "didn't see",
+    "unable to see",
+    "do not have",
+    "don't have",
+    "did not receive",
+    "didn't receive",
+    "have not received",
+    "haven't received",
+    "was not provided",
+    "wasn't provided",
 )
 
 # Openers that carry no signal about whether an image was seen; stripped before
 # the check so "I'm sorry, but no image was provided" still matches.
 _REFUSAL_LEADINS = (
     "i'm sorry",
+    "i am sorry",
     "im sorry",
     "sorry",
     "i apologize",
@@ -227,22 +219,45 @@ def _claims_no_image(text: str) -> bool:
     not alt text: posting it would caption someone's photo with a claim that
     there is no image in it.
 
-    Matched only at the START of the answer, after any apology opener. A real
+    Anchored to the START of the answer, after any apology opener. A real
     description of a screenshot can contain the same words further in ("A
     screenshot of a form with a button that says 'Please upload an image'"),
     and dropping that alt text would be the worse failure of the two.
     """
     if not isinstance(text, str):
         return False
-    head = text.strip().lower().replace(chr(0x2019), "'").replace(chr(0x2018), "'")
-    head = head.lstrip(' \t"()[]{}*-')
+    head = (
+        text.strip()
+        .lower()
+        .replace(chr(0x2019), "'")
+        .replace(chr(0x2018), "'")
+    )
+    head = head.lstrip(' \t\r\n"()[]{}*-')
     for leadin in _REFUSAL_LEADINS:
         if head.startswith(leadin):
-            head = head[len(leadin):].lstrip(" \t,.!:;-")
+            head = head[len(leadin):].lstrip(' \t\r\n,.!:;-')
             if head.startswith("but "):
-                head = head[4:].lstrip(" \t,.!:;-")
+                head = head[4:].lstrip(' \t\r\n,.!:;-')
             break
-    return head.startswith(_NO_IMAGE_OPENERS)
+
+    # "No image", "No image attached", "No image was provided" ...
+    if head.startswith("no image"):
+        return True
+    # "There is no image", "There's no image"
+    if head.startswith("there") and "no image" in head[:40]:
+        return True
+    # "Please upload an image so I can describe it"
+    if head.startswith("please") and "image" in head[:60]:
+        return any(verb in head[:60] for verb in _IMAGE_REQUEST_VERBS)
+    # "You didn't attach an image"
+    if head.startswith("you") and "image" in head[:60]:
+        return any(verb in head[:60] for verb in _IMAGE_REQUEST_VERBS)
+    # "I cannot see the image", "I didn't receive an image"
+    if (head.startswith("i ") or head.startswith("we ")) and "image" in head[:80]:
+        # Only the opening clause: "I took this photo through a rainy window;
+        # you cannot see the image clearly" is a description, not a refusal.
+        return any(phrase in head[:40] for phrase in _NEGATED_SEEING)
+    return False
 
 
 def _get_settings(user_id: int = 1) -> dict[str, str]:

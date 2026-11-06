@@ -535,6 +535,7 @@ def init_db_sqlite() -> None:
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
                 read_enabled INTEGER NOT NULL DEFAULT 0,
+                ai_alt_override INTEGER NOT NULL DEFAULT 0,
                 mute_keywords TEXT DEFAULT '',
                 last_error TEXT,
                 etag TEXT,
@@ -551,6 +552,9 @@ def init_db_sqlite() -> None:
         _add_column_if_missing(db, "feeds", "lease_expires_at", "TIMESTAMP")
         _add_column_if_missing(db, "feeds", "paused", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
+        # Per-feed toggle: when set, AI-generated alt text wins over the
+        # feed-provided alt text on image echoes (default off = feed alt wins).
+        _add_column_if_missing(db, "feeds", "ai_alt_override", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
         _add_column_if_missing(db, "feeds", "folder_id", "INTEGER")
@@ -1382,6 +1386,7 @@ def init_db_postgres() -> None:
                 lease_expires_at TIMESTAMP,
                 paused INTEGER NOT NULL DEFAULT 0,
                 read_enabled INTEGER NOT NULL DEFAULT 0,
+                ai_alt_override INTEGER NOT NULL DEFAULT 0,
                 mute_keywords TEXT DEFAULT '',
                 last_error TEXT,
                 etag TEXT,
@@ -1397,6 +1402,9 @@ def init_db_postgres() -> None:
         # Reader toggle for already-deployed hosted databases (fresh installs
         # get the column from the CREATE TABLE above).
         _add_column_if_missing(db, "feeds", "read_enabled", "INTEGER NOT NULL DEFAULT 0")
+        # Per-feed toggle: when set, AI-generated alt text wins over the
+        # feed-provided alt text on image echoes (default off = feed alt wins).
+        _add_column_if_missing(db, "feeds", "ai_alt_override", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "feeds", "mute_keywords", "TEXT DEFAULT ''")
         _add_column_if_missing(db, "feeds", "last_error", "TEXT")
         _add_column_if_missing(db, "feeds", "folder_id", "BIGINT")

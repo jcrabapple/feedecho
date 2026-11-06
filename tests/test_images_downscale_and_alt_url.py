@@ -329,6 +329,46 @@ class TestVisionTestEndpointReportsFailures:
         assert body["success"] is False
         assert "404" in body["message"]
 
+    def test_no_image_answer_reports_failure(self, single_client, monkeypatch):
+        """HTTP 200 with "No image is attached" must not report a green test
+        (review round 3, finding 4)."""
+        import alt_text
+
+        self._configure()
+        monkeypatch.setattr(alt_text.app_settings, "MULTI", False)
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "No image is attached. Please upload the image "
+                                "to generate alt text."
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+
+        class _Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, *a, **k):
+                return _Resp()
+
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: _Client())
+        body = single_client.post("/api/settings/alt-text/test").json()
+        assert body["success"] is False
+        assert "no image" in body["message"].lower()
+
     def test_working_endpoint_still_reports_success(
         self, single_client, monkeypatch
     ):

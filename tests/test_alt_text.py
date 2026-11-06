@@ -836,20 +836,44 @@ class TestUnsupportedTokenParameter:
         assert description == ""
         assert "received no image" in reason
 
-    def test_a_real_description_is_not_mistaken_for_a_missing_image(
+    def test_descriptions_of_upload_screenshots_are_kept(
         self, db_tmp, monkeypatch, setup_echo
     ):
+        """The refusal words appear inside real descriptions of screenshots and
+        dialog art; those must survive (review round 3, finding 1)."""
         _set_alt_text_settings(db_tmp)
         import alt_text
 
-        text = "A person holds a phone showing an image of a red circle on a white background."
-        client, _calls = self._fake_client(
-            alt_text, [(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]})]
-        )
-        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+        kept = [
+            "A screenshot of a web form with a button that says 'Please upload an image'.",
+            "An error dialog on screen reading 'No image is attached'.",
+            "A sign at a passport photo kiosk reading: please provide an image.",
+            "An art museum exhibit showing a white frame with no image inside.",
+            "A person holds a phone showing an image of a red circle on a white background.",
+        ]
+        for text in kept:
+            client, _calls = self._fake_client(
+                alt_text,
+                [(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]})],
+            )
+            monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+            description, _reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+            assert description == text, text
 
-        description, _reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
-        assert description == text
+    def test_verbose_refusals_are_caught_too(self):
+        """A polite multi-sentence refusal is still a refusal (finding 2)."""
+        import alt_text
+
+        assert alt_text._claims_no_image(
+            "I'm sorry, but there is no image attached to your message. Please upload "
+            "or attach the image file you would like me to describe, and I will gladly "
+            "provide an accurate alt text description for your post."
+        )
+        assert alt_text._claims_no_image("No image was uploaded.")
+        assert alt_text._claims_no_image("I can\u2019t see the image.")
+        assert alt_text._claims_no_image("There's no image.")
+        assert alt_text._claims_no_image("You didn't attach an image.")
+        assert alt_text._claims_no_image("No image detected.")
 
     def test_probe_image_is_visible_not_one_pixel(self):
         """The Test button's probe must be an image a vision model will

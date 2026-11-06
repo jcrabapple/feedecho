@@ -60,12 +60,57 @@ TEST_IMAGE_BYTES = base64.b64decode(
 
 # Phrases a vision model uses when it did not receive the image. Matched
 # case-insensitively against short answers only (see _claims_no_image).
-_NO_IMAGE_PATTERNS = (
-    re.compile(r"\bno image (?:is|was) (?:attached|visible|provided|included|received)\b"),
-    re.compile(r"\bno image attached\b"),
-    re.compile(r"\bthere is no image\b"),
-    re.compile(r"\b(?:i )?(?:can(?:no|')t|could not|couldn't|do not|don't) see (?:an|any) image\b"),
-    re.compile(r"\bplease (?:upload|attach|provide) (?:the|an) image\b"),
+_NO_IMAGE_OPENERS = (
+    "no image",
+    "there's no image",
+    "there is no image",
+    "there was no image",
+    "i cannot see the image",
+    "i cannot see an image",
+    "i cannot see any image",
+    "i can't see the image",
+    "i can't see an image",
+    "i can't see any image",
+    "i cant see the image",
+    "i cant see an image",
+    "i cant see any image",
+    "i could not see the image",
+    "i could not see any image",
+    "i couldn't see the image",
+    "i couldn't see an image",
+    "i couldn't see any image",
+    "i do not see an image",
+    "i don't see an image",
+    "i don't see any image",
+    "i am unable to see the image",
+    "i'm unable to see the image",
+    "i did not receive an image",
+    "i didn't receive an image",
+    "i have not received an image",
+    "i haven't received an image",
+    "you did not attach an image",
+    "you didn't attach an image",
+    "you did not upload an image",
+    "you didn't upload an image",
+    "you did not provide an image",
+    "you didn't provide an image",
+    "please upload the image",
+    "please attach the image",
+    "please provide the image",
+    "please send the image",
+    "please share the image",
+)
+
+# Openers that carry no signal about whether an image was seen; stripped before
+# the check so "I'm sorry, but no image was provided" still matches.
+_REFUSAL_LEADINS = (
+    "i'm sorry",
+    "im sorry",
+    "sorry",
+    "i apologize",
+    "i apologise",
+    "apologies",
+    "unfortunately",
 )
 
 SYSTEM_PROMPT = (
@@ -177,16 +222,27 @@ def _claims_no_image(text: str) -> bool:
     """True when the model answered that it received no image.
 
     A vision endpoint can return HTTP 200 and a fluent sentence that means
-    "I could not see anything" (OpenAI gpt-6-astra on a 1x1 probe:
-    "No image is attached. Please upload the image..."). That is a failed
-    vision call, not alt text: posting it would put a false statement under
-    someone's photo. Kept short-text only so a real description that happens
-    to discuss images is not caught.
+    "I could not see anything" (OpenAI gpt-6-astra on a 1x1 probe: "No image
+    is attached. Please upload the image..."). That is a failed vision call,
+    not alt text: posting it would caption someone's photo with a claim that
+    there is no image in it.
+
+    Matched only at the START of the answer, after any apology opener. A real
+    description of a screenshot can contain the same words further in ("A
+    screenshot of a form with a button that says 'Please upload an image'"),
+    and dropping that alt text would be the worse failure of the two.
     """
-    if len(text) > 200:
+    if not isinstance(text, str):
         return False
-    lowered = text.lower()
-    return any(pattern.search(lowered) for pattern in _NO_IMAGE_PATTERNS)
+    head = text.strip().lower().replace(chr(0x2019), "'").replace(chr(0x2018), "'")
+    head = head.lstrip(' \t"()[]{}*-')
+    for leadin in _REFUSAL_LEADINS:
+        if head.startswith(leadin):
+            head = head[len(leadin):].lstrip(" \t,.!:;-")
+            if head.startswith("but "):
+                head = head[4:].lstrip(" \t,.!:;-")
+            break
+    return head.startswith(_NO_IMAGE_OPENERS)
 
 
 def _get_settings(user_id: int = 1) -> dict[str, str]:
@@ -376,8 +432,12 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             description = content.strip()
             if _claims_no_image(description):
                 # HTTP 200 with "No image is attached" is a failed vision call.
-                # Returning it as alt text would caption a real photo with a
-                # claim that there is no image.
+                # Logged because the posting caller discards the reason, and
+                # "why did this image post without alt text" needs a trace.
+                logger.warning(
+                    "Alt text API returned 200 but claimed no image was received: %s",
+                    description[:120],
+                )
                 return "", "API said it received no image (the image did not reach the model)"
             return description, ""
         except (

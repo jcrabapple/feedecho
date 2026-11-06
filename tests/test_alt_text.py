@@ -595,7 +595,7 @@ class TestUnsupportedTokenParameter:
         _set_alt_text_settings(db_tmp)
         import alt_text
 
-        client, calls = self._fake_client(alt_text, [(401, {"detail": "nope"})])
+        client, calls = self._fake_client(alt_text, [(401, {"foo": "bar"})])
         monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
 
         description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
@@ -620,3 +620,188 @@ class TestUnsupportedTokenParameter:
 
         assert description == ""
         assert "output tokens" in reason
+
+    def test_switch_does_not_consume_the_last_retry(self, db_tmp, monkeypatch, setup_echo):
+        """A transient failure that eats attempt 1 must not make the parameter
+        switch land on the last attempt and exit without sending the corrected
+        request (review finding 1)."""
+        _set_alt_text_settings(db_tmp, base_url="https://api.openai.com/v1",
+                               model="gpt-6-astra")
+        import alt_text
+
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, status, payload):
+                self.status_code = status
+                self._payload = payload
+                self.request = None
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise alt_text.httpx.HTTPStatusError(
+                        f"{self.status_code} error", request=None, response=self
+                    )
+
+            def json(self):
+                return self._payload
+
+            @property
+            def text(self):
+                return json.dumps(self._payload)
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                calls.append(dict(json))
+                if len(calls) == 1:
+                    raise alt_text.httpx.RequestError("connection reset")
+                if len(calls) == 2:
+                    return FakeResponse(
+                        400,
+                        {
+                            "error": {
+                                "message": "Unsupported parameter: 'max_tokens' is not "
+                                "supported with this model. Use 'max_completion_tokens' "
+                                "instead."
+                            }
+                        },
+                    )
+                return FakeResponse(
+                    200,
+                    {"choices": [{"message": {"content": "A cat."}, "finish_reason": "stop"}]},
+                )
+
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
+        monkeypatch.setattr(alt_text.time, "sleep", lambda s: None)
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert (description, reason) == ("A cat.", "")
+        assert len(calls) == 3
+        assert "max_completion_tokens" in calls[2]
+
+    def test_fastapi_detail_shape_is_surfaced(self, db_tmp, monkeypatch, setup_echo):
+        """vLLM / LocalAI wrappers answer {"detail": ...} (review finding 3)."""
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, calls = self._fake_client(
+            alt_text,
+            [(422, {"detail": [{"loc": ["body", "image"], "msg": "Image is too small"}]})],
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert len(calls) == 1, "a 422 must not be retried"
+        assert reason == "HTTP 422: Image is too small"
+
+    def test_top_level_message_shape_is_surfaced(self, db_tmp, monkeypatch, setup_echo):
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, calls = self._fake_client(
+            alt_text, [(413, {"message": "Payload too large for this model"})]
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert len(calls) == 1
+        assert reason == "HTTP 413: Payload too large for this model"
+
+    def test_html_error_page_falls_back_to_the_hint(self, db_tmp, monkeypatch, setup_echo):
+        """A proxy's HTML 404 must not replace the base-URL hint with markup
+        (review finding 4)."""
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        class FakeResponse:
+            status_code = 404
+            request = None
+            text = "<!DOCTYPE html><html><head><title>404 Not Found</title></head></html>"
+
+            def raise_for_status(self):
+                raise alt_text.httpx.HTTPStatusError("404", request=None, response=self)
+
+            def json(self):
+                raise ValueError("not json")
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                return FakeResponse()
+
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: FakeClient())
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert reason.startswith("HTTP 404: endpoint not found")
+        assert "<" not in reason
+
+    def test_truncated_reasoning_is_not_returned_as_alt_text(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        """An empty content with finish_reason=length must report the budget even
+        when the model also returned a partial reasoning_content (finding 5)."""
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, _calls = self._fake_client(
+            alt_text,
+            [(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {"content": "", "reasoning_content": "Let me look at the..."},
+                            "finish_reason": "length",
+                        }
+                    ]
+                },
+            )],
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert "output tokens" in reason
+
+    def test_rate_limit_is_still_retried(self, db_tmp, monkeypatch, setup_echo):
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, calls = self._fake_client(
+            alt_text,
+            [
+                (429, {"error": {"message": "Rate limit reached"}}),
+                (200, {"choices": [{"message": {"content": "A dog."}, "finish_reason": "stop"}]}),
+            ],
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+        monkeypatch.setattr(alt_text.time, "sleep", lambda s: None)
+
+        description, _reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == "A dog."
+        assert len(calls) == 2

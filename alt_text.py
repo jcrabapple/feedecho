@@ -81,12 +81,19 @@ def normalize_base_url(base_url: str) -> str:
 
 
 def _upstream_error_message(exc: Exception) -> str:
-    """The provider's own ``error.message`` from a failed response, or "".
+    """The provider's own error sentence from a failed response, or "".
 
     The settings-page Test button used to report a blanket "request rejected"
     for every 4xx, which hid the one sentence that explains the failure
     (OpenAI's "Unsupported parameter: 'max_tokens' …" is the case that made a
     paid tenant's correct-looking config look like a network problem).
+
+    Not every provider speaks OpenAI's envelope: FastAPI-based gateways
+    (vLLM, LocalAI wrappers) return ``{"detail": ...}`` and REST gateways
+    often return a top-level ``{"message": ...}``, so those shapes count too.
+    An HTML error page from a proxy is never a useful detail: returning ""
+    lets the caller fall back to its tailored hint instead of printing
+    truncated markup at the tenant.
     """
     response = getattr(exc, "response", None)
     if response is None:
@@ -95,17 +102,36 @@ def _upstream_error_message(exc: Exception) -> str:
         payload = response.json()
     except Exception:
         try:
-            return (response.text or "").strip()[:MAX_REASON_DETAIL]
+            text = (response.text or "").strip()
         except Exception:
             return ""
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            message = error.get("message")
-            if isinstance(message, str):
-                return message.strip()[:MAX_REASON_DETAIL]
-        elif isinstance(error, str):
-            return error.strip()[:MAX_REASON_DETAIL]
+        if text.startswith("<"):
+            return ""
+        return text[:MAX_REASON_DETAIL]
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str):
+            return message.strip()[:MAX_REASON_DETAIL]
+    elif isinstance(error, str):
+        return error.strip()[:MAX_REASON_DETAIL]
+    detail = payload.get("detail")
+    if isinstance(detail, str):
+        return detail.strip()[:MAX_REASON_DETAIL]
+    if isinstance(detail, list):
+        # FastAPI validation errors: [{"loc": [...], "msg": "..."}, ...]
+        parts = [
+            item["msg"].strip()
+            for item in detail
+            if isinstance(item, dict) and isinstance(item.get("msg"), str)
+        ]
+        if parts:
+            return "; ".join(parts)[:MAX_REASON_DETAIL]
+    message = payload.get("message")
+    if isinstance(message, str):
+        return message.strip()[:MAX_REASON_DETAIL]
     return ""
 
 
@@ -243,7 +269,14 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
         "Content-Type": "application/json",
     }
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    # attempts counts real transport attempts only. The parameter switch below
+    # is protocol negotiation, not a failed attempt, so it hands its attempt
+    # back (a switch that consumed the last retry would exit the loop having
+    # never sent the corrected request).
+    attempts = 0
+    token_switched = False
+    while attempts < MAX_RETRIES:
+        attempts += 1
         try:
             if app_settings.MULTI:
                 # Hosted: the endpoint is tenant-supplied. validate_outbound_url
@@ -277,20 +310,27 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             message = choices[0].get("message") if isinstance(choices[0], dict) else None
             if not isinstance(message, dict):
                 return "", "API response had no message object"
-            content = message.get("content") or message.get("reasoning_content")
-            if not isinstance(content, str) or not content.strip():
+            raw_content = message.get("content")
+            finish_reason = (
+                choices[0].get("finish_reason") if isinstance(choices[0], dict) else None
+            )
+            if (
+                (not isinstance(raw_content, str) or not raw_content.strip())
+                and finish_reason == "length"
+            ):
                 # A reasoning model whose hidden tokens ate the whole output
                 # cap returns empty content with finish_reason=length; saying
                 # "empty description" sends the tenant hunting for a bug in
-                # their config instead of the token budget.
-                finish_reason = (
-                    choices[0].get("finish_reason") if isinstance(choices[0], dict) else None
+                # their config instead of the token budget. Checked BEFORE the
+                # reasoning_content fallback: models that expose their scratch
+                # reasoning (DeepSeek-R1 and friends) would otherwise post a
+                # truncated chain of thought as alt text.
+                return "", (
+                    "API ran out of output tokens before writing a description "
+                    "(reasoning models spend the cap on reasoning first)"
                 )
-                if finish_reason == "length":
-                    return "", (
-                        "API ran out of output tokens before writing a description "
-                        "(reasoning models spend the cap on reasoning first)"
-                    )
+            content = raw_content or message.get("reasoning_content")
+            if not isinstance(content, str) or not content.strip():
                 return "", "API returned an empty description"
             return content.strip(), ""
         except (
@@ -319,7 +359,7 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             # path.
             if (
                 status == 400
-                and token_param == "max_tokens"
+                and not token_switched
                 and "max_tokens" in detail
                 and "max_completion_tokens" in detail
             ):
@@ -328,11 +368,18 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
                     "max_completion_tokens: %s",
                     detail,
                 )
+                token_switched = True
                 body.pop(token_param, None)
                 token_param = "max_completion_tokens"
                 body[token_param] = REASONING_MAX_TOKENS
+                attempts -= 1  # negotiation, not a transport attempt
                 continue
-            if status in (400, 401, 403, 404):
+            # Every other client error is permanent: a 422 (bad image), a 413
+            # (too large) or a 415 (unsupported media type) fails identically
+            # on retry, and retrying it replaces the provider's explanation
+            # with "API unreachable". 408 and 429 are the client-side 4xx that
+            # DO clear on their own.
+            if status is not None and 400 <= status < 500 and status not in (408, 429):
                 logger.warning(
                     "Alt text API call failed permanently (HTTP %s), not retrying: %s%s",
                     status,
@@ -350,12 +397,12 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
                 return "", f"HTTP {status}: {detail or hint}"
             logger.warning(
                 "Alt text API call failed (attempt %d/%d): %s",
-                attempt,
+                attempts,
                 MAX_RETRIES,
                 e,
             )
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY * attempt)
+            if attempts < MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempts)
 
     return "", "API unreachable after retries"
 

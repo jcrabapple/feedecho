@@ -16,6 +16,7 @@ is uploaded without alt text, which Mastodon accepts.
 
 import base64
 import logging
+import re
 import time
 from urllib.parse import urlsplit
 
@@ -42,6 +43,30 @@ REASONING_MAX_TOKENS = 1200
 MAX_REASON_DETAIL = 300
 
 DESCRIPTION_WORD_LIMIT = 50
+
+# Probe image for the settings-page Test button: 96x96, white canvas with a
+# solid red circle. It replaced a 1x1 PNG because current vision models refuse
+# to acknowledge a 1x1 ("No image is attached", OpenAI gpt-6-astra on
+# 2026-11-06), which made the button green while proving nothing. 330 bytes,
+# generated with stdlib zlib so no asset file has to ship or be kept in sync.
+TEST_IMAGE_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAABEUlEQVR42u3cuxUDIQwEQFXi2P1X"
+    "4a5w6ugSfpI8+64AmAzQXgx5TCAABAgQIECAAAESQIAAAQIECBAgyQT0eb0fvj8FekZJhRX5Xe5K"
+    "RS2a80xRkeYkU5TWOWAUpWkOMEUPnX1G0UZnk1F00tlhFM10lhtFP521RoCOAGXTWWgUXXVWGQHa"
+    "DJRZZ4kRoJ1A+XXmjQABugVURWfSCBAgQBmBaunMGAECBAgQIECAAAEC5KgBCBCgRkCuXAEB8nDo"
+    "ZTU9kOEFQAaojOABqgA0jAFXMVq7I1WE40BDmSWn0aaNKNRdBRoqmReZzqxcLTwT0KTUlaX6NUV6"
+    "oOQBBAgQIECAAAECJIAAAQIECBAgQPKTL6GYPNfMN32dAAAAAElFTkSuQmCC"
+)
+
+# Phrases a vision model uses when it did not receive the image. Matched
+# case-insensitively against short answers only (see _claims_no_image).
+_NO_IMAGE_PATTERNS = (
+    re.compile(r"\bno image (?:is|was) (?:attached|visible|provided|included|received)\b"),
+    re.compile(r"\bno image attached\b"),
+    re.compile(r"\bthere is no image\b"),
+    re.compile(r"\b(?:i )?(?:can(?:no|')t|could not|couldn't|do not|don't) see (?:an|any) image\b"),
+    re.compile(r"\bplease (?:upload|attach|provide) (?:the|an) image\b"),
+)
 
 SYSTEM_PROMPT = (
     "You are an alt text generator for a social media platform. "
@@ -146,6 +171,22 @@ USER_PROMPT = (
     "Ignore partial, cropped, or illegible text. "
     "Do not interpret the meaning of any visible text."
 )
+
+
+def _claims_no_image(text: str) -> bool:
+    """True when the model answered that it received no image.
+
+    A vision endpoint can return HTTP 200 and a fluent sentence that means
+    "I could not see anything" (OpenAI gpt-6-astra on a 1x1 probe:
+    "No image is attached. Please upload the image..."). That is a failed
+    vision call, not alt text: posting it would put a false statement under
+    someone's photo. Kept short-text only so a real description that happens
+    to discuss images is not caught.
+    """
+    if len(text) > 200:
+        return False
+    lowered = text.lower()
+    return any(pattern.search(lowered) for pattern in _NO_IMAGE_PATTERNS)
 
 
 def _get_settings(user_id: int = 1) -> dict[str, str]:
@@ -332,7 +373,13 @@ def attempt_alt_text(image_bytes: bytes, content_type: str, user_id: int = 1) ->
             content = raw_content or message.get("reasoning_content")
             if not isinstance(content, str) or not content.strip():
                 return "", "API returned an empty description"
-            return content.strip(), ""
+            description = content.strip()
+            if _claims_no_image(description):
+                # HTTP 200 with "No image is attached" is a failed vision call.
+                # Returning it as alt text would caption a real photo with a
+                # claim that there is no image.
+                return "", "API said it received no image (the image did not reach the model)"
+            return description, ""
         except (
             httpx.HTTPStatusError,
             httpx.RequestError,

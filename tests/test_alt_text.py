@@ -805,3 +805,59 @@ class TestUnsupportedTokenParameter:
 
         assert description == "A dog."
         assert len(calls) == 2
+
+    def test_no_image_answer_is_not_returned_as_alt_text(self, db_tmp, monkeypatch, setup_echo):
+        """HTTP 200 + "No image is attached" is a failed vision call, not alt
+        text (hosted tenant ticket 14, gpt-6-astra on a 1x1 probe)."""
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        client, _calls = self._fake_client(
+            alt_text,
+            [(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "No image is attached. Please upload the image to "
+                                "generate alt text."
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )],
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+
+        assert description == ""
+        assert "received no image" in reason
+
+    def test_a_real_description_is_not_mistaken_for_a_missing_image(
+        self, db_tmp, monkeypatch, setup_echo
+    ):
+        _set_alt_text_settings(db_tmp)
+        import alt_text
+
+        text = "A person holds a phone showing an image of a red circle on a white background."
+        client, _calls = self._fake_client(
+            alt_text, [(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]})]
+        )
+        monkeypatch.setattr(alt_text, "unpinned_client", lambda **kw: client(**kw))
+
+        description, _reason = alt_text.attempt_alt_text(b"fake-image", "image/jpeg")
+        assert description == text
+
+    def test_probe_image_is_visible_not_one_pixel(self):
+        """The Test button's probe must be an image a vision model will
+        actually describe; a 1x1 returns "No image is attached"."""
+        import struct
+        import alt_text
+
+        probe = alt_text.TEST_IMAGE_BYTES
+        assert probe[:8] == b"\x89PNG\r\n\x1a\n"
+        width, height = struct.unpack(">II", probe[16:24])
+        assert width >= 32 and height >= 32

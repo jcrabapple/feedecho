@@ -1,0 +1,30 @@
+{
+  "bare-except": {
+    "count": 0,
+    "files": {}
+  },
+  "noqa": {
+    "count": 12,
+    "files": {
+      "app.py": 5,
+      "auth.py": 2,
+      "logging_setup.py": 1,
+      "scheduler.py": 3,
+      "verification.py": 1
+    }
+  },
+  "swallowed-exception": {
+    "count": 3,
+    "files": {
+      "alt_text.py": 1,
+      "app.py": 1,
+      "images.py": 1
+    }
+  },
+  "type-ignore": {
+    "count": 2,
+    "files": {
+      "scheduler.py": 2
+    }
+  }
+}

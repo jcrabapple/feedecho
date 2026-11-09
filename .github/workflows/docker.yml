@@ -24,6 +24,8 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e ".[dev]"
+      - name: Regression gates (fix witness + ratchets)
+        run: scripts/regression_gates.sh
       - name: Single mode
         env:
           FEEDECHO_MODE: single

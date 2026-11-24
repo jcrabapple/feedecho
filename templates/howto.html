@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}How To — FeedEcho{% endblock %}
 {% block content %}
+<div class="prose">
 <h1>How To</h1>
 <p class="hint">FeedEcho watches your RSS feeds and posts new items to Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, a GitHub repository, or any webhook. Everything is built from three pieces: feeds, accounts, and echoes.</p>
 
@@ -9,16 +10,16 @@
     <p>A feed is any RSS, Atom, or JSON feed URL — a blog, a news site, a podcast, a subreddit.</p>
     <ol class="howto-steps">
         <li>Open <a href="/feeds">Feeds</a>.</li>
-        <li>Paste the feed URL into the <strong>Add feed</strong> form. Tip: you can paste the site's regular home-page or article URL instead — FeedEcho resolves the site's feed link automatically, and the /feeds page offers a bookmarklet that prefills the URL from any page you are reading.</li>
+        <li>Paste the feed URL into the <strong>Add feed</strong> form. Tip: you can paste the site's regular home-page or article URL instead — FeedEcho resolves the site's feed link automatically, and the <a href="/feeds">Feeds</a> page offers a bookmarklet that prefills the URL from any page you are reading.</li>
         <li>Set the <strong>poll interval</strong> — how often FeedEcho checks for new items (default 15 minutes). Lower intervals check more often; keep this reasonable for the feed's server.</li>
-        <li>Click <strong>Add</strong>. FeedEcho records the newest item without posting it, so adding a feed never floods your accounts with the existing backlog.</li>
+        <li>Click <strong>Add Feed</strong>. FeedEcho records the newest item without posting it, so adding a feed never floods your destinations with the existing backlog.</li>
     </ol>
     <p class="hint">Some sites don't publish a feed link. If the URL loads in a feed reader, it works in FeedEcho. Search engines can help: try <code>site:example.com rss</code>.</p>
 </section>
 
 <section>
     <h2>2. Add an account</h2>
-    <p>An account is a destination FeedEcho can post to. Seven kinds are supported.</p>
+    <p>A destination is an account, room, channel, or repository FeedEcho can post to. Nine kinds are supported.</p>
     <h3>Mastodon</h3>
     <ol class="howto-steps">
         <li>Open <a href="/accounts">Accounts</a>.</li>
@@ -136,4 +137,5 @@ tags: {{ tags }}
         <li><strong>Everything is editable</strong>: feeds, echoes, and accounts can be updated or removed at any time. FeedEcho refuses to delete a destination that echoes still point at — delete or reassign those echoes first, so nothing is left aimed at a missing account.</li>
     </ul>
 </section>
+</div>
 {% endblock %}

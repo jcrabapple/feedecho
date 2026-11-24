@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Not Found{% endblock %}
 {% block content %}
-<h1>404</h1>
-<p>Page not found. {% if authed %}<a href="/">Back to dashboard</a>.{% else %}<a href="/login">Log in</a> or <a href="/register">sign up</a>.{% endif %}</p>
+<div class="error-page">
+    <h1>404</h1>
+    <p>Page not found.</p>
+    {% if authed %}
+    <p><a href="/">Back to dashboard</a></p>
+    {% else %}
+    <p><a href="/">Back to home</a> · <a href="/login">Log in</a> or <a href="/register">sign up</a></p>
+    {% endif %}
+</div>
 {% endblock %}

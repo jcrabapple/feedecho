@@ -239,5 +239,5 @@ class TestVersionFooterMultiMode:
             page = c.get("/login").text
         footer = _footer(page)
         assert 'href="/about"' in footer
-        # ...but not the auth-gated How To link.
-        assert 'href="/howto"' not in footer
+        # How To is publicly readable in multi-user mode.
+        assert 'href="/howto"' in footer

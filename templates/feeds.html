@@ -34,6 +34,7 @@
         </select>
         <button type="submit">Add Feed</button>
     </div>
+    <p class="hint">A new feed starts tracking automatically: the first check records the feed's latest item as the starting point, so nothing already published is back-posted. After that, each check cross-posts only items newer than the last one seen.</p>
 </form>
 
 <details class="account-section">
@@ -48,7 +49,7 @@
         <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem;">
             {% for folder in folders %}
             <li style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.4rem 0.6rem; background: var(--surface-light); border-radius: 6px;">
-                <span style="font-weight: 600;">📁 {{ folder.name }}</span>
+                <span style="font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> {{ folder.name }}</span>
                 <span style="display: inline-flex; gap: 0.4rem;">
                     <form method="post" action="/api/folders/{{ folder.id }}/rename" class="inline"
                           data-folder-name="{{ folder.name }}"
@@ -117,7 +118,7 @@
             <td data-label="Name">
                 {{ feed.name }}
                 {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
-                {% if feed.last_error %}<span class="badge badge-warning" title="Last fetch failed: {{ feed.last_error }}">⚠</span>{% endif %}
+                {% if feed.last_error %}<span class="badge badge-warning" title="Last fetch failed: {{ feed.last_error }}" aria-label="Fetch warning"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>{% endif %}
             </td>
             <td data-label="URL"><a href="{{ feed.url | safe_url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>
@@ -149,7 +150,6 @@
     </tbody>
 </table>
 </div>
-<p class="hint">A new feed starts tracking automatically: the first check records the feed's latest item as the starting point, so nothing already published is back-posted. After that, each check cross-posts only items newer than the last one seen.</p>
 {% else %}
 <p class="empty-state">No feeds yet. Add one above to get started.</p>
 {% endif %}

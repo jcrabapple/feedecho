@@ -309,8 +309,11 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [tabindex]:focus-v
 /* Main */
 main {
     max-width: 1100px;
-    margin: 0 auto;
-    padding: 1rem;
+    margin: 2rem auto;
+    padding: 0 1rem;
+}
+.prose {
+    max-width: 70ch;
 }
 
 h1 { font-size: 1.4rem; margin-bottom: 0.75rem; }
@@ -330,12 +333,19 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     padding: 0.75rem;
     text-align: center;
     box-shadow: var(--shadow);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s;
+}
+a.stat-card:hover {
+    border-color: var(--accent);
+    text-decoration: none;
 }
 .stat-value {
     display: block;
     font-size: 1.5rem;
     font-weight: 700;
-    color: var(--primary);
+    color: var(--text);
 }
 .stat-label {
     display: block;
@@ -343,11 +353,6 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     color: var(--text-muted);
     margin-top: 0.1rem;
 }
-/* color rotation across stat cards */
-.stat-card:nth-child(4n+1) .stat-value { color: var(--primary); }
-.stat-card:nth-child(4n+2) .stat-value { color: var(--accent); }
-.stat-card:nth-child(4n+3) .stat-value { color: var(--success); }
-.stat-card:nth-child(4n+4) .stat-value { color: var(--warning); }
 .stat-warning .stat-value { color: var(--warning) !important; }
 
 /* Tables — responsive: card layout on mobile, table on desktop */
@@ -694,17 +699,21 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     margin-bottom: 0;
 }
 
+@media (min-width: 641px) {
+    .data-table td[data-label="Time"] { white-space: nowrap; }
+}
 @media (max-width: 640px) {
     /* Two rows: [brand | theme | account] on row 1; tab strip wraps to row 2.
-       Sticky retained deliberately: feeds/history/echoes are long lists and
-       one-tap primary nav beats ~96px of vertical cost. */
+       Drop sticky positioning on narrow viewports so the wrapped header does
+       not consume ~23% of mobile screen height during scrolling. */
     .navbar {
+        position: static;
         flex-wrap: wrap;
         row-gap: 0;
         column-gap: 0.5rem;
         align-items: center;
         /* env() = 0px in normal browsers; matters because the app ships
-           viewport-fit=cover + standalone PWA meta, so the sticky header must
+           viewport-fit=cover + standalone PWA meta, so the header should
            not underlap the status bar. */
         padding:
             calc(0.5rem + env(safe-area-inset-top, 0px))
@@ -748,10 +757,8 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         padding: 0.3rem 0.75rem;
         font-size: 0.9rem;
     }
-    /* The wrapped tab rows make the sticky header up to ~200px tall at
-       320px; the pending-card redirect targets /settings#billing, which
-       would land hidden under it. */
-    #billing { scroll-margin-top: 220px; }
+    /* With static mobile navbar, #billing only needs modest breathing room. */
+    #billing { scroll-margin-top: 1rem; }
 
     /* Account: inline email/logout are desktop-only; on mobile they collapse
        into a no-JS <details> menu. */
@@ -1243,6 +1250,9 @@ code {
     width: 100%;
     text-align: center;
     box-shadow: var(--shadow);
+}
+.auth-form {
+    text-align: left;
 }
 
 .auth-card h1 {

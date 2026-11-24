@@ -47,27 +47,27 @@
 {% endif %}
 
 <div class="stats-grid">
-    <div class="stat-card">
+    <a href="/accounts" class="stat-card">
         <span class="stat-value">{{ stats.accounts }}</span>
-        <span class="stat-label">Accounts</span>
-    </div>
-    <div class="stat-card">
+        <span class="stat-label">Destinations</span>
+    </a>
+    <a href="/feeds" class="stat-card">
         <span class="stat-value">{{ stats.feeds }}</span>
         <span class="stat-label">Feeds</span>
-    </div>
-    <div class="stat-card">
+    </a>
+    <a href="/echoes" class="stat-card">
         <span class="stat-value">{{ stats.active_echoes }}</span>
         <span class="stat-label">Active Echoes</span>
-    </div>
-    <div class="stat-card">
+    </a>
+    <a href="/history" class="stat-card">
         <span class="stat-value">{{ stats.total_posts }}</span>
         <span class="stat-label">Posts Sent</span>
-    </div>
+    </a>
     {% if stats.failed_posts > 0 %}
-    <div class="stat-card stat-warning">
+    <a href="/history?status=failed" class="stat-card stat-warning">
         <span class="stat-value">{{ stats.failed_posts }}</span>
         <span class="stat-label">Failed</span>
-    </div>
+    </a>
     {% endif %}
 </div>
 

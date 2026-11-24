@@ -11,7 +11,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f6f8">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css?v=67">
+    <link rel="stylesheet" href="/static/css/style.css?v=68">
     <link rel="apple-touch-icon" href="/favicon.svg">
     <script>
     // Set theme before first paint to avoid flash. Three states stored in
@@ -103,9 +103,7 @@
     {% if MULTI or authed %}
     <footer class="site-footer">
         <div class="footer-links">
-            {# /howto is behind the auth gate: linking it to an anonymous
-               viewer just bounces them back to the login page. #}
-            {% if MULTI %}<a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>{% if authed %} · {% endif %}{% endif %}{% if authed %}<a href="/howto">How To</a>{% endif %}
+            {% if MULTI %}<a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · {% endif %}<a href="/howto">How To</a>
         </div>
         {% if app_version %}
         <div class="footer-version">
@@ -115,6 +113,6 @@
         {% endif %}
     </footer>
     {% endif %}
-    <script src="/static/js/app.js?v=64"></script>
+    <script src="/static/js/app.js?v=65"></script>
 </body>
 </html>

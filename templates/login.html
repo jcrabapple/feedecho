@@ -3,10 +3,10 @@
 {% block content %}
 <div class="auth-container">
     <div class="auth-card">
-        <h1>FeedEcho</h1>
+        <h1>Log in</h1>
         <p class="auth-tagline">Watch your feeds. Echo them everywhere.</p>
         {% if multi %}
-        <p class="auth-subtitle">Log in to your account.</p>
+        <p class="auth-subtitle">Enter your email and password.</p>
         {% else %}
         <p class="auth-subtitle">Enter your access token to continue.</p>
         {% endif %}
@@ -20,12 +20,12 @@
         <form method="post" action="/login" class="auth-form">
             <div class="form-row">
                 <label for="login-email">Email</label>
-                <input type="email" name="email" id="login-email" placeholder="Email" required
+                <input type="email" name="email" id="login-email" placeholder="you@example.com" required
                        autocomplete="email" autofocus class="auth-input">
             </div>
             <div class="form-row">
                 <label for="login-password">Password</label>
-                <input type="password" name="password" id="login-password" placeholder="Password" required
+                <input type="password" name="password" id="login-password" placeholder="Enter your password" required
                        autocomplete="current-password" class="auth-input">
             </div>
             <button type="submit" class="btn">Log in</button>
@@ -36,7 +36,7 @@
         <form method="post" action="/login" class="auth-form">
             <div class="form-row">
                 <label for="login-token">Access token</label>
-                <input type="password" name="token" id="login-token" placeholder="Access token" required
+                <input type="password" name="token" id="login-token" placeholder="Paste your access token" required
                        autocomplete="off" autofocus class="auth-input">
             </div>
             <button type="submit" class="btn">Log in</button>

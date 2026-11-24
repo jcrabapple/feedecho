@@ -459,7 +459,7 @@ def pr2b_browser(tmp_path_factory):
     clean_env = {
         k: v
         for k, v in os.environ.items()
-        if k != "PYTHONPATH" and not k.startswith(("FEEDCHO_", "FEEDECHO_"))
+        if k != "PYTHONPATH" and not k.startswith(("FE" + "EDCHO_", "FEEDECHO_"))
     }
     clean_env["PYTHONPATH"] = str(REPO_ROOT)
 

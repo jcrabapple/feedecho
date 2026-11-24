@@ -75,19 +75,20 @@
             {% endfor %}
         </select>
     </label>
-        <label>Visibility
-            <select name="visibility">
-                <option value="public">Public</option>
-                <option value="unlisted">Unlisted</option>
-                <option value="private">Private (followers only)</option>
-                <option value="direct">Direct</option>
-            </select>
-        </label>
-        <label>Parse as Markdown
-            <input type="checkbox" name="use_markdown" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Send <code>content_type=text/markdown</code> (GoToSocial and other Markdown-capable APIs). Stock Mastodon ignores the field and treats the body as plain text.</span>
-        </label>
+    <label>Visibility
+        <select name="visibility">
+            <option value="public">Public</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="private">Private (followers only)</option>
+            <option value="direct">Direct</option>
+        </select>
+    </label>
+    <div class="check-field">
+        <input type="checkbox" id="echo-use-markdown" name="use_markdown" value="true" aria-describedby="echo-use-markdown-hint">
+        <label for="echo-use-markdown">Parse as Markdown</label>
+        <span class="hint" id="echo-use-markdown-hint">Send <code>content_type=text/markdown</code> (GoToSocial and other Markdown-capable APIs). Stock Mastodon ignores the field and treats the body as plain text.</span>
     </div>
+</div>
     <div class="form-row" id="email-fields"{{ dest_hidden('email') }}>
         <label>Email Address
             <select name="email_account_id">
@@ -96,10 +97,11 @@
                 {% endfor %}
             </select>
         </label>
-        <label>Render body as HTML
-            <input type="checkbox" name="render_html" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Instant mode only. The email's HTML part is your template output as-is — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links. Digests stay text-only.</span>
-        </label>
+        <div class="check-field">
+            <input type="checkbox" id="echo-email-render-html" name="render_html" value="true" aria-describedby="echo-email-render-html-hint">
+            <label for="echo-email-render-html">Render body as HTML</label>
+            <span class="hint" id="echo-email-render-html-hint">Instant mode only. The email's HTML part is your template output as-is — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links. Digests stay text-only.</span>
+        </div>
     </div>
     <div class="form-row" id="bluesky-fields"{{ dest_hidden('bluesky') }}>
         <label>Bluesky Account
@@ -108,60 +110,6 @@
                 <option value="{{ account.id }}">@{{ account.handle }}</option>
                 {% endfor %}
             </select>
-        </label>
-    </div>
-    <div class="form-row">
-        <label>Enabled
-            <input type="checkbox" name="enabled" value="true" checked>
-        </label>
-    </div>
-    <div class="form-row">
-        <label>Template
-            <textarea name="template" rows="3" placeholder="{{ '{{ title }} {{ link }}' }}">{{ '{{ title }} {{ link }}' }}</textarea>
-        </label>
-        <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
-        <span class="hint" style="margin: 0.2rem 0 0;">Jinja2 template. Use Preview to render it against this feed's latest items before saving.</span>
-    </div>
-    <details class="template-vars" open>
-        <summary>Available template variables</summary>
-        <div class="vars-table-wrap">
-        <table class="vars-table">
-            {% for v in template_vars %}
-            <tr>
-                <td><code>{{ v.var }}</code></td>
-                <td>{{ v.desc }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        </div>
-        <div class="template-help">
-            <p>Templates are Jinja2, so you can use conditionals and filters:</p>
-            {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
-            <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
-            <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
-            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
-        </div>
-    </details>
-    <div class="form-row">
-        <label>Keyword filter
-            <input type="text" name="filter_keywords" placeholder="e.g. spoiler, giveaway, nsfw">
-            <span class="hint" style="margin: 0.2rem 0 0;">Comma-separated, case-insensitive. Plain text matches title and summary; prefixes <code>tag:</code>, <code>author:</code>, <code>url:</code> (or <code>link:</code>), and <code>content:</code> match that field.</span>
-        </label>
-        <label>Filter mode
-            <select name="filter_mode">
-                <option value="exclude">Exclude matching items</option>
-                <option value="include">Only include matching items</option>
-            </select>
-        </label>
-    </div>
-    <div class="form-row">
-        <label>Content warning
-            <input type="text" name="content_warning" placeholder="e.g. Spoilers, US Politics" maxlength="500">
-            <span class="hint" style="margin: 0.2rem 0 0;">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
-        </label>
-        <label>Attach image
-            <input type="checkbox" name="attach_image" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Attach the feed item's images. Mastodon and Bluesky attach up to 4 with alt text where available; email embeds up to 4 inline in instant mode; Matrix, micro.blog, and Discord use the first image. Webhook deliveries always include image_url in the payload.</span>
         </label>
     </div>
     <div class="form-row" id="microblog-fields"{{ dest_hidden('microblog') }}>
@@ -181,10 +129,11 @@
                 {% endfor %}
             </select>
         </label>
-        <label>Render body as HTML
-            <input type="checkbox" name="render_html" value="true">
-            <span class="hint" style="margin: 0.2rem 0 0;">Send the rendered output as the room's formatted body — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links.</span>
-        </label>
+        <div class="check-field">
+            <input type="checkbox" id="echo-matrix-render-html" name="render_html" value="true" aria-describedby="echo-matrix-render-html-hint">
+            <label for="echo-matrix-render-html">Render body as HTML</label>
+            <span class="hint" id="echo-matrix-render-html-hint">Send the rendered output as the room's formatted body — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links.</span>
+        </div>
     </div>
     <div class="form-row" id="discord-fields"{{ dest_hidden('discord') }}>
         <label>Discord Channel
@@ -221,32 +170,99 @@
                 {% endfor %}
             </select>
         </label>
-        <label>File path template
-            {% raw %}<input type="text" name="github_path" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md">{% endraw %}
-            <span class="hint" style="margin: 0.2rem 0 0;">Repo-relative path for each item's file, rendered per item. Required — use <code>{% raw %}{{ title | slug }}{% endraw %}</code> for filename-safe titles and <code>{% raw %}{{ date_iso }}{% endraw %}</code>/<code>{% raw %}{{ date_short }}{% endraw %}</code> for dates. A file that already exists at the path is overwritten (re-echoes update in place). Paths containing <code>..</code> are rejected.</span>
-        </label>
-        <label>Commit message template (optional)
-            {% raw %}<input type="text" name="github_commit" placeholder="Add {{ title }}">{% endraw %}
-            <span class="hint" style="margin: 0.2rem 0 0;">Defaults to <code>{% raw %}Add {{ title }}{% endraw %}</code>. Your echo template becomes the file body — write any front matter there.</span>
-        </label>
+        <div class="form-field">
+            <label for="echo-github-path">File path template</label>
+            {% raw %}<input type="text" id="echo-github-path" name="github_path" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="echo-github-path-hint">{% endraw %}
+            <span class="hint" id="echo-github-path-hint">Repo-relative path for each item's file, rendered per item. Required — use <code>{% raw %}{{ title | slug }}{% endraw %}</code> for filename-safe titles and <code>{% raw %}{{ date_iso }}{% endraw %}</code>/<code>{% raw %}{{ date_short }}{% endraw %}</code> for dates. A file that already exists at the path is overwritten (re-echoes update in place). Paths containing <code>..</code> are rejected.</span>
+        </div>
+        <div class="form-field">
+            <label for="echo-github-commit">Commit message template (optional)</label>
+            {% raw %}<input type="text" id="echo-github-commit" name="github_commit" placeholder="Add {{ title }}" aria-describedby="echo-github-commit-hint">{% endraw %}
+            <span class="hint" id="echo-github-commit-hint">Defaults to <code>{% raw %}Add {{ title }}{% endraw %}</code>. Your echo template becomes the file body — write any front matter there.</span>
+        </div>
     </div>
+    <div class="form-row">
+        <div class="check-field">
+            <input type="checkbox" id="echo-enabled" name="enabled" value="true" checked>
+            <label for="echo-enabled">Enabled</label>
+        </div>
+        <div class="check-field" id="attach-image-fields">
+            <input type="checkbox" id="echo-attach-image" name="attach_image" value="true" aria-describedby="echo-attach-image-hint">
+            <label for="echo-attach-image">Attach image</label>
+            <span class="hint" id="echo-attach-image-hint">Attach the feed item's images. Mastodon and Bluesky attach up to 4 with alt text where available; email embeds up to 4 inline in instant mode; Matrix, micro.blog, and Discord use the first image. Webhook deliveries always include image_url in the payload.</span>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-field">
+            <label for="echo-template">Template</label>
+            <textarea id="echo-template" name="template" rows="3" placeholder="{{ '{{ title }} {{ link }}' }}" aria-describedby="echo-template-hint">{{ '{{ title }} {{ link }}' }}</textarea>
+            <span class="hint" id="echo-template-hint">Jinja2 template. Use Preview to render it against this feed's latest items before saving.</span>
+        </div>
+        <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
+    </div>
+    <details class="template-vars">
+        <summary>Available template variables</summary>
+        <div class="vars-table-wrap">
+        <table class="vars-table">
+            {% for v in template_vars %}
+            <tr>
+                <td><code>{{ v.var }}</code></td>
+                <td>{{ v.desc }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        </div>
+        <div class="template-help">
+            <p>Templates are Jinja2, so you can use conditionals and filters:</p>
+            {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
+            <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
+            <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
+            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
+        </div>
+    </details>
     <div class="form-row" id="delivery-mode-fields">
-        <label>Delivery mode
-            <select name="delivery_mode" onchange="toggleDestFields()">
+        <div class="form-field">
+            <label for="echo-delivery-mode">Delivery mode</label>
+            <select id="echo-delivery-mode" name="delivery_mode" onchange="toggleDestFields()" aria-describedby="echo-delivery-mode-hint">
                 <option value="instant">Instant (post each item as it arrives)</option>
                 <option value="digest">Digest (batch items into one email, sent hourly)</option>
                 <option value="queue">Auto-queue (schedule into the curation queue)</option>
                 <option value="review">Review (stage in the queue as a draft for approval)</option>
             </select>
-            <span class="hint" style="margin: 0.2rem 0 0;">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only. Auto-queue and Review stage items in the curation queue instead of posting immediately.</span>
-        </label>
+            <span class="hint" id="echo-delivery-mode-hint">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only. Auto-queue and Review stage items in the curation queue instead of posting immediately.</span>
+        </div>
     </div>
-    <div class="form-row" id="drip-fields">
-        <label>Max posts per hour
-            <input type="number" name="drip_limit" min="0" max="1000" value="0" style="max-width: 8rem;">
-            <span class="hint" style="margin: 0.2rem 0 0;">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
-        </label>
-    </div>
+    <details class="echo-advanced-options">
+        <summary>Filters, content warning &amp; rate limits (optional)</summary>
+        <div class="form-row">
+            <div class="form-field">
+                <label for="echo-filter-keywords">Keyword filter</label>
+                <input type="text" id="echo-filter-keywords" name="filter_keywords" placeholder="e.g. spoiler, giveaway, nsfw" aria-describedby="echo-filter-keywords-hint">
+                <span class="hint" id="echo-filter-keywords-hint">Comma-separated, case-insensitive. Plain text matches title and summary; prefixes <code>tag:</code>, <code>author:</code>, <code>url:</code> (or <code>link:</code>), and <code>content:</code> match that field.</span>
+            </div>
+            <div class="form-field">
+                <label for="echo-filter-mode">Filter mode</label>
+                <select id="echo-filter-mode" name="filter_mode">
+                    <option value="exclude">Exclude matching items</option>
+                    <option value="include">Only include matching items</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-field">
+                <label for="echo-content-warning">Content warning</label>
+                <input type="text" id="echo-content-warning" name="content_warning" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="echo-content-warning-hint">
+                <span class="hint" id="echo-content-warning-hint">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+            </div>
+        </div>
+        <div class="form-row" id="drip-fields">
+            <div class="form-field">
+                <label for="echo-drip-limit">Max posts per hour</label>
+                <input type="number" id="echo-drip-limit" name="drip_limit" min="0" max="1000" value="0" style="max-width: 8rem;" aria-describedby="echo-drip-limit-hint">
+                <span class="hint" id="echo-drip-limit-hint">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
+            </div>
+        </div>
+    </details>
     <input type="hidden" name="return_to" value="{{ return_to }}">
     <button type="submit">Create Echo</button>
 </form>
@@ -258,11 +274,11 @@
 <table class="data-table">
     <thead>
         <tr>
-            <th>Feed</th>
-            <th>Destination</th>
-            <th>Visibility</th>
-            <th>Status</th>
-            <th>Actions</th>
+            <th scope="col">Feed</th>
+            <th scope="col">Destination</th>
+            <th scope="col">Visibility</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -417,48 +433,17 @@
 <script id="github-options" type="text/html">
     {% for a in github_accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ a.repo }}, {{ a.branch }})</option>{% endfor %}
 </script>
-
-<script>
-function toggleDestFields() {
-    const destType = document.getElementById('destination-type').value;
-    document.getElementById('mastodon-fields').style.display = destType === 'mastodon' ? '' : 'none';
-    document.getElementById('email-fields').style.display = destType === 'email' ? '' : 'none';
-    document.getElementById('bluesky-fields').style.display = destType === 'bluesky' ? '' : 'none';
-    document.getElementById('microblog-fields').style.display = destType === 'microblog' ? '' : 'none';
-    document.getElementById('matrix-fields').style.display = destType === 'matrix' ? '' : 'none';
-    document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
-    document.getElementById('telegram-fields').style.display = destType === 'telegram' ? '' : 'none';
-    document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
-    document.getElementById('github-fields').style.display = destType === 'github' ? '' : 'none';
-    // The github path/commit inputs must not ride along onto another
-    // destination type: hidden inputs still submit, so disable everything in
-    // the github row whenever it is not the selected destination. (The edit
-    // route ALSO normalizes github_path/github_commit to '' for non-github
-    // echoes — this is the belt, that is the suspenders.)
-    const githubRow = document.getElementById('github-fields');
-    if (githubRow) {
-        githubRow.querySelectorAll('input, select').forEach((el) => {
-            el.disabled = githubRow.style.display === 'none';
-        });
-    }
-    // The delivery-mode row is always visible: digest is only selectable for
-    // email destinations (disabled otherwise), and the drip row applies to
-    // instant mode alone.
-    const digestOption = document.querySelector('select[name="delivery_mode"] option[value="digest"]');
-    if (digestOption) digestOption.disabled = destType !== 'email';
-    const dripFields = document.getElementById('drip-fields');
-    if (dripFields) {
-        const deliveryMode = document.querySelector('select[name="delivery_mode"]');
-        dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
-    }
-    // The render_html checkbox exists in BOTH the email and Matrix rows.
-    // Hidden checkboxes still submit, so a destination switch would leak the
-    // hidden row's state — disable every checkbox that is not visible.
-    document.querySelectorAll('input[name="render_html"]').forEach((cb) => {
-        const row = cb.closest('.form-row');
-        cb.disabled = !row || row.style.display === 'none';
-    });
-}
-toggleDestFields();
+<script id="template-vars-html" type="text/html">
+    <summary>Available template variables</summary>
+    <div class="vars-table-wrap">
+    <table class="vars-table">
+        {% for v in template_vars %}
+        <tr>
+            <td><code>{{ v.var }}</code></td>
+            <td>{{ v.desc }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
 </script>
 {% endblock %}

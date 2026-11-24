@@ -665,6 +665,13 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
         flex: 1 0 100%;
         min-width: 0;
     }
+    .feed-edit-form .form-row > label.feed-url-field {
+        flex: 2 1 280px;
+    }
+    .feed-edit-form .form-row > label.feed-poll-field {
+        flex: 0 0 8.5rem;
+        min-width: 7.5rem;
+    }
 }
 .feed-edit-form .check-row {
     display: flex;
@@ -881,6 +888,12 @@ h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; }
     /* Column direction makes flex-basis a height: undo the desktop basis. */
     .feed-edit-form .form-row > label,
     .feed-edit-form .form-row > .form-full {
+        flex: none;
+        min-width: 0;
+        width: 100%;
+    }
+    .feed-edit-form .form-row > label.feed-url-field,
+    .feed-edit-form .form-row > label.feed-poll-field {
         flex: none;
         min-width: 0;
         width: 100%;
@@ -2123,5 +2136,179 @@ details.account-section > summary:focus-visible {
     .queue-cadence-field input[type="time"],
     .queue-cadence-check {
         width: 100%;
+    }
+}
+
+/* ── Wave 2 PR 2C: Forms, Echoes disclosure, Account rotation & History ─── */
+.form-field {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+.form-field > label {
+    flex: none;
+}
+.form-field > .hint {
+    margin: 0.2rem 0 0;
+}
+
+.check-field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+}
+.check-field > label {
+    flex: 0 1 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9rem;
+    color: var(--text);
+    width: auto;
+}
+.check-field > input[type="checkbox"],
+.check-field > label > input[type="checkbox"] {
+    margin-top: 0;
+    flex: 0 0 auto;
+}
+.check-field > .hint {
+    flex: 1 0 100%;
+    margin: 0.1rem 0 0;
+}
+
+.echo-advanced-options {
+    margin: 0.35rem 0 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.15rem 0.65rem;
+    background: var(--bg);
+}
+.echo-advanced-options > summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text);
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+}
+.echo-advanced-options[open] {
+    padding-bottom: 0.5rem;
+}
+.echo-advanced-options[open] > summary {
+    margin-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.account-rotate {
+    display: inline-block;
+    vertical-align: top;
+}
+.account-rotate > summary.btn-sm {
+    min-height: 44px;
+    min-width: 44px;
+    list-style: none;
+}
+.account-rotate > summary.btn-sm::-webkit-details-marker {
+    display: none;
+}
+.account-rotate[open] {
+    display: block;
+    margin-top: 0.4rem;
+    white-space: normal;
+    text-align: left;
+}
+.account-rotate-form {
+    margin-top: 0.35rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-width: 24rem;
+    white-space: normal;
+    text-align: left;
+}
+.account-rotate-form label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.account-rotate-form input,
+.account-rotate-form textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: inherit;
+    min-height: 44px;
+}
+.account-rotate-form textarea {
+    font-family: 'Courier New', monospace;
+    min-height: 64px;
+}
+.account-rotate-form input:focus,
+.account-rotate-form textarea:focus {
+    border-color: var(--primary);
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+.account-rotate-form button {
+    align-self: flex-start;
+    min-height: 44px;
+    margin: 0.15rem 0 0;
+}
+
+.history-account-cell {
+    display: inline-block;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+@media (max-width: 640px) {
+    .form-field,
+    .check-field {
+        width: 100%;
+    }
+    .check-field > label {
+        width: auto;
+    }
+    .account-rotate {
+        display: block;
+        margin-top: 0.25rem;
+    }
+    .account-rotate-form {
+        max-width: 100%;
+    }
+    .history-account-cell {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        flex: 1 1 auto;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        text-align: right;
+    }
+    .history-account-cell small {
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+    .data-table td.cell-empty {
+        display: none;
     }
 }

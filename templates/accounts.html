@@ -71,6 +71,10 @@
 <div class="alert alert-success" role="status">GitHub repository deleted.</div>
 {% endif %}
 
+{% if request.query_params.get('status') == 'updated' %}
+<div class="alert alert-success" role="status">Account credentials updated.</div>
+{% endif %}
+
 <div class="account-sections-toolbar">
     <button type="button" class="btn-sm" onclick="setAccountSections(true)">Expand all</button>
     <button type="button" class="btn-sm" onclick="setAccountSections(false)">Collapse all</button>
@@ -210,7 +214,7 @@
     <div class="account-section-body">
         <section>
             <h2>Connect Bluesky</h2>
-            <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored only in FeedEcho's local database. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
+            <p class="hint">Create an <strong>App Password</strong> in Bluesky (Settings → Privacy &amp; Security → App Passwords) and enter it here. It is stored {% if MULTI %}encrypted at rest and used only to post on your behalf{% else %}only in FeedEcho's local database{% endif %}. App passwords can post on your behalf but cannot change account settings or log in to the Bluesky app.</p>
             <form method="post" action="/api/bluesky-accounts" class="inline-form stacked">
                 <label for="bsky-name">Display name</label>
                 <input type="text" name="name" id="bsky-name" placeholder="Display name">
@@ -242,6 +246,14 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('bluesky', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update credentials</summary>
+                            <form method="post" action="/api/accounts/bluesky/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-bluesky-{{ account.id }}">New app password</label>
+                                <input type="password" name="app_password" id="rotate-bluesky-{{ account.id }}" value="" placeholder="xxxx-xxxx-xxxx-xxxx" required autocomplete="off">
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/bluesky-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this account? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -291,6 +303,14 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('microblog', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update token</summary>
+                            <form method="post" action="/api/accounts/microblog/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-microblog-{{ account.id }}">New app token</label>
+                                <input type="password" name="token" id="rotate-microblog-{{ account.id }}" value="" placeholder="Micro.blog app token" required autocomplete="off">
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/microblog-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this blog? Any echo that posts through it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -348,6 +368,14 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('matrix', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update token</summary>
+                            <form method="post" action="/api/accounts/matrix/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-matrix-{{ account.id }}">New access token</label>
+                                <input type="password" name="access_token" id="rotate-matrix-{{ account.id }}" value="" placeholder="Matrix access token" required autocomplete="off">
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/matrix-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this room? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -399,6 +427,14 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('discord', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update URL</summary>
+                            <form method="post" action="/api/accounts/discord/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-discord-{{ account.id }}">New webhook URL</label>
+                                <input type="password" name="webhook_url" id="rotate-discord-{{ account.id }}" value="" placeholder="https://discord.com/api/webhooks/…" required autocomplete="off">
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/discord-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -420,14 +456,14 @@
     <div class="account-section-body">
         <section>
             <h2>Connect Webhook</h2>
-            <p class="hint">Post feed items as JSON to any HTTP endpoint. Works with Slack and Mattermost incoming webhooks, ntfy and Gotify notifications, Zapier or n8n, or anything you run yourself. Each item arrives as one JSON object: <code>text</code> (your template output) plus <code>title</code>, <code>link</code>, <code>summary</code>, <code>content</code>, <code>content_link</code>, <code>author</code>, <code>published</code>, <code>tags</code>, <code>image_url</code>, <code>image_alt</code>, <code>id</code>, and <code>feed_name</code>. Custom headers are optional and go in one per line, like <code>Authorization: Bearer your-token</code> — header values are stored like credentials and are never shown again.</p>
+            <p class="hint">Post feed items as JSON to any HTTP endpoint. Works with Slack and Mattermost incoming webhooks, ntfy and Gotify notifications, Zapier or n8n, or anything you run yourself. Each item arrives as one JSON object: <code>text</code> (your template output) plus <code>title</code>, <code>link</code>, <code>summary</code>, <code>content</code>, <code>content_link</code>, <code>author</code>, <code>published</code>, <code>tags</code>, <code>image_url</code>, <code>image_alt</code>, <code>id</code>, and <code>feed_name</code>. Custom headers are optional and go in one per line, like <code>Authorization: Bearer &lt;token&gt;</code> — header values are stored like credentials and are never shown again.</p>
             <form method="post" action="/api/webhook-accounts" class="inline-form stacked">
                 <label for="webhook-url">Webhook URL</label>
                 <input type="password" name="url" id="webhook-url" placeholder="https://hooks.example.com/feedecho" required autocomplete="off">
                 <label for="webhook-name">Display name (optional)</label>
                 <input type="text" name="name" id="webhook-name" placeholder="n8n workflow">
                 <label for="webhook-headers">Headers (optional)</label>
-                <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer your-token&#10;X-Custom-Header: value"></textarea>
+                <textarea name="headers_text" id="webhook-headers" rows="3" placeholder="Authorization: Bearer &lt;token&gt;&#10;X-Custom-Header: value"></textarea>
                 <label for="webhook-body-template">Custom JSON body (optional)</label>
                 {% raw %}<textarea name="body_template" id="webhook-body-template" rows="5" placeholder='{"title": {{ title | tojson }}, "message": {{ (summary or title) | tojson }}, "open_url": {{ link | tojson }}, "thread_id": {{ feed_name | tojson }}}'></textarea>{% endraw %}
                 {% raw %}<p class="hint">Give the endpoint a different body shape than the default payload. It uses the same variables as echo templates, must render to a JSON object, and is checked when you connect. Important: embed text with the <code>tojson</code> filter and no surrounding quotes — <code>{{ title | tojson }}</code>, not <code>"{{ title }}"</code> — so titles containing quotes or newlines stay valid JSON. Handy for push services: the placeholder above is the shape brrr (brrr.now) expects. Leave blank to keep any stored template on reconnect; enter <code>{}</code> to remove one.</p>{% endraw %}
@@ -459,6 +495,16 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('webhook', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update credentials</summary>
+                            <form method="post" action="/api/accounts/webhook/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-webhook-url-{{ account.id }}">New webhook URL (optional)</label>
+                                <input type="password" name="url" id="rotate-webhook-url-{{ account.id }}" value="" placeholder="https://hooks.example.com/feedecho" autocomplete="off">
+                                <label for="rotate-webhook-headers-{{ account.id }}">New headers (optional; {} clears)</label>
+                                <textarea name="headers_text" id="rotate-webhook-headers-{{ account.id }}" rows="2" autocomplete="off"></textarea>
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/webhook-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this webhook? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -521,6 +567,14 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('github', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update token</summary>
+                            <form method="post" action="/api/accounts/github/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-github-{{ account.id }}">New personal access token</label>
+                                <input type="password" name="token" id="rotate-github-{{ account.id }}" value="" placeholder="github_pat_…" required autocomplete="off">
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/github-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this GitHub repository? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>
@@ -574,6 +628,14 @@
                     <td data-label="Added"><small>{% if account.created_at %}<time class="local-time" datetime="{{ account.created_at | iso_utc }}">{{ account.created_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
                     <td data-label="Actions" class="action-cell">
                         <button class="btn-sm" onclick="withBusy(this, (btn) => testDestinationAccount('telegram', {{ account.id }}, btn))">Test</button>
+                        <details class="account-rotate">
+                            <summary class="btn-sm">Update token</summary>
+                            <form method="post" action="/api/accounts/telegram/{{ account.id }}/credentials" class="account-rotate-form">
+                                <label for="rotate-telegram-{{ account.id }}">New bot token</label>
+                                <input type="password" name="bot_token" id="rotate-telegram-{{ account.id }}" value="" placeholder="123456789:AAE…" required autocomplete="off">
+                                <button type="submit" class="btn-sm btn-primary">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/api/telegram-accounts/{{ account.id }}/delete" class="inline">
                             <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this Telegram account? Any echo that posts to it will stop working until you point it somewhere else.')">Delete</button>
                         </form>

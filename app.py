@@ -1318,7 +1318,7 @@ def _shout_destinations(user_id: int):
     return out
 
 
-def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
+def _render_accounts_error(request: Request, message: str, status_code: int = 200) -> HTMLResponse:
     """Render the accounts page with an error banner."""
     uid = current_user_id(request)
     (
@@ -1336,6 +1336,7 @@ def _render_accounts_error(request: Request, message: str) -> HTMLResponse:
     return render(
         "accounts.html",
         request,
+        status_code=status_code,
         mastodon_accounts=mastodon_accounts,
         email_accounts=email_accounts,
         bluesky_accounts=bluesky_accounts,
@@ -2849,15 +2850,26 @@ def _parse_destination_filter(value: str) -> tuple[str | None, int | None]:
     return None, None
 
 
+_HISTORY_ALLOWED_STATUSES = ("success", "failed", "gave_up", "filtered", "queued")
+
+
 @app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request, feed: str = "", account: str = "", item_id: str = ""):
-    """Post history, newest first, optionally filtered by feed, destination, and item_id.
+async def history_page(
+    request: Request,
+    feed: str = "",
+    account: str = "",
+    status: str = "",
+    item_id: str = "",
+):
+    """Post history, newest first, optionally filtered by feed, destination, status, and item_id.
 
     Filters are applied in SQL, before the LIMIT (issue #16).
     """
     uid = current_user_id(request)
     feed_id = _filter_int(feed)
     dest_type, dest_id = _parse_destination_filter(account)
+    status_cand = status.strip() if status else ""
+    status_filter = status_cand if status_cand in _HISTORY_ALLOWED_STATUSES else ""
     item_id_filter = item_id.strip() if item_id else ""
 
     where = ["e.user_id = ?"]
@@ -2869,6 +2881,9 @@ async def history_page(request: Request, feed: str = "", account: str = "", item
         where.append("e.destination_type = ?")
         where.append("e.destination_id = ?")
         params.extend([dest_type, dest_id])
+    if status_filter:
+        where.append("pi.status = ?")
+        params.append(status_filter)
     if item_id_filter:
         where.append("pi.item_id = ?")
         params.append(item_id_filter)
@@ -2926,9 +2941,15 @@ async def history_page(request: Request, feed: str = "", account: str = "", item
         filters={
             "feed": str(feed_id) if feed_id is not None else "",
             "account": f"{dest_type}:{dest_id}" if dest_type is not None else "",
+            "status": status_filter,
             "item_id": item_id_filter,
         },
-        filtered=feed_id is not None or dest_type is not None or bool(item_id_filter),
+        filtered=(
+            feed_id is not None
+            or dest_type is not None
+            or bool(status_filter)
+            or bool(item_id_filter)
+        ),
     )
 
 
@@ -3435,8 +3456,10 @@ def _render_settings(request: Request, **extra) -> HTMLResponse:
     """Build the settings page context and render it (used by the GET page
     and by the import handler's error/success render)."""
     uid = current_user_id(request)
-    smtp_settings = _get_smtp_settings(mask_password=True, user_id=uid)
+    smtp_settings = dict(_get_smtp_settings(mask_password=True, user_id=uid))
     smtp_configured = bool(smtp_settings.get("smtp_host"))
+    smtp_has_password = bool(smtp_settings.get("smtp_password"))
+    smtp_settings["smtp_password"] = ""
     with get_db() as db:
         rows = db.execute(
             """SELECT key, value FROM settings
@@ -3455,15 +3478,16 @@ def _render_settings(request: Request, **extra) -> HTMLResponse:
     retry_notify = {r["key"]: r["value"] for r in rows}
     alt_text_settings = {r["key"]: r["value"] for r in alt_rows}
     alt_text_configured = bool(alt_text_settings.get("alt_text_ai_base_url"))
-    # Mask the API key before sending to the browser
-    if alt_text_settings.get("alt_text_ai_api_key"):
-        alt_text_settings["alt_text_ai_api_key"] = "********"
+    alt_text_has_api_key = bool(alt_text_settings.get("alt_text_ai_api_key"))
+    alt_text_settings["alt_text_ai_api_key"] = ""
     return render("settings.html", request,
                   smtp_settings=smtp_settings,
                   smtp_configured=smtp_configured,
+                  smtp_has_password=smtp_has_password,
                   retry_notify=retry_notify,
                   alt_text_settings=alt_text_settings,
                   alt_text_configured=alt_text_configured,
+                  alt_text_has_api_key=alt_text_has_api_key,
                   **extra)
 
 
@@ -4660,6 +4684,208 @@ def delete_github_account(request: Request, account_id: int):
             (account_id, uid),
         )
     return RedirectResponse(url="/accounts?status=github_deleted", status_code=303)
+
+
+_ROTATABLE_ACCOUNT_TABLES = {
+    "mastodon": "accounts",
+    "bluesky": "bluesky_accounts",
+    "microblog": "microblog_accounts",
+    "matrix": "matrix_accounts",
+    "discord": "discord_accounts",
+    "telegram": "telegram_accounts",
+    "webhook": "webhook_accounts",
+    "github": "github_accounts",
+}
+
+
+@app.post("/api/accounts/{dest_type}/{account_id}/credentials")
+@app.post("/api/{dest_type}-accounts/{account_id}/credentials")
+def rotate_account_credentials(
+    request: Request,
+    dest_type: str,
+    account_id: int,
+    credential: str = Form(""),
+    app_password: str = Form(""),
+    token: str = Form(""),
+    access_token: str = Form(""),
+    webhook_url: str = Form(""),
+    bot_token: str = Form(""),
+    url: str = Form(""),
+    headers_text: str = Form(""),
+):
+    """Rotate credentials in place without deleting/recreating dependent echoes.
+
+    Declared synchronous (`def`, threadpool-offloaded) because webhook URL
+    normalization runs `validate_outbound_url` (blocking DNS + SSRF checks).
+    """
+    table = _ROTATABLE_ACCOUNT_TABLES.get(dest_type)
+    if not table:
+        raise HTTPException(status_code=404, detail="Unknown destination type")
+
+    uid = current_user_id(request)
+    with get_db() as db:
+        existing = db.execute(
+            f"SELECT * FROM {table} WHERE id = ? AND user_id = ?",
+            (account_id, uid),
+        ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if dest_type == "bluesky":
+        secret = (app_password or credential).strip()
+        if not secret:
+            return _render_accounts_error(
+                request, "Enter a new Bluesky app password.", status_code=400
+            )
+        enc = security.encrypt_secret(secret)
+        with get_db() as db:
+            db.execute(
+                "UPDATE bluesky_accounts"
+                " SET app_password = ?, access_jwt = '', refresh_jwt = '', session_expires_at = ''"
+                " WHERE id = ? AND user_id = ?",
+                (enc, account_id, uid),
+            )
+    elif dest_type == "microblog":
+        secret = (token or credential).strip()
+        if not secret:
+            return _render_accounts_error(
+                request, "Enter a new Micro.blog app token.", status_code=400
+            )
+        enc = security.encrypt_secret(secret)
+        with get_db() as db:
+            db.execute(
+                "UPDATE microblog_accounts SET token = ? WHERE id = ? AND user_id = ?",
+                (enc, account_id, uid),
+            )
+    elif dest_type == "matrix":
+        secret = (access_token or credential).strip()
+        if not secret:
+            return _render_accounts_error(
+                request, "Enter a new Matrix access token.", status_code=400
+            )
+        enc = security.encrypt_secret(secret)
+        with get_db() as db:
+            db.execute(
+                "UPDATE matrix_accounts SET access_token = ? WHERE id = ? AND user_id = ?",
+                (enc, account_id, uid),
+            )
+    elif dest_type == "mastodon":
+        secret = (access_token or credential).strip()
+        if not secret:
+            return _render_accounts_error(
+                request, "Enter a new Mastodon access token.", status_code=400
+            )
+        enc = security.encrypt_secret(secret)
+        with get_db() as db:
+            db.execute(
+                "UPDATE accounts SET access_token = ? WHERE id = ? AND user_id = ?",
+                (enc, account_id, uid),
+            )
+    elif dest_type == "discord":
+        raw_url = (webhook_url or credential).strip()
+        if not raw_url:
+            return _render_accounts_error(
+                request, "Paste the new Discord webhook URL.", status_code=400
+            )
+        try:
+            normalized_dc = discord_normalize_webhook_url(raw_url)
+        except ValueError as e:
+            return _render_accounts_error(request, str(e), status_code=400)
+        url_hash = security.hash_secret(normalized_dc)
+        enc = security.encrypt_secret(normalized_dc)
+        with get_db() as db:
+            dup = db.execute(
+                "SELECT id FROM discord_accounts WHERE user_id = ? AND webhook_url_hash = ? AND id != ?",
+                (uid, url_hash, account_id),
+            ).fetchone()
+            if dup:
+                return _render_accounts_error(
+                    request,
+                    "That Discord webhook URL is already connected on another row.",
+                    status_code=400,
+                )
+            db.execute(
+                "UPDATE discord_accounts SET webhook_url = ?, webhook_url_hash = ?"
+                " WHERE id = ? AND user_id = ?",
+                (enc, url_hash, account_id, uid),
+            )
+    elif dest_type == "telegram":
+        raw_tok = (bot_token or credential).strip()
+        if not raw_tok:
+            return _render_accounts_error(
+                request, "Enter a new Telegram bot token.", status_code=400
+            )
+        try:
+            normalized_tok = telegram.normalize_bot_token(raw_tok)
+        except ValueError as e:
+            return _render_accounts_error(request, str(e), status_code=400)
+        enc = security.encrypt_secret(normalized_tok)
+        with get_db() as db:
+            db.execute(
+                "UPDATE telegram_accounts SET bot_token = ? WHERE id = ? AND user_id = ?",
+                (enc, account_id, uid),
+            )
+    elif dest_type == "github":
+        secret = (token or credential).strip()
+        if not secret or secret == "{}":
+            return _render_accounts_error(
+                request, "Enter a new GitHub personal access token.", status_code=400
+            )
+        enc = security.encrypt_secret(secret)
+        with get_db() as db:
+            db.execute(
+                "UPDATE github_accounts SET token = ? WHERE id = ? AND user_id = ?",
+                (enc, account_id, uid),
+            )
+    elif dest_type == "webhook":
+        raw_url = (url or credential).strip()
+        raw_headers = headers_text or ""
+        if not raw_url and not raw_headers.strip():
+            return _render_accounts_error(
+                request,
+                "Enter a new webhook URL or custom headers to update.",
+                status_code=400,
+            )
+        normalized_wh_url = None
+        if raw_url:
+            try:
+                normalized_wh_url = webhook_normalize_url(raw_url)
+            except ValueError as e:
+                return _render_accounts_error(request, str(e), status_code=400)
+        new_headers_json = None
+        if raw_headers.strip():
+            if raw_headers.strip() == "{}":
+                new_headers_json = "{}"
+            else:
+                if len(raw_headers) > MAX_HEADERS_TEXT:
+                    return _render_accounts_error(
+                        request, "Headers are too long.", status_code=400
+                    )
+                try:
+                    parsed_hdrs = webhook_parse_headers(raw_headers)
+                except ValueError as e:
+                    return _render_accounts_error(request, str(e), status_code=400)
+                new_headers_json = dump_headers(parsed_hdrs)
+        with get_db() as db:
+            if normalized_wh_url is not None:
+                dup = db.execute(
+                    "SELECT id FROM webhook_accounts WHERE user_id = ? AND url = ? AND id != ?",
+                    (uid, normalized_wh_url, account_id),
+                ).fetchone()
+                if dup:
+                    return _render_accounts_error(
+                        request,
+                        "That webhook URL is already connected on another row.",
+                        status_code=400,
+                    )
+            final_url = normalized_wh_url if normalized_wh_url is not None else existing["url"]
+            final_headers = new_headers_json if new_headers_json is not None else existing["headers"]
+            db.execute(
+                "UPDATE webhook_accounts SET url = ?, headers = ? WHERE id = ? AND user_id = ?",
+                (final_url, final_headers, account_id, uid),
+            )
+
+    return RedirectResponse(url="/accounts?status=updated", status_code=303)
 
 
 # ── API: Settings ───────────────────────────────────────────────────────────

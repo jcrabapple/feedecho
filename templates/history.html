@@ -20,6 +20,15 @@
         <option value="{{ option.value }}"{% if filters.account == option.value %} selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
     </select>
+    <label for="history-status">Status</label>
+    <select name="status" id="history-status">
+        <option value="">All statuses</option>
+        <option value="success"{% if filters.status == 'success' %} selected{% endif %}>Success</option>
+        <option value="failed"{% if filters.status == 'failed' %} selected{% endif %}>Failed</option>
+        <option value="gave_up"{% if filters.status == 'gave_up' %} selected{% endif %}>Gave up</option>
+        <option value="filtered"{% if filters.status == 'filtered' %} selected{% endif %}>Filtered</option>
+        <option value="queued"{% if filters.status == 'queued' %} selected{% endif %}>Queued</option>
+    </select>
     <button type="submit">Filter</button>
     {% if filtered %}<a class="filter-clear" href="/history">Clear</a>{% endif %}
 </form>
@@ -30,13 +39,13 @@
 <table class="data-table">
     <thead>
         <tr>
-            <th>Time</th>
-            <th>Feed</th>
-            <th>Account</th>
-            <th>Item</th>
-            <th>Status</th>
-            <th>Error</th>
-            <th>Actions</th>
+            <th scope="col">Time</th>
+            <th scope="col">Feed</th>
+            <th scope="col">Account</th>
+            <th scope="col">Item</th>
+            <th scope="col">Status</th>
+            <th scope="col">Error</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -44,7 +53,7 @@
         <tr>
             <td data-label="Time"><small>{% if post.posted_at %}<time class="local-time" datetime="{{ post.posted_at | iso_utc }}">{{ post.posted_at | utc_text }} UTC</time>{% else %}—{% endif %}</small></td>
             <td data-label="Feed">{{ post.feed_name }}</td>
-            <td data-label="Account">{{ post.account_name }}<br><small>{{ post.instance }}</small></td>
+            <td data-label="Account"><span class="history-account-cell">{{ post.account_name }}{% if post.instance %}<br><small>{{ post.instance }}</small>{% endif %}</span></td>
             <td data-label="Item">
                 {% if post.item_url | safe_url %}
                 <a href="{{ post.item_url | safe_url }}" target="_blank" rel="noopener">{{ post.item_title[:60] }}{% if post.item_title|length > 60 %}…{% endif %}</a>
@@ -73,8 +82,8 @@
                 {% if post.attempt_count %}<br><small>attempt {{ post.attempt_count }}{% if post.next_retry_at %} · retry <time class="local-time" datetime="{{ post.next_retry_at | iso_utc }}">{{ post.next_retry_at | utc_text }} UTC</time>{% endif %}</small>{% endif %}
                 {% endif %}
             </td>
-            <td data-label="Error"><small>{{ post.error_message or '' }}</small></td>
-            <td data-label="Actions" class="action-cell">
+            <td data-label="Error"{% if not post.error_message %} class="cell-empty"{% endif %}><small>{{ post.error_message or '' }}</small></td>
+            <td data-label="Actions" class="action-cell{% if post.status not in ('failed', 'gave_up') %} cell-empty{% endif %}">
                 {% if post.status in ('failed', 'gave_up') %}
                 <button class="btn-sm" onclick="withBusy(this, (btn) => retryPost({{ post.id }}, btn))">Retry</button>
                 {% endif %}

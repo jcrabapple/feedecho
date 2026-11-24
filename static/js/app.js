@@ -166,7 +166,7 @@ function editFeed(feedId) {
     if (kwList.length) {
         chipsHtml = `<div class="mute-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.4rem;">` +
             kwList.map((kw) => `<span class="badge badge-muted mute-chip" style="display:inline-flex; align-items:center; gap:0.3rem;">` +
-                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" data-mute-kw="${escapeHTML(kw)}" onclick="removeFeedMuteChip(${feedId}, this.dataset.muteKw)" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
+                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" data-mute-kw="${escapeHTML(kw)}" onclick="removeFeedMuteChip(${feedId}, this.dataset.muteKw, this)" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
             `</span>`).join('') +
             `</div>`;
     }
@@ -177,10 +177,10 @@ function editFeed(feedId) {
                 <label>Name
                     <input type="text" name="name" value="${escapeHTML(name)}" required>
                 </label>
-                <label>Feed URL
+                <label class="feed-url-field">Feed URL
                     <input type="url" name="url" value="${escapeHTML(url)}" required>
                 </label>
-                <label>Poll interval (min)
+                <label class="feed-poll-field">Poll interval (min)
                     <input type="number" name="poll_interval" min="1" max="1440" value="${escapeHTML(pollInterval)}">
                 </label>
                 <label>Folder
@@ -188,7 +188,7 @@ function editFeed(feedId) {
                         ${folderOptions}
                     </select>
                 </label>
-                <label>Mute keywords (comma-separated)
+                <label class="form-full">Mute keywords (comma-separated)
                     <input type="text" id="feed-mute-input-${feedId}" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                     ${chipsHtml}
                 </label>
@@ -209,8 +209,8 @@ function editFeed(feedId) {
             </div>
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
             <div class="form-row edit-actions">
-                <button type="submit" class="btn-sm">Save</button>
                 <button type="button" class="btn-sm" onclick="cancelFeedEdit(${feedId})">Cancel</button>
+                <button type="submit" class="btn-sm btn-primary">Save</button>
             </div>
         </form>
     </td>`;
@@ -220,15 +220,29 @@ function editFeed(feedId) {
     row.querySelector('input, select, textarea')?.focus();
 }
 
-function removeFeedMuteChip(feedId, kwToRemove) {
+function removeFeedMuteChip(feedId, kwToRemove, btnEl) {
     const input = document.getElementById(`feed-mute-input-${feedId}`);
     if (!input) return;
     const existing = input.value.split(',').map(s => s.trim()).filter(Boolean);
     const updated = existing.filter(k => k.toLowerCase() !== kwToRemove.toLowerCase());
     input.value = updated.join(', ');
-    const row = document.getElementById(`feed-row-${feedId}`);
-    if (row) row.dataset.muteKeywords = input.value;
-    editFeed(feedId);
+    let chip = btnEl ? btnEl.closest('.mute-chip') : null;
+    if (!chip) {
+        const buttons = document.querySelectorAll(`#feed-row-${feedId} .btn-chip-remove`);
+        for (const b of buttons) {
+            if ((b.dataset.muteKw || '').toLowerCase() === kwToRemove.toLowerCase()) {
+                chip = b.closest('.mute-chip');
+                break;
+            }
+        }
+    }
+    if (chip) {
+        const wrap = chip.parentElement;
+        chip.remove();
+        if (wrap && wrap.classList.contains('mute-chips') && !wrap.querySelector('.mute-chip')) {
+            wrap.remove();
+        }
+    }
 }
 
 async function retryPost(postedId, btn) {
@@ -341,6 +355,15 @@ function editEcho(echoId) {
     const webhookStyle = destType === 'webhook' ? '' : 'display:none';
     const githubStyle = destType === 'github' ? '' : 'display:none';
 
+    const hasAdvanced = Boolean(
+        filterKeywords.trim() || contentWarning.trim() || Number(dripLimit) > 0
+    );
+    const varsScript = document.getElementById('template-vars-html');
+    const pageVars = document.querySelector('.echo-form details.template-vars');
+    const varsInner = varsScript
+        ? varsScript.innerHTML.trim()
+        : (pageVars ? pageVars.innerHTML : '<summary>Available template variables</summary>');
+
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form" aria-label="Edit echo">
             <div class="form-row">
@@ -373,17 +396,21 @@ function editEcho(echoId) {
                         <option value="direct"${visibility === 'direct' ? ' selected' : ''}>Direct</option>
                     </select>
                 </label>
-                <label>Parse as Markdown
-                    <input type="checkbox" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-use-md-${echoId}" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''} aria-describedby="edit-use-md-hint-${echoId}">
+                    <label for="edit-use-md-${echoId}">Parse as Markdown</label>
+                    <span class="hint" id="edit-use-md-hint-${echoId}">Send <code>content_type=text/markdown</code> (GoToSocial and Markdown-capable APIs).</span>
+                </div>
             </div>
             <div class="form-row" id="edit-email-fields-${echoId}" style="${emailStyle}">
                 <label>Email Address
                     <select name="email_account_id">${emailOpts}</select>
                 </label>
-                <label>Render body as HTML
-                    <input type="checkbox" name="render_html" value="true"${renderHtml ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-email-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-email-html-hint-${echoId}">
+                    <label for="edit-email-html-${echoId}">Render body as HTML</label>
+                    <span class="hint" id="edit-email-html-hint-${echoId}">Instant mode only. Digests stay text-only.</span>
+                </div>
             </div>
             <div class="form-row" id="edit-bluesky-fields-${echoId}" style="${blueskyStyle}">
                 <label>Bluesky Account
@@ -399,9 +426,11 @@ function editEcho(echoId) {
                 <label>Matrix Room
                     <select name="matrix_account_id">${matrixOpts}</select>
                 </label>
-                <label>Render body as HTML
-                    <input type="checkbox" name="render_html" value="true"${renderHtml ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-matrix-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-matrix-html-hint-${echoId}">
+                    <label for="edit-matrix-html-${echoId}">Render body as HTML</label>
+                    <span class="hint" id="edit-matrix-html-hint-${echoId}">Send rendered output as formatted room body.</span>
+                </div>
             </div>
             <div class="form-row" id="edit-discord-fields-${echoId}" style="${discordStyle}">
                 <label>Discord Channel
@@ -422,63 +451,82 @@ function editEcho(echoId) {
                 <label>GitHub Repository
                     <select name="github_account_id">${githubOpts}</select>
                 </label>
-                <label>File path template
-                    <input type="text" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md">
-                </label>
-                <label>Commit message template (optional)
-                    <input type="text" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
-                </label>
+                <div class="form-field">
+                    <label for="edit-gh-path-${echoId}">File path template</label>
+                    <input type="text" id="edit-gh-path-${echoId}" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="edit-gh-path-hint-${echoId}">
+                    <span class="hint" id="edit-gh-path-hint-${echoId}">Repo-relative path rendered per item (paths containing <code>..</code> are rejected).</span>
+                </div>
+                <div class="form-field">
+                    <label for="edit-gh-commit-${echoId}">Commit message template (optional)</label>
+                    <input type="text" id="edit-gh-commit-${echoId}" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
+                </div>
             </div>
             <div class="form-row">
-                <label>Enabled
-                    <input type="checkbox" name="enabled" value="true"${enabled ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-enabled-${echoId}" name="enabled" value="true"${enabled ? ' checked' : ''}>
+                    <label for="edit-enabled-${echoId}">Enabled</label>
+                </div>
+                <div class="check-field" id="edit-attach-image-fields-${echoId}">
+                    <input type="checkbox" id="edit-attach-img-${echoId}" name="attach_image" value="true"${attachImage ? ' checked' : ''} aria-describedby="edit-attach-img-hint-${echoId}">
+                    <label for="edit-attach-img-${echoId}">Attach image</label>
+                    <span class="hint" id="edit-attach-img-hint-${echoId}">Attach feed item images when supported by the destination.</span>
+                </div>
             </div>
             <div class="form-row">
-                <label>Template
-                    <textarea name="template" rows="3">${escapeHTML(template)}</textarea>
-                </label>
-                <!-- Button outside the label: interactive content inside <label>
-                     is invalid HTML and activating it also targets the textarea. -->
+                <div class="form-field">
+                    <label for="edit-template-${echoId}">Template</label>
+                    <textarea id="edit-template-${echoId}" name="template" rows="3" aria-describedby="edit-template-hint-${echoId}">${escapeHTML(template)}</textarea>
+                    <span class="hint" id="edit-template-hint-${echoId}">Jinja2 template. Use Preview to render against latest items.</span>
+                </div>
                 <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
             </div>
-            <div class="form-row">
-                <label>Keyword filter
-                    <input type="text" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason">
-                </label>
-                <label>Filter mode
-                    <select name="filter_mode">
-                        <option value="exclude"${filterMode === 'exclude' ? ' selected' : ''}>Exclude matching items</option>
-                        <option value="include"${filterMode === 'include' ? ' selected' : ''}>Only include matching items</option>
-                    </select>
-                </label>
-            </div>
-            <div class="form-row">
-                <label>Content warning
-                    <input type="text" name="content_warning" value="${escapeHTML(contentWarning)}" placeholder="e.g. Spoilers, US Politics" maxlength="500">
-                </label>
-                <label>Attach image
-                    <input type="checkbox" name="attach_image" value="true"${attachImage ? ' checked' : ''}>
-                </label>
-            </div>
+            <details class="template-vars">${varsInner}</details>
             <div class="form-row" id="edit-digest-fields-${echoId}">
-                <label>Delivery mode
-                    <select name="delivery_mode" onchange="toggleEditDest(${echoId})">
+                <div class="form-field">
+                    <label for="edit-delivery-mode-${echoId}">Delivery mode</label>
+                    <select id="edit-delivery-mode-${echoId}" name="delivery_mode" onchange="toggleEditDest(${echoId})" aria-describedby="edit-delivery-hint-${echoId}">
                         <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (post each item as it arrives)</option>
                         <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
                         <option value="queue"${deliveryMode === 'queue' ? ' selected' : ''}>Auto-queue (schedule into the curation queue)</option>
                         <option value="review"${deliveryMode === 'review' ? ' selected' : ''}>Review (stage in the queue as a draft for approval)</option>
                     </select>
-                </label>
+                    <span class="hint" id="edit-delivery-hint-${echoId}">Digest mode is available for Email destinations only.</span>
+                </div>
             </div>
-            <div class="form-row" id="edit-drip-fields-${echoId}">
-                <label>Max posts per hour
-                    <input type="number" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}">
-                </label>
-            </div>
+            <details class="echo-advanced-options"${hasAdvanced ? ' open' : ''}>
+                <summary>Filters, content warning &amp; rate limits (optional)</summary>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="edit-filter-kw-${echoId}">Keyword filter</label>
+                        <input type="text" id="edit-filter-kw-${echoId}" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason" aria-describedby="edit-filter-kw-hint-${echoId}">
+                        <span class="hint" id="edit-filter-kw-hint-${echoId}">Comma-separated, case-insensitive; supports <code>tag:</code>, <code>author:</code>, <code>url:</code>, <code>content:</code>.</span>
+                    </div>
+                    <div class="form-field">
+                        <label for="edit-filter-mode-${echoId}">Filter mode</label>
+                        <select id="edit-filter-mode-${echoId}" name="filter_mode">
+                            <option value="exclude"${filterMode === 'exclude' ? ' selected' : ''}>Exclude matching items</option>
+                            <option value="include"${filterMode === 'include' ? ' selected' : ''}>Only include matching items</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="edit-cw-${echoId}">Content warning</label>
+                        <input type="text" id="edit-cw-${echoId}" name="content_warning" value="${escapeHTML(contentWarning)}" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="edit-cw-hint-${echoId}">
+                        <span class="hint" id="edit-cw-hint-${echoId}">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+                    </div>
+                </div>
+                <div class="form-row" id="edit-drip-fields-${echoId}">
+                    <div class="form-field">
+                        <label for="edit-drip-${echoId}">Max posts per hour</label>
+                        <input type="number" id="edit-drip-${echoId}" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}" style="max-width: 8rem;" aria-describedby="edit-drip-hint-${echoId}">
+                        <span class="hint" id="edit-drip-hint-${echoId}">0 = off. Excess items queue and release as the 1-hour window slides.</span>
+                    </div>
+                </div>
+            </details>
             <div class="form-row edit-actions">
-                <button type="submit" class="btn-sm">Save</button>
                 <button type="button" class="btn-sm" onclick="cancelEdit(${echoId})">Cancel</button>
+                <button type="submit" class="btn-sm btn-primary">Save</button>
             </div>
         </form>
     </td>`;
@@ -515,6 +563,52 @@ function editEcho(echoId) {
     row.querySelector('input, select, textarea')?.focus();
 }
 
+function toggleDestFields() {
+    const destSelect = document.getElementById('destination-type');
+    if (!destSelect) return;
+    const destType = destSelect.value;
+    document.getElementById('mastodon-fields').style.display = destType === 'mastodon' ? '' : 'none';
+    document.getElementById('email-fields').style.display = destType === 'email' ? '' : 'none';
+    document.getElementById('bluesky-fields').style.display = destType === 'bluesky' ? '' : 'none';
+    document.getElementById('microblog-fields').style.display = destType === 'microblog' ? '' : 'none';
+    document.getElementById('matrix-fields').style.display = destType === 'matrix' ? '' : 'none';
+    document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
+    document.getElementById('telegram-fields').style.display = destType === 'telegram' ? '' : 'none';
+    document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
+    document.getElementById('github-fields').style.display = destType === 'github' ? '' : 'none';
+    const githubRow = document.getElementById('github-fields');
+    if (githubRow) {
+        githubRow.querySelectorAll('input, select').forEach((el) => {
+            el.disabled = githubRow.style.display === 'none';
+        });
+    }
+    const form = destSelect.closest('form') || document;
+    const deliveryMode = form.querySelector('select[name="delivery_mode"]');
+    const digestOption = deliveryMode?.querySelector('option[value="digest"]');
+    if (digestOption) digestOption.disabled = destType !== 'email';
+    if (deliveryMode && destType !== 'email' && deliveryMode.value === 'digest') {
+        deliveryMode.value = 'instant';
+    }
+    const dripFields = document.getElementById('drip-fields');
+    if (dripFields) {
+        dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
+    }
+    const attachRow = document.getElementById('attach-image-fields');
+    const attachCb = document.getElementById('echo-attach-image') || form.querySelector('input[name="attach_image"]');
+    if (attachRow) attachRow.style.display = destType === 'github' ? 'none' : '';
+    if (attachCb) {
+        attachCb.disabled = destType === 'github';
+        if (destType === 'github') attachCb.checked = false;
+    }
+    form.querySelectorAll('input[name="render_html"]').forEach((cb) => {
+        const row = cb.closest('.form-row');
+        cb.disabled = !row || row.style.display === 'none';
+    });
+}
+if (document.getElementById('destination-type')) {
+    toggleDestFields();
+}
+
 function toggleEditDest(echoId) {
     const destType = document.getElementById(`edit-dest-type-${echoId}`).value;
     document.getElementById(`edit-mastodon-fields-${echoId}`).style.display = destType === 'mastodon' ? '' : 'none';
@@ -541,12 +635,22 @@ function toggleEditDest(echoId) {
     // The delivery-mode row is always visible; digest is only selectable for
     // email destinations, and the drip row applies to instant mode alone.
     if (digestFields) digestFields.style.display = '';
-    const digestOption = digestFields?.querySelector('option[value="digest"]');
+    const deliveryMode = digestFields?.querySelector('select[name="delivery_mode"]');
+    const digestOption = deliveryMode?.querySelector('option[value="digest"]');
     if (digestOption) digestOption.disabled = destType !== 'email';
+    if (deliveryMode && destType !== 'email' && deliveryMode.value === 'digest') {
+        deliveryMode.value = 'instant';
+    }
     const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);
     if (dripFields) {
-        const deliveryMode = digestFields?.querySelector('select[name="delivery_mode"]');
         dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
+    }
+    const attachEditRow = document.getElementById(`edit-attach-image-fields-${echoId}`);
+    const attachEditCb = attachEditRow?.querySelector('input[name="attach_image"]');
+    if (attachEditRow) attachEditRow.style.display = destType === 'github' ? 'none' : '';
+    if (attachEditCb) {
+        attachEditCb.disabled = destType === 'github';
+        if (destType === 'github') attachEditCb.checked = false;
     }
     // render_html checkboxes live in BOTH the email and Matrix edit rows;
     // hidden ones still submit, so disable them to prevent a hidden row's

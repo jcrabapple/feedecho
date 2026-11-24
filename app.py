@@ -2169,7 +2169,7 @@ async def feeds_page(
 
 
 @app.get("/queue", response_class=HTMLResponse)
-async def queue_page(request: Request):
+def queue_page(request: Request):
     """Curation desk queue: human-scheduled posts waiting for release (Phase 3)."""
     uid = current_user_id(request)
     with get_db() as db:
@@ -2185,9 +2185,35 @@ async def queue_page(request: Request):
             (uid,),
         ).fetchall()
 
+        setting_rows = db.execute(
+            "SELECT destination_key, queue_interval_minutes, queue_active_hours FROM queue_settings WHERE user_id = ?",
+            (uid,),
+        ).fetchall()
+
         # Destination labels map
         dests = _shout_destinations(uid)
         dest_labels = {d["value"]: d["label"] for d in dests}
+        settings_by_dest = {sr["destination_key"]: sr for sr in setting_rows}
+
+        cadence_destinations = []
+        for d in dests:
+            dk = d["value"]
+            sr = settings_by_dest.get(dk)
+            interval = int(sr["queue_interval_minutes"]) if (sr and sr["queue_interval_minutes"] is not None) else 240
+            active_hours = sr["queue_active_hours"] if (sr and sr["queue_active_hours"] is not None) else "09:00-21:00"
+            start_utc, end_utc = "09:00", "21:00"
+            if active_hours and "-" in active_hours:
+                parts = active_hours.split("-", 1)
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    start_utc, end_utc = parts[0], parts[1]
+            cadence_destinations.append({
+                "destination_key": dk,
+                "label": d["label"],
+                "queue_interval_minutes": interval,
+                "queue_active_hours": active_hours,
+                "active_start_utc": start_utc,
+                "active_end_utc": end_utc,
+            })
 
         # Formatted list
         posts = []
@@ -2205,7 +2231,12 @@ async def queue_page(request: Request):
                 "error_message": r["error_message"],
             })
 
-    return render("queue.html", request, posts=posts)
+    return render(
+        "queue.html",
+        request,
+        posts=posts,
+        cadence_destinations=cadence_destinations,
+    )
 
 
 @app.post("/api/queue/{post_id}/post-now")
@@ -2462,6 +2493,125 @@ def queue_reorder(request: Request, post_id: int, direction: str = Form(...)):
             db.execute("UPDATE queued_posts SET scheduled_at = ? WHERE id = ?", (t1, adj["id"]))
 
     return RedirectResponse(url="/queue", status_code=303)
+
+
+@app.post("/api/queue/{post_id}/approve")
+def queue_approve(
+    request: Request,
+    post_id: int,
+    scheduled_at: str = Form(""),
+):
+    uid = current_user_id(request)
+    raw_sched = scheduled_at.strip()
+    explicit_slot: str | None = None
+    if raw_sched:
+        norm_dt = as_utc_naive(raw_sched)
+        if not norm_dt:
+            raise HTTPException(status_code=400, detail="Invalid scheduled_at datetime")
+        explicit_slot = norm_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        row = db.execute(
+            "SELECT id, status, destination_type, destination_id FROM queued_posts WHERE id = ? AND user_id = ?",
+            (post_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Queued post not found")
+        if row["status"] != "draft":
+            raise HTTPException(status_code=400, detail="Only draft posts can be approved")
+
+        slot = explicit_slot if explicit_slot is not None else next_free_slot(
+            db, uid, row["destination_type"], row["destination_id"]
+        )
+        updated = db.execute(
+            "UPDATE queued_posts SET status = 'queued', scheduled_at = ? WHERE id = ? AND user_id = ? AND status = 'draft'",
+            (slot, post_id, uid),
+        )
+        if updated.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Post is no longer a draft")
+
+    if request.headers.get("accept", "").startswith("application/json"):
+        return {"success": True, "scheduled_at": slot}
+    return RedirectResponse(url="/queue", status_code=303)
+
+
+_HHMM_RE = re.compile(r"^[0-9]{2}:[0-9]{2}$")
+
+
+def _parse_hhmm_minutes(value: str) -> int | None:
+    if not _HHMM_RE.match(value):
+        return None
+    hh, mm = int(value[:2]), int(value[3:5])
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return hh * 60 + mm
+
+
+@app.post("/api/queue/settings")
+def save_queue_settings(
+    request: Request,
+    destination_key: str = Form(""),
+    queue_interval_minutes: str = Form(""),
+    active_hours_enabled: str = Form(""),
+    active_start: str = Form(""),
+    active_end: str = Form(""),
+    tz_offset_minutes: str = Form("0"),
+    form_mode: str = Form(""),
+):
+    uid = current_user_id(request)
+    dest_key = destination_key.strip()
+    try:
+        interval = int(queue_interval_minutes.strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid queue_interval_minutes")
+    interval = max(15, min(10080, interval))
+
+    try:
+        tz_offset = int((tz_offset_minutes or "0").strip() or "0")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tz_offset_minutes")
+    tz_offset = max(-840, min(840, tz_offset))
+
+    start_s = active_start.strip()
+    end_s = active_end.strip()
+    enabled_s = active_hours_enabled.strip().lower()
+
+    if (
+        enabled_s in ("0", "false", "off")
+        or (form_mode == "1" and enabled_s not in ("1", "true", "on"))
+        or (not start_s and not end_s)
+    ):
+        stored_active_hours = ""
+    else:
+        start_mins = _parse_hhmm_minutes(start_s)
+        end_mins = _parse_hhmm_minutes(end_s)
+        if start_mins is None or end_mins is None:
+            raise HTTPException(status_code=400, detail="Invalid active hours HH:MM")
+        utc_start = (start_mins + tz_offset) % 1440
+        utc_end = (end_mins + tz_offset) % 1440
+        stored_active_hours = (
+            f"{utc_start // 60:02d}:{utc_start % 60:02d}-"
+            f"{utc_end // 60:02d}:{utc_end % 60:02d}"
+        )
+
+    with get_db() as db:
+        _require_reader(db, uid)
+        valid_dests = {d["value"] for d in _shout_destinations(uid)}
+        if not dest_key or dest_key not in valid_dests:
+            raise HTTPException(status_code=400, detail="Invalid destination_key")
+        db.execute(
+            """
+            INSERT INTO queue_settings (user_id, destination_key, queue_interval_minutes, queue_active_hours)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id, destination_key) DO UPDATE SET
+                queue_interval_minutes = excluded.queue_interval_minutes,
+                queue_active_hours = excluded.queue_active_hours
+            """,
+            (uid, dest_key, interval, stored_active_hours),
+        )
+
+    return RedirectResponse(url="/queue?status=saved", status_code=303)
 
 
 @app.get("/accounts", response_class=HTMLResponse)

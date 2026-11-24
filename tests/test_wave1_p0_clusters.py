@@ -201,8 +201,8 @@ window.__feContrast = function(el) {
 class TestWave1CssAndTemplatePins:
     def test_cache_buster_v64_and_js_v61_preserved(self):
         base = _read("templates/base.html")
-        assert "style.css?v=64" in base
-        assert "app.js?v=61" in base
+        assert "style.css?v=65" in base
+        assert "app.js?v=62" in base
 
     def test_base_link_banner_and_focus_rules_present(self):
         css = _read("static/css/style.css")

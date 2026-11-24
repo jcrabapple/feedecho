@@ -1314,6 +1314,213 @@ async function queuePostNow(postId, btn) {
     }
 }
 
+let _queueEditOpener = null;
+
+function _pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+function _dateToDatetimeLocal(d) {
+    return (
+        d.getFullYear() + '-' +
+        _pad2(d.getMonth() + 1) + '-' +
+        _pad2(d.getDate()) + 'T' +
+        _pad2(d.getHours()) + ':' +
+        _pad2(d.getMinutes())
+    );
+}
+
+function _parseDatetimeLocal(localVal) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec((localVal || '').trim());
+    if (!m) return null;
+    const d = new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        m[6] ? Number(m[6]) : 0
+    );
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function _dateToUtcSql(d) {
+    return (
+        d.getUTCFullYear() + '-' +
+        _pad2(d.getUTCMonth() + 1) + '-' +
+        _pad2(d.getUTCDate()) + ' ' +
+        _pad2(d.getUTCHours()) + ':' +
+        _pad2(d.getUTCMinutes()) + ':' +
+        _pad2(d.getUTCSeconds())
+    );
+}
+
+function updateQueueEditPreview() {
+    const localInput = document.getElementById('queue-edit-local-dt');
+    const utcInput = document.getElementById('queue-edit-utc-dt');
+    const preview = document.getElementById('queue-edit-tz-preview');
+    if (!localInput || !utcInput) return false;
+    const d = _parseDatetimeLocal(localInput.value);
+    if (!d) {
+        utcInput.value = '';
+        if (preview) preview.textContent = 'Select a valid local date and time.';
+        return false;
+    }
+    const utcStr = _dateToUtcSql(d);
+    utcInput.value = utcStr;
+    const locales = (navigator.languages && navigator.languages.length) ? navigator.languages : undefined;
+    if (preview) {
+        preview.textContent = `Local: ${d.toLocaleString(locales)} · UTC: ${utcStr} UTC`;
+    }
+    return true;
+}
+
+function openQueueEdit(postId, btn) {
+    const row = document.getElementById(`queue-row-${postId}`);
+    const dlg = document.getElementById('queue-edit-dialog');
+    const form = document.getElementById('queue-edit-form');
+    if (!row || !dlg || !form) return;
+    _queueEditOpener = btn || null;
+
+    form.action = `/api/queue/${postId}/edit`;
+    const titleEl = document.getElementById('queue-edit-title');
+    if (titleEl) {
+        titleEl.textContent = row.dataset.status === 'draft' ? 'Edit draft post' : 'Edit queued post';
+    }
+    const subEl = document.getElementById('queue-edit-subtitle');
+    if (subEl) {
+        subEl.textContent = row.dataset.destination || '';
+    }
+    const contentEl = document.getElementById('queue-edit-content');
+    if (contentEl) {
+        contentEl.value = row.dataset.content || '';
+    }
+
+    const localInput = document.getElementById('queue-edit-local-dt');
+    let d = row.dataset.scheduledIso ? new Date(row.dataset.scheduledIso) : null;
+    if (!d || isNaN(d.getTime())) {
+        d = new Date();
+        d.setSeconds(0, 0);
+    }
+    if (localInput) {
+        localInput.value = _dateToDatetimeLocal(d);
+    }
+    updateQueueEditPreview();
+    dlg.showModal();
+    if (contentEl) contentEl.focus();
+}
+
+function closeQueueEdit() {
+    const dlg = document.getElementById('queue-edit-dialog');
+    if (dlg && dlg.open) dlg.close();
+}
+
+function syncQueueEditSubmit(form) {
+    if (!updateQueueEditPreview()) return false;
+    const contentEl = form.querySelector('textarea[name="content"]');
+    if (!contentEl || !contentEl.value.trim()) return false;
+    return true;
+}
+
+function _utcHmToLocal(hm, tzOffsetMins) {
+    const m = /^(\d{2}):(\d{2})$/.exec(hm || '');
+    if (!m) return hm || '';
+    const utcMins = Number(m[1]) * 60 + Number(m[2]);
+    const localMins = ((utcMins - tzOffsetMins) % 1440 + 1440) % 1440;
+    return _pad2(Math.floor(localMins / 60)) + ':' + _pad2(localMins % 60);
+}
+
+function _localHmToUtc(hm, tzOffsetMins) {
+    const m = /^(\d{2}):(\d{2})$/.exec(hm || '');
+    if (!m) return '';
+    const localMins = Number(m[1]) * 60 + Number(m[2]);
+    const utcMins = ((localMins + tzOffsetMins) % 1440 + 1440) % 1440;
+    return _pad2(Math.floor(utcMins / 60)) + ':' + _pad2(utcMins % 60);
+}
+
+function initQueuePage() {
+    if (window.location.pathname === '/queue' && window.history && history.replaceState) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('status')) {
+            url.searchParams.delete('status');
+            history.replaceState(null, '', url.pathname + (url.search || '') + (url.hash || ''));
+        }
+    }
+
+    const editLocalInput = document.getElementById('queue-edit-local-dt');
+    if (editLocalInput) {
+        editLocalInput.addEventListener('input', updateQueueEditPreview);
+        editLocalInput.addEventListener('change', updateQueueEditPreview);
+    }
+    const editDlg = document.getElementById('queue-edit-dialog');
+    if (editDlg) {
+        editDlg.addEventListener('close', () => {
+            if (_queueEditOpener && typeof _queueEditOpener.focus === 'function') {
+                _queueEditOpener.focus();
+            }
+            _queueEditOpener = null;
+        });
+    }
+
+    document.querySelectorAll('form.queue-cadence-form').forEach((form) => {
+        const tzInput = form.querySelector('input[name="tz_offset_minutes"]');
+        const enabledBox = form.querySelector('input[name="active_hours_enabled"]');
+        const startInput = form.querySelector('input[name="active_start"]');
+        const endInput = form.querySelector('input[name="active_end"]');
+        const previewEl = form.querySelector('.queue-cadence-preview');
+        const utcWindow = (form.dataset.utcWindow || '').trim();
+        const tzOffset = new Date().getTimezoneOffset();
+
+        if (tzInput) tzInput.value = String(tzOffset);
+        const winMatch = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(utcWindow);
+        if (winMatch) {
+            if (enabledBox) enabledBox.checked = true;
+            if (startInput) startInput.value = _utcHmToLocal(winMatch[1], tzOffset);
+            if (endInput) endInput.value = _utcHmToLocal(winMatch[2], tzOffset);
+        } else {
+            if (enabledBox) enabledBox.checked = false;
+            if (startInput && !startInput.value) startInput.value = '09:00';
+            if (endInput && !endInput.value) endInput.value = '21:00';
+        }
+
+        const syncState = () => {
+            const curOffset = new Date().getTimezoneOffset();
+            if (tzInput) tzInput.value = String(curOffset);
+            const on = enabledBox ? enabledBox.checked : false;
+            if (startInput) {
+                startInput.disabled = !on;
+                startInput.required = on;
+            }
+            if (endInput) {
+                endInput.disabled = !on;
+                endInput.required = on;
+            }
+            if (previewEl) {
+                if (!on) {
+                    previewEl.textContent = '24h (posts any hour)';
+                } else {
+                    const uStart = _localHmToUtc(startInput ? startInput.value : '', curOffset);
+                    const uEnd = _localHmToUtc(endInput ? endInput.value : '', curOffset);
+                    previewEl.textContent = (uStart && uEnd) ? `UTC window: ${uStart}–${uEnd}` : '';
+                }
+            }
+        };
+
+        syncState();
+        if (enabledBox) enabledBox.addEventListener('change', syncState);
+        if (startInput) {
+            startInput.addEventListener('input', syncState);
+            startInput.addEventListener('change', syncState);
+        }
+        if (endInput) {
+            endInput.addEventListener('input', syncState);
+            endInput.addEventListener('change', syncState);
+        }
+        form.addEventListener('submit', syncState);
+    });
+}
+initQueuePage();
+
 // Live character / grapheme counter updates
 document.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'compose-body') {

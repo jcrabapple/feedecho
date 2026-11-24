@@ -1937,3 +1937,166 @@ details.account-section > summary:focus-visible {
     font-size: 0.8125rem;
     padding: 0.25rem 0.45rem;
 }
+
+/* ── Curation Queue: cadence panel, edit modal & 44px touch targets ─────── */
+.queue-page .btn-sm,
+.queue-edit-dialog .btn-sm {
+    min-height: 44px;
+    min-width: 44px;
+}
+.queue-cadence-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1.25rem;
+}
+.queue-cadence-summary {
+    cursor: pointer;
+    padding: 0.5rem 1rem;
+    min-height: 44px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text);
+    list-style: none;
+    user-select: none;
+}
+.queue-cadence-summary::-webkit-details-marker { display: none; }
+.queue-cadence-summary::after {
+    content: "▾";
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+}
+.queue-cadence-panel:not([open]) > .queue-cadence-summary::after {
+    transform: rotate(-90deg);
+}
+.queue-cadence-body {
+    padding: 0.75rem 1rem 1rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+.queue-cadence-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid var(--border);
+}
+.queue-cadence-form:last-child {
+    padding-bottom: 0;
+    border-bottom: none;
+}
+.queue-cadence-dest {
+    flex: 1 0 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.35rem 0.75rem;
+}
+.queue-cadence-preview {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.queue-cadence-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    min-width: 0;
+}
+.queue-cadence-field input[type="number"],
+.queue-cadence-field input[type="time"] {
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+}
+.queue-cadence-field input[type="number"] {
+    width: 7.5rem;
+}
+.queue-cadence-field input:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.queue-cadence-field input:focus,
+.queue-edit-dialog input[type="datetime-local"]:focus {
+    border-color: var(--primary);
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+.queue-cadence-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.75rem;
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+}
+.queue-cadence-check input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--primary);
+    flex-shrink: 0;
+}
+.queue-cadence-form .btn-sm {
+    margin-right: 0;
+    margin-bottom: 0;
+}
+.queue-edit-dialog[open] {
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+}
+.queue-edit-dialog input[type="datetime-local"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.95rem;
+    min-height: 44px;
+    min-width: 44px;
+}
+.queue-edit-dialog .compose-actions .btn-sm {
+    margin-right: 0;
+    margin-bottom: 0;
+}
+@media (max-width: 640px) {
+    .queue-page .data-table td.action-cell::before {
+        display: block;
+    }
+    .queue-cadence-field {
+        flex: 1 1 100%;
+    }
+    .queue-cadence-field input[type="number"],
+    .queue-cadence-field input[type="time"],
+    .queue-cadence-check {
+        width: 100%;
+    }
+}

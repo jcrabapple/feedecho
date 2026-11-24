@@ -17,7 +17,7 @@
         {% for s in saved_searches %}
         <li class="reader-feed reader-saved-search-item {% if current_saved_search == s.id | string %}active{% endif %}" data-saved-search-id="{{ s.id }}">
           <a class="reader-feed-link" href="/reader?saved={{ s.id }}{% if fulltext %}&fulltext=1{% endif %}">
-            <span class="reader-feed-avatar" aria-hidden="true" style="background:var(--primary-wash); color:var(--primary);">🔍</span>
+            <span class="reader-feed-avatar" aria-hidden="true" style="background:var(--primary-wash); color:var(--primary);"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <span class="reader-feed-name" title="{{ s.query }}">{{ s.name }}</span>
             <span class="reader-feed-meta">
               {% if saved_search_counts and saved_search_counts[s.id] %}

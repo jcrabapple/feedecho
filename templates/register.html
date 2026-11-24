@@ -3,25 +3,25 @@
 {% block content %}
 <div class="auth-container">
     <div class="auth-card">
-        <h1>FeedEcho</h1>
-        <p class="auth-subtitle">Create your account. 14-day free trial — card required, but nothing is charged until the trial ends.</p>
+        <h1>Create your account</h1>
+        <p class="auth-subtitle">14-day free trial — card required, but nothing is charged until the trial ends.</p>
         {% if error %}
         <div class="alert alert-error" role="alert">{{ error }}</div>
         {% endif %}
         <form method="post" action="/register" class="auth-form">
             <div class="form-row">
                 <label for="register-email">Email</label>
-                <input type="email" name="email" id="register-email" placeholder="Email" required
+                <input type="email" name="email" id="register-email" placeholder="you@example.com" required
                        value="{{ email or '' }}" autocomplete="email" autofocus class="auth-input">
             </div>
             <div class="form-row">
                 <label for="register-password">Password</label>
-                <input type="password" name="password" id="register-password" placeholder="Password (8+ characters)" required
+                <input type="password" name="password" id="register-password" placeholder="At least 8 characters" required
                        autocomplete="new-password" class="auth-input">
             </div>
             <div class="form-row">
                 <label for="register-confirm">Confirm password</label>
-                <input type="password" name="confirm" id="register-confirm" placeholder="Confirm password" required
+                <input type="password" name="confirm" id="register-confirm" placeholder="Repeat your password" required
                        autocomplete="new-password" class="auth-input">
             </div>
             {% if invites_required %}

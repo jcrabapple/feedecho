@@ -5,7 +5,7 @@ wrap onto as many full-width rows as needed (44px touch targets) so every
 destination is visible at first paint — the v1.26.3 scroll strip + edge
 fade read as clipped (external review, 2026-09). The account email/logout
 collapse into a zero-JS <details> menu on mobile; desktop keeps the inline
-email + logout. Sticky positioning is retained deliberately.
+email + logout. Sticky positioning is retained on desktop and static on mobile.
 """
 
 import re
@@ -69,16 +69,12 @@ class TestMobileNavStructure:
         regression re-adding it in ANY block must fail here."""
         assert ".nav-links-wrap::after" not in STYLE_CSS
 
-    def test_billing_anchor_clears_the_taller_sticky_header(self):
-        """Wrapped tabs make the sticky header ~200px at 320px; the
-        pending-card flow redirects to /settings#billing, which must not
-        land hidden under it. Finder is decoupled from the nav block: the
-        rule must live in SOME max-width:640px block (which also proves
-        desktop is unaffected by construction)."""
+    def test_billing_anchor_has_mobile_scroll_margin(self):
+        """Mobile navbar is static (not sticky), so #billing needs only modest scroll margin."""
         for _, body in _blocks():
             if "#billing" in body:
                 assert re.search(
-                    r"#billing\s*\{\s*scroll-margin-top:\s*2\d\dpx", body
+                    r"#billing\s*\{\s*scroll-margin-top:", body
                 )
                 return
         raise AssertionError("#billing scroll-margin rule missing from mobile")
@@ -100,7 +96,8 @@ class TestMobileNavStructure:
         navbar_rule = re.search(r"\.navbar\s*\{([^}]*)\}", STYLE_CSS).group(1)
         assert "position: sticky" in navbar_rule
         block = _nav_block()
-        assert "safe-area-inset-top" in block, "viewport-fit=cover ships; the sticky header must pad for it"
+        assert "position: static" in block
+        assert "safe-area-inset-top" in block
 
     def test_desktop_hides_the_mobile_menu(self):
         assert re.search(
@@ -134,4 +131,4 @@ class TestNavTemplate:
         assert BASE_HTML.count('action="/logout"') == 2
 
     def test_cache_buster_bumped(self):
-        assert 'style.css?v=67' in BASE_HTML
+        assert 'style.css?v=68' in BASE_HTML

@@ -163,7 +163,7 @@
     {% endif %}
     {% if subscription_status == 'trialing' %}
     <form method="post" action="/api/billing/portal" class="inline-form">
-        <button type="submit">Manage subscription</button>
+        <button type="submit" class="btn-sm">Manage subscription</button>
     </form>
     <form method="post" action="/api/billing/upgrade-now" class="inline-form"
           onsubmit="return confirm('Skip the rest of your trial and start your subscription now? You will be charged immediately.');">

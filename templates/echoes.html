@@ -124,6 +124,7 @@
     </div>
     <details class="template-vars" open>
         <summary>Available template variables</summary>
+        <div class="vars-table-wrap">
         <table class="vars-table">
             {% for v in template_vars %}
             <tr>
@@ -132,6 +133,7 @@
             </tr>
             {% endfor %}
         </table>
+        </div>
         <div class="template-help">
             <p>Templates are Jinja2, so you can use conditionals and filters:</p>
             {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>

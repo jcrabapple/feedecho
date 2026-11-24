@@ -174,9 +174,17 @@ def _safe_url(value) -> str:
     return ""
 
 
+def _plain_paragraphs(value) -> list[str]:
+    """Split plain text on blank lines into paragraph strings (never Markup/HTML)."""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    blocks = [b.strip("\n") for b in re.split(r"\n\s*\n", text)]
+    return [b for b in blocks if b.strip()]
+
+
 jinja.filters["iso_utc"] = _iso_utc
 jinja.filters["utc_text"] = _utc_text
 jinja.filters["safe_url"] = _safe_url
+jinja.filters["plain_paragraphs"] = _plain_paragraphs
 # Admin template uses `value is trial_pending` to render the card-gated trial
 # sentinel as "pending card" rather than a nonsense 1999 date.
 jinja.tests["trial_pending"] = lambda value: plans.trial_pending(value)

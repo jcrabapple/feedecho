@@ -935,12 +935,12 @@ async function readerMarkFolderRead(folderId, btn) {
     finally { btn.disabled = false; }
 }
 
-function readerToggleFolderCollapse(folderId) {
+function readerToggleFolderCollapse(folderId, btn) {
     const group = document.querySelector(`.reader-folder-group[data-folder-id="${folderId}"]`);
     if (!group) return;
     const isCollapsed = group.classList.toggle('is-collapsed');
-    const toggleBtn = group.querySelector('.reader-folder-toggle');
-    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', !isCollapsed);
+    const toggleBtn = btn || group.querySelector('.reader-folder-toggle');
+    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
     try {
         const key = 'feedecho-folder-collapsed-' + folderId;
         if (isCollapsed) localStorage.setItem(key, '1');
@@ -952,18 +952,19 @@ function readerApplyFolderCollapses() {
     document.querySelectorAll('.reader-folder-group').forEach((group) => {
         const folderId = group.dataset.folderId;
         if (!folderId) return;
+        const toggleBtn = group.querySelector('.reader-folder-toggle');
+        let isCollapsed = false;
         try {
-            if (localStorage.getItem('feedecho-folder-collapsed-' + folderId) === '1') {
-                group.classList.add('is-collapsed');
-                const toggleBtn = group.querySelector('.reader-folder-toggle');
-                if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
-            }
+            isCollapsed = localStorage.getItem('feedecho-folder-collapsed-' + folderId) === '1';
         } catch (e) {}
+        group.classList.toggle('is-collapsed', isCollapsed);
+        if (toggleBtn) toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
     });
 }
 
 // ── Reader Compose Dialog (Phase 2) ──────────────────────────────────────────
 let readerComposeItemData = null;
+let readerComposeReqSeq = 0;
 
 function readerCountGraphemes(str) {
     if (typeof Intl !== 'undefined' && Intl.Segmenter) {
@@ -980,6 +981,7 @@ function readerUpdateComposeCounters() {
     const text = textarea.value;
     const graphemeCount = readerCountGraphemes(text);
     const charCount = text.length;
+    const overLimitDests = [];
 
     document.querySelectorAll('#compose-destinations .compose-dest-label').forEach((label) => {
         const input = label.querySelector('input[type="checkbox"]');
@@ -988,6 +990,7 @@ function readerUpdateComposeCounters() {
         const limitStr = input.dataset.limit;
         if (!limitStr) {
             counter.textContent = '';
+            counter.classList.remove('is-over');
             return;
         }
         const limit = parseInt(limitStr, 10);
@@ -996,10 +999,29 @@ function readerUpdateComposeCounters() {
         counter.textContent = `${currentCount}/${limit}`;
         if (currentCount > limit) {
             counter.classList.add('is-over');
+            if (input.checked) {
+                const nameSpan = label.querySelector('span:not(.compose-dest-counter)');
+                const destName = nameSpan ? nameSpan.textContent.trim() : input.value;
+                overLimitDests.push(`${destName} (${currentCount}/${limit})`);
+            }
         } else {
             counter.classList.remove('is-over');
         }
     });
+
+    const warnEl = document.getElementById('compose-overlimit-warning');
+    if (warnEl) {
+        if (overLimitDests.length > 0) {
+            warnEl.textContent =
+                'Over character limit for ' +
+                overLimitDests.join(', ') +
+                ' — over-limit posts may be rejected or truncated by that platform.';
+            warnEl.hidden = false;
+        } else {
+            warnEl.textContent = '';
+            warnEl.hidden = true;
+        }
+    }
 }
 
 // ── Saved Searches (Phase 5) ──────────────────────────────────────────────
@@ -1057,6 +1079,160 @@ async function readerSubmitSaveSearch(form) {
         btn.textContent = origText;
     }
     return false;
+}
+
+function readerOpenManageSearch(btn, promptDelete = false) {
+    const dlg = document.getElementById('reader-manage-search-dialog');
+    if (!dlg || !btn) return;
+    const searchId = btn.dataset.searchId || '';
+    const searchName = btn.dataset.searchName || '';
+    const searchQuery = btn.dataset.searchQuery || '';
+
+    const idInput = document.getElementById('manage-search-id-input');
+    const nameInput = document.getElementById('manage-search-name-input');
+    const queryDisplay = document.getElementById('manage-search-query-display');
+    const errBox = document.getElementById('manage-search-error');
+    const confirmWrap = document.getElementById('manage-search-delete-confirm');
+    const confirmName = document.getElementById('manage-search-confirm-name');
+
+    if (idInput) idInput.value = searchId;
+    if (nameInput) nameInput.value = searchName;
+    if (queryDisplay) queryDisplay.value = searchQuery;
+    if (errBox) {
+        errBox.textContent = '';
+        errBox.hidden = true;
+    }
+    if (confirmWrap) confirmWrap.hidden = !promptDelete;
+    if (confirmName) confirmName.textContent = searchName;
+
+    dlg.showModal();
+    if (promptDelete) {
+        document.getElementById('manage-search-delete-confirm-btn')?.focus();
+    } else {
+        nameInput?.focus();
+    }
+}
+
+function readerPromptDeleteSearch() {
+    const confirmWrap = document.getElementById('manage-search-delete-confirm');
+    const errBox = document.getElementById('manage-search-error');
+    if (errBox) {
+        errBox.textContent = '';
+        errBox.hidden = true;
+    }
+    if (confirmWrap) {
+        confirmWrap.hidden = false;
+        document.getElementById('manage-search-delete-confirm-btn')?.focus();
+    }
+}
+
+function readerCancelDeleteSearch() {
+    const confirmWrap = document.getElementById('manage-search-delete-confirm');
+    if (confirmWrap) confirmWrap.hidden = true;
+    document.getElementById('manage-search-delete-btn')?.focus();
+}
+
+function readerExtractErrorDetail(data, fallback) {
+    if (!data) return fallback;
+    if (typeof data.detail === 'string' && data.detail) return data.detail;
+    if (Array.isArray(data.detail) && data.detail.length) {
+        return data.detail.map((d) => (d && d.msg ? d.msg : String(d))).join('; ');
+    }
+    return fallback;
+}
+
+async function readerSubmitRenameSearch(form) {
+    const btn = document.getElementById('manage-search-rename-btn');
+    const errBox = document.getElementById('manage-search-error');
+    if (!btn || btn.disabled) return false;
+    const searchId = document.getElementById('manage-search-id-input')?.value || '';
+    const name = (document.getElementById('manage-search-name-input')?.value || '').trim();
+
+    if (!searchId) return false;
+    if (errBox) {
+        errBox.textContent = '';
+        errBox.hidden = true;
+    }
+    if (name.length < 1 || name.length > 60) {
+        if (errBox) {
+            errBox.textContent = 'Name must be between 1 and 60 characters';
+            errBox.hidden = false;
+        }
+        return false;
+    }
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Saving...';
+
+    try {
+        const resp = await fetch(`/api/saved-searches/${encodeURIComponent(searchId)}/rename`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+            body: new URLSearchParams({ name }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (errBox) {
+                errBox.textContent = readerExtractErrorDetail(data, 'Failed to rename saved search');
+                errBox.hidden = false;
+            }
+            return false;
+        }
+        document.getElementById('reader-manage-search-dialog')?.close();
+        reloadPreservingScroll();
+    } catch (e) {
+        if (errBox) {
+            errBox.textContent = 'Request failed: ' + e.message;
+            errBox.hidden = false;
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
+    return false;
+}
+
+async function readerConfirmDeleteSearch(btn) {
+    if (!btn || btn.disabled) return;
+    const searchId = document.getElementById('manage-search-id-input')?.value || '';
+    const errBox = document.getElementById('manage-search-error');
+    if (!searchId) return;
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Deleting...';
+
+    try {
+        const resp = await fetch(`/api/saved-searches/${encodeURIComponent(searchId)}/delete`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (errBox) {
+                errBox.textContent = data.detail || 'Failed to delete saved search';
+                errBox.hidden = false;
+            }
+            return;
+        }
+        document.getElementById('reader-manage-search-dialog')?.close();
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('saved') === String(searchId)) {
+            url.searchParams.delete('saved');
+            window.location = url.pathname + url.search;
+        } else {
+            reloadPreservingScroll();
+        }
+    } catch (e) {
+        if (errBox) {
+            errBox.textContent = 'Request failed: ' + e.message;
+            errBox.hidden = false;
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
 }
 
 // ── Reader Mute Training (Phase 4) ──────────────────────────────────────────
@@ -1124,13 +1300,42 @@ async function readerOpenCompose(itemId) {
     const dlg = document.getElementById('reader-compose');
     if (!dlg) return;
 
+    const reqSeq = ++readerComposeReqSeq;
+    readerComposeItemData = null;
+
     const form = document.getElementById('reader-compose-form');
     if (form) form.reset();
     document.getElementById('compose-item-id').value = itemId;
-    document.getElementById('compose-results').style.display = 'none';
-    document.getElementById('compose-results').innerHTML = '';
+
+    const subtitleEl = document.getElementById('compose-subtitle');
+    if (subtitleEl) subtitleEl.textContent = 'Loading item…';
+
+    const textarea = document.getElementById('compose-body');
+    if (textarea) textarea.value = '';
+
+    const resultsEl = document.getElementById('compose-results');
+    if (resultsEl) {
+        resultsEl.style.display = 'none';
+        resultsEl.replaceChildren();
+    }
+    dlg.querySelectorAll('.action-status').forEach((el) => el.remove());
+
+    const warnEl = document.getElementById('compose-overlimit-warning');
+    if (warnEl) {
+        warnEl.textContent = '';
+        warnEl.hidden = true;
+    }
+
+    const mediaWrap = document.getElementById('compose-media-wrap');
+    if (mediaWrap) mediaWrap.style.display = 'none';
+
     document.getElementById('compose-comment-wrap').style.display = 'none';
     document.getElementById('compose-commentary').value = '';
+
+    const submitBtn = document.getElementById('compose-submit-btn');
+    const queueBtn = document.getElementById('compose-queue-btn');
+    if (submitBtn) submitBtn.disabled = true;
+    if (queueBtn) queueBtn.disabled = true;
 
     // Restore last selected destinations from localStorage
     try {
@@ -1142,29 +1347,29 @@ async function readerOpenCompose(itemId) {
         }
     } catch (e) {}
 
+    readerUpdateComposeCounters();
     dlg.showModal();
 
     try {
         const resp = await fetch(`/api/reader/${itemId}/compose`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
+        if (reqSeq !== readerComposeReqSeq) return;
         readerComposeItemData = data;
 
-        document.getElementById('compose-subtitle').textContent = data.item.title || '(untitled)';
-        const textarea = document.getElementById('compose-body');
+        if (subtitleEl) subtitleEl.textContent = data.item.title || '(untitled)';
         const firstDest = document.querySelector('#compose-destinations input[type="checkbox"]:checked') ||
                           document.querySelector('#compose-destinations input[type="checkbox"]');
         const defaultVal = (firstDest && data.rendered && data.rendered[firstDest.value]) ||
                            (data.item.title + (data.item.link ? ' ' + data.item.link : ''));
-        textarea.value = defaultVal;
+        if (textarea) textarea.value = defaultVal;
 
         // Image section
-        const mediaWrap = document.getElementById('compose-media-wrap');
         const imgPrev = document.getElementById('compose-image-preview');
         const altInput = document.getElementById('compose-image-alt');
         const altHint = document.getElementById('compose-alt-hint');
 
-        if (data.item.image_url) {
+        if (data.item.image_url && mediaWrap) {
             mediaWrap.style.display = 'flex';
             imgPrev.src = data.item.image_url;
             altInput.value = data.item.image_alt || '';
@@ -1174,13 +1379,25 @@ async function readerOpenCompose(itemId) {
             } else {
                 altHint.textContent = 'AI alt text will be generated if configured in Settings.';
             }
-        } else {
+        } else if (mediaWrap) {
             mediaWrap.style.display = 'none';
         }
 
+        if (submitBtn) submitBtn.disabled = false;
+        if (queueBtn) queueBtn.disabled = false;
         readerUpdateComposeCounters();
     } catch (e) {
-        showStatus(document.getElementById('compose-submit-btn'), 'Failed to load preview: ' + e.message, 'error');
+        if (reqSeq !== readerComposeReqSeq) return;
+        if (subtitleEl) subtitleEl.textContent = 'Unable to load item';
+        if (resultsEl) {
+            resultsEl.replaceChildren();
+            const errDiv = document.createElement('div');
+            errDiv.className = 'compose-res-item is-error';
+            errDiv.setAttribute('role', 'alert');
+            errDiv.textContent = 'Failed to load preview: ' + e.message;
+            resultsEl.appendChild(errDiv);
+            resultsEl.style.display = 'flex';
+        }
     }
 }
 
@@ -1521,35 +1738,15 @@ function initQueuePage() {
 }
 initQueuePage();
 
-// Live character / grapheme counter updates
+// Live character / grapheme counter & over-limit warning updates
 document.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'compose-body') {
         readerUpdateComposeCounters();
     }
 });
-
-function readerOpenShout(itemId) {
-    readerOpenCompose(itemId);
-}
-
-// Toggle the variables tooltip (tap/click/Enter on the ⓘ trigger). On touch
-// devices there is no :hover; this is the sole reveal path. The document-level
-// click listener below dismisses if the user taps/clicks outside the trigger.
-function readerToggleVars(btn) {
-    const open = btn.classList.toggle('is-open');
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-
-// Dismiss any open variables tooltip when the user taps/clicks outside its
-// trigger. This is the primary close mechanism on touch (where :hover is
-// disabled and re-tapping the small trigger is unreliable).
-document.addEventListener('click', function (e) {
-    var btns = document.querySelectorAll('.reader-shout-vars.is-open');
-    for (var i = 0; i < btns.length; i++) {
-        if (!btns[i].contains(e.target)) {
-            btns[i].classList.remove('is-open');
-            btns[i].setAttribute('aria-expanded', 'false');
-        }
+document.addEventListener('change', (e) => {
+    if (e.target && e.target.matches && e.target.matches('#compose-destinations input[type="checkbox"]')) {
+        readerUpdateComposeCounters();
     }
 });
 
@@ -1562,30 +1759,6 @@ function readerToast(text) {
     toast.textContent = text;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
-}
-
-async function readerShout(itemId, form) {
-    const btn = form.querySelector('button[type="submit"]');
-    if (btn.disabled) return false;
-    const data = new URLSearchParams(new FormData(form));
-    btn.disabled = true;
-    const dlg = form.closest('dialog');
-    try {
-        const resp = await fetch(`/api/reader/${itemId}/shout`, { method: 'POST', body: data });
-        const result = await resp.json();
-        if (!resp.ok) { showStatus(btn, result.detail || 'Shout failed', 'error'); return false; }
-        if (result.success) {
-            const box = form.querySelector('.action-status');
-            if (box) box.remove();
-            form.reset();
-            if (dlg) dlg.close();
-            readerToast('Shouted' + (result.post_url ? ' — view in History' : ''));
-        } else {
-            showStatus(btn, result.error_message || 'Shout failed', 'error');
-        }
-    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
-    finally { btn.disabled = false; }
-    return false;
 }
 
 // ── Reader keyboard shortcuts ────────────────────────────────────────────────
@@ -1777,17 +1950,39 @@ function readerDisableAutoRead() {
     readerAutoReadQueue.clear();
 }
 
+function readerIsStarredView() {
+    const list = document.querySelector('.reader-item-list');
+    if (list && list.dataset.view) return list.dataset.view === 'starred';
+    const readerEl = document.querySelector('.reader');
+    if (readerEl && readerEl.dataset.view) return readerEl.dataset.view === 'starred';
+    return new URLSearchParams(window.location.search).get('view') === 'starred';
+}
+
 function readerApplyAutoRead() {
     const btn = document.getElementById('reader-autoread-btn');
-    const on = localStorage.getItem('feedecho-reader-autoread') === '1';
+    const isStarred = readerIsStarredView();
+    const on = !isStarred && localStorage.getItem('feedecho-reader-autoread') === '1';
     if (btn) {
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         btn.textContent = on ? 'Auto-read ✓' : 'Auto-read';
+        if (isStarred) {
+            btn.setAttribute('aria-disabled', 'true');
+            btn.setAttribute('title', 'Auto-read is paused in Starred view');
+        } else {
+            btn.removeAttribute('aria-disabled');
+            btn.setAttribute('title', 'Mark items read as you scroll past them');
+        }
     }
-    if (on) readerEnableAutoRead();
+    if (isStarred) readerDisableAutoRead();
+    else if (on) readerEnableAutoRead();
 }
 
 function readerToggleAutoRead() {
+    const btn = document.getElementById('reader-autoread-btn');
+    if (readerIsStarredView() || (btn && btn.getAttribute('aria-disabled') === 'true')) {
+        readerToast('Auto-read is paused in Starred view');
+        return;
+    }
     const on = localStorage.getItem('feedecho-reader-autoread') === '1';
     localStorage.setItem('feedecho-reader-autoread', on ? '0' : '1');
     if (on) readerDisableAutoRead(); else readerEnableAutoRead();
@@ -1810,6 +2005,25 @@ function readerToggleFullText() {
 let readerMaxItemId = 0;
 let readerPollTimer = null;
 
+function readerRenderPlainParagraphs(container, rawText) {
+    if (!container) return;
+    const normalized = String(rawText || '').replace(/\r\n?/g, '\n');
+    const blocks = normalized
+        .split(/\n\s*\n/)
+        .map((b) => b.replace(/^\n+|\n+$/g, ''))
+        .filter((b) => b.trim().length > 0);
+    if (!blocks.length) {
+        container.replaceChildren();
+        return;
+    }
+    const paragraphs = blocks.map((block) => {
+        const p = document.createElement('p');
+        p.textContent = block;
+        return p;
+    });
+    container.replaceChildren(...paragraphs);
+}
+
 function readerLoadBody(details) {
     const content = details.querySelector('.reader-item-content');
     if (!content || content.dataset.loaded === '1') return;
@@ -1822,7 +2036,7 @@ function readerLoadBody(details) {
     content.setAttribute('aria-live', 'polite');
     fetch(`/api/reader/${itemId}/body`)
         .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((d) => { content.textContent = d.content || ''; content.classList.remove('is-loading'); })
+        .then((d) => { readerRenderPlainParagraphs(content, d.content || ''); content.classList.remove('is-loading'); })
         .catch(() => { content.dataset.loaded = '0'; content.classList.remove('is-loading'); });
 }
 
@@ -1831,11 +2045,61 @@ document.addEventListener('toggle', (e) => {
     if (details && details.matches && details.matches('details.reader-item') && details.open) {
         readerLoadBody(details);
     }
+}, true);
+
+function readerSyncDrawerViewport() {
+    const readerMain = document.querySelector('.reader-main');
+    if (!readerMain) return;
+    const isMobile = window.matchMedia('(max-width: 720px)').matches;
+    if (!isMobile) {
+        readerMain.inert = false;
+        return;
+    }
+    const aside = document.getElementById('reader-feeds-sidebar') || document.querySelector('.reader-feeds');
+    readerMain.inert = Boolean(aside && aside.classList.contains('open'));
+}
+
+function readerToggleFeeds(forceState) {
+    const aside = document.getElementById('reader-feeds-sidebar') || document.querySelector('.reader-feeds');
+    if (!aside) return;
+    const wasOpen = aside.classList.contains('open');
+    const isOpen = typeof forceState === 'boolean' ? forceState : !wasOpen;
+    aside.classList.toggle('open', isOpen);
+
+    const backdrop = document.getElementById('reader-drawer-backdrop');
+    if (backdrop) backdrop.hidden = !isOpen;
+
+    const toggleBtn = document.querySelector('.reader-feeds-toggle');
+    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+
+    const readerMain = document.querySelector('.reader-main');
+    const isMobile = window.matchMedia('(max-width: 720px)').matches;
+    if (readerMain) {
+        readerMain.inert = Boolean(isOpen && isMobile);
+    }
+
+    if (isOpen) {
+        aside.querySelector('.reader-feeds-close')?.focus();
+    } else if (wasOpen) {
+        toggleBtn?.focus();
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const aside = document.getElementById('reader-feeds-sidebar') || document.querySelector('.reader-feeds');
+    if (!aside || !aside.classList.contains('open')) return;
+    if (document.querySelector('dialog[open]')) return;
+    e.preventDefault();
+    readerToggleFeeds(false);
 });
 
-function readerToggleFeeds() {
-    const feeds = document.querySelector('.reader-feeds');
-    if (feeds) feeds.classList.toggle('open');
+window.addEventListener('resize', readerSyncDrawerViewport, { passive: true });
+if (typeof window.matchMedia === 'function') {
+    const readerDrawerMq = window.matchMedia('(max-width: 720px)');
+    if (typeof readerDrawerMq.addEventListener === 'function') {
+        readerDrawerMq.addEventListener('change', readerSyncDrawerViewport);
+    }
 }
 
 function readerStartPolling() {

@@ -78,8 +78,10 @@ class TestLandingMultiMode:
     def test_landing_hero_image_present(self, multi_env):
         c = TestClient(app)
         r = c.get("/")
-        assert 'src="/static/img/landing-hero.png"' in r.text
-        assert c.get("/static/img/landing-hero.png").status_code == 200
+        assert 'class="hero-flow"' in r.text
+        assert "landing-hero.png" not in r.text
+        for dest in ("Mastodon", "Bluesky", "GitHub"):
+            assert dest in r.text
 
     def test_signed_in_root_is_dashboard(self, multi_env):
         c = TestClient(app)

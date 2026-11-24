@@ -18,7 +18,35 @@
         <p class="landing-trial-note">Questions? <a href="mailto:support@feedecho.net">support@feedecho.net</a></p>
     </div>
     <div class="landing-hero-art">
-        <img src="/static/img/landing-hero.png" alt="Illustration: a feed card relaying posts to email, social media, and cloud destinations" width="1024" height="576">
+        <div class="hero-flow" role="img" aria-label="Diagram: an RSS item shaped by a Jinja2 template and delivered to Mastodon, Bluesky, and GitHub">
+            <div class="hero-flow-source">
+                <span class="hero-flow-badge">RSS / Atom / JSON</span>
+                <strong class="hero-flow-title">Notes from the Workshop</strong>
+                <span class="hero-flow-meta">example.org/feed.xml · new item</span>
+            </div>
+            <div class="hero-flow-pipe" aria-hidden="true">
+                <svg class="hero-flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+                <code class="hero-flow-tpl">{{ title }} — {{ link | clean_url }}</code>
+                <svg class="hero-flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+            </div>
+            <div class="hero-flow-targets">
+                <div class="hero-flow-card">
+                    <span class="hero-flow-dest">Mastodon</span>
+                    <span class="hero-flow-handle">@you@mastodon.social</span>
+                    <span class="hero-flow-status">Posted with alt text</span>
+                </div>
+                <div class="hero-flow-card">
+                    <span class="hero-flow-dest">Bluesky</span>
+                    <span class="hero-flow-handle">@you.bsky.social</span>
+                    <span class="hero-flow-status">Link card + #tags</span>
+                </div>
+                <div class="hero-flow-card">
+                    <span class="hero-flow-dest">GitHub</span>
+                    <span class="hero-flow-handle">you/notes-repo</span>
+                    <span class="hero-flow-status">Committed .md post</span>
+                </div>
+            </div>
+        </div>
     </div>
 </section>
 

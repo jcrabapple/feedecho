@@ -166,7 +166,7 @@ function editFeed(feedId) {
     if (kwList.length) {
         chipsHtml = `<div class="mute-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.4rem;">` +
             kwList.map((kw) => `<span class="badge badge-muted mute-chip" style="display:inline-flex; align-items:center; gap:0.3rem;">` +
-                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" data-mute-kw="${escapeHTML(kw)}" onclick="removeFeedMuteChip(${feedId}, this.dataset.muteKw)" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
+                `${escapeHTML(kw)} <button type="button" class="btn-chip-remove" data-mute-kw="${escapeHTML(kw)}" onclick="removeFeedMuteChip(${feedId}, this.dataset.muteKw, this)" style="background:none; border:none; padding:0; cursor:pointer; font-weight:bold; color:inherit;" aria-label="Remove ${escapeHTML(kw)}">&times;</button>` +
             `</span>`).join('') +
             `</div>`;
     }
@@ -177,10 +177,10 @@ function editFeed(feedId) {
                 <label>Name
                     <input type="text" name="name" value="${escapeHTML(name)}" required>
                 </label>
-                <label>Feed URL
+                <label class="feed-url-field">Feed URL
                     <input type="url" name="url" value="${escapeHTML(url)}" required>
                 </label>
-                <label>Poll interval (min)
+                <label class="feed-poll-field">Poll interval (min)
                     <input type="number" name="poll_interval" min="1" max="1440" value="${escapeHTML(pollInterval)}">
                 </label>
                 <label>Folder
@@ -188,7 +188,7 @@ function editFeed(feedId) {
                         ${folderOptions}
                     </select>
                 </label>
-                <label>Mute keywords (comma-separated)
+                <label class="form-full">Mute keywords (comma-separated)
                     <input type="text" id="feed-mute-input-${feedId}" name="mute_keywords" value="${escapeHTML(muteKeywords)}" placeholder="e.g. sponsored, press release">
                     ${chipsHtml}
                 </label>
@@ -209,8 +209,8 @@ function editFeed(feedId) {
             </div>
             <p class="hint">Changing the URL resets the last-seen cursor, so the next check re-initializes against the new feed without back-posting old items.</p>
             <div class="form-row edit-actions">
-                <button type="submit" class="btn-sm">Save</button>
                 <button type="button" class="btn-sm" onclick="cancelFeedEdit(${feedId})">Cancel</button>
+                <button type="submit" class="btn-sm btn-primary">Save</button>
             </div>
         </form>
     </td>`;
@@ -220,15 +220,29 @@ function editFeed(feedId) {
     row.querySelector('input, select, textarea')?.focus();
 }
 
-function removeFeedMuteChip(feedId, kwToRemove) {
+function removeFeedMuteChip(feedId, kwToRemove, btnEl) {
     const input = document.getElementById(`feed-mute-input-${feedId}`);
     if (!input) return;
     const existing = input.value.split(',').map(s => s.trim()).filter(Boolean);
     const updated = existing.filter(k => k.toLowerCase() !== kwToRemove.toLowerCase());
     input.value = updated.join(', ');
-    const row = document.getElementById(`feed-row-${feedId}`);
-    if (row) row.dataset.muteKeywords = input.value;
-    editFeed(feedId);
+    let chip = btnEl ? btnEl.closest('.mute-chip') : null;
+    if (!chip) {
+        const buttons = document.querySelectorAll(`#feed-row-${feedId} .btn-chip-remove`);
+        for (const b of buttons) {
+            if ((b.dataset.muteKw || '').toLowerCase() === kwToRemove.toLowerCase()) {
+                chip = b.closest('.mute-chip');
+                break;
+            }
+        }
+    }
+    if (chip) {
+        const wrap = chip.parentElement;
+        chip.remove();
+        if (wrap && wrap.classList.contains('mute-chips') && !wrap.querySelector('.mute-chip')) {
+            wrap.remove();
+        }
+    }
 }
 
 async function retryPost(postedId, btn) {
@@ -341,6 +355,15 @@ function editEcho(echoId) {
     const webhookStyle = destType === 'webhook' ? '' : 'display:none';
     const githubStyle = destType === 'github' ? '' : 'display:none';
 
+    const hasAdvanced = Boolean(
+        filterKeywords.trim() || contentWarning.trim() || Number(dripLimit) > 0
+    );
+    const varsScript = document.getElementById('template-vars-html');
+    const pageVars = document.querySelector('.echo-form details.template-vars');
+    const varsInner = varsScript
+        ? varsScript.innerHTML.trim()
+        : (pageVars ? pageVars.innerHTML : '<summary>Available template variables</summary>');
+
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form" aria-label="Edit echo">
             <div class="form-row">
@@ -373,17 +396,21 @@ function editEcho(echoId) {
                         <option value="direct"${visibility === 'direct' ? ' selected' : ''}>Direct</option>
                     </select>
                 </label>
-                <label>Parse as Markdown
-                    <input type="checkbox" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-use-md-${echoId}" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''} aria-describedby="edit-use-md-hint-${echoId}">
+                    <label for="edit-use-md-${echoId}">Parse as Markdown</label>
+                    <span class="hint" id="edit-use-md-hint-${echoId}">Send <code>content_type=text/markdown</code> (GoToSocial and Markdown-capable APIs).</span>
+                </div>
             </div>
             <div class="form-row" id="edit-email-fields-${echoId}" style="${emailStyle}">
                 <label>Email Address
                     <select name="email_account_id">${emailOpts}</select>
                 </label>
-                <label>Render body as HTML
-                    <input type="checkbox" name="render_html" value="true"${renderHtml ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-email-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-email-html-hint-${echoId}">
+                    <label for="edit-email-html-${echoId}">Render body as HTML</label>
+                    <span class="hint" id="edit-email-html-hint-${echoId}">Instant mode only. Digests stay text-only.</span>
+                </div>
             </div>
             <div class="form-row" id="edit-bluesky-fields-${echoId}" style="${blueskyStyle}">
                 <label>Bluesky Account
@@ -399,9 +426,11 @@ function editEcho(echoId) {
                 <label>Matrix Room
                     <select name="matrix_account_id">${matrixOpts}</select>
                 </label>
-                <label>Render body as HTML
-                    <input type="checkbox" name="render_html" value="true"${renderHtml ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-matrix-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-matrix-html-hint-${echoId}">
+                    <label for="edit-matrix-html-${echoId}">Render body as HTML</label>
+                    <span class="hint" id="edit-matrix-html-hint-${echoId}">Send rendered output as formatted room body.</span>
+                </div>
             </div>
             <div class="form-row" id="edit-discord-fields-${echoId}" style="${discordStyle}">
                 <label>Discord Channel
@@ -422,63 +451,82 @@ function editEcho(echoId) {
                 <label>GitHub Repository
                     <select name="github_account_id">${githubOpts}</select>
                 </label>
-                <label>File path template
-                    <input type="text" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md">
-                </label>
-                <label>Commit message template (optional)
-                    <input type="text" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
-                </label>
+                <div class="form-field">
+                    <label for="edit-gh-path-${echoId}">File path template</label>
+                    <input type="text" id="edit-gh-path-${echoId}" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="edit-gh-path-hint-${echoId}">
+                    <span class="hint" id="edit-gh-path-hint-${echoId}">Repo-relative path rendered per item (paths containing <code>..</code> are rejected).</span>
+                </div>
+                <div class="form-field">
+                    <label for="edit-gh-commit-${echoId}">Commit message template (optional)</label>
+                    <input type="text" id="edit-gh-commit-${echoId}" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
+                </div>
             </div>
             <div class="form-row">
-                <label>Enabled
-                    <input type="checkbox" name="enabled" value="true"${enabled ? ' checked' : ''}>
-                </label>
+                <div class="check-field">
+                    <input type="checkbox" id="edit-enabled-${echoId}" name="enabled" value="true"${enabled ? ' checked' : ''}>
+                    <label for="edit-enabled-${echoId}">Enabled</label>
+                </div>
+                <div class="check-field" id="edit-attach-image-fields-${echoId}">
+                    <input type="checkbox" id="edit-attach-img-${echoId}" name="attach_image" value="true"${attachImage ? ' checked' : ''} aria-describedby="edit-attach-img-hint-${echoId}">
+                    <label for="edit-attach-img-${echoId}">Attach image</label>
+                    <span class="hint" id="edit-attach-img-hint-${echoId}">Attach feed item images when supported by the destination.</span>
+                </div>
             </div>
             <div class="form-row">
-                <label>Template
-                    <textarea name="template" rows="3">${escapeHTML(template)}</textarea>
-                </label>
-                <!-- Button outside the label: interactive content inside <label>
-                     is invalid HTML and activating it also targets the textarea. -->
+                <div class="form-field">
+                    <label for="edit-template-${echoId}">Template</label>
+                    <textarea id="edit-template-${echoId}" name="template" rows="3" aria-describedby="edit-template-hint-${echoId}">${escapeHTML(template)}</textarea>
+                    <span class="hint" id="edit-template-hint-${echoId}">Jinja2 template. Use Preview to render against latest items.</span>
+                </div>
                 <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
             </div>
-            <div class="form-row">
-                <label>Keyword filter
-                    <input type="text" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason">
-                </label>
-                <label>Filter mode
-                    <select name="filter_mode">
-                        <option value="exclude"${filterMode === 'exclude' ? ' selected' : ''}>Exclude matching items</option>
-                        <option value="include"${filterMode === 'include' ? ' selected' : ''}>Only include matching items</option>
-                    </select>
-                </label>
-            </div>
-            <div class="form-row">
-                <label>Content warning
-                    <input type="text" name="content_warning" value="${escapeHTML(contentWarning)}" placeholder="e.g. Spoilers, US Politics" maxlength="500">
-                </label>
-                <label>Attach image
-                    <input type="checkbox" name="attach_image" value="true"${attachImage ? ' checked' : ''}>
-                </label>
-            </div>
+            <details class="template-vars">${varsInner}</details>
             <div class="form-row" id="edit-digest-fields-${echoId}">
-                <label>Delivery mode
-                    <select name="delivery_mode" onchange="toggleEditDest(${echoId})">
+                <div class="form-field">
+                    <label for="edit-delivery-mode-${echoId}">Delivery mode</label>
+                    <select id="edit-delivery-mode-${echoId}" name="delivery_mode" onchange="toggleEditDest(${echoId})" aria-describedby="edit-delivery-hint-${echoId}">
                         <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (post each item as it arrives)</option>
                         <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
                         <option value="queue"${deliveryMode === 'queue' ? ' selected' : ''}>Auto-queue (schedule into the curation queue)</option>
                         <option value="review"${deliveryMode === 'review' ? ' selected' : ''}>Review (stage in the queue as a draft for approval)</option>
                     </select>
-                </label>
+                    <span class="hint" id="edit-delivery-hint-${echoId}">Digest mode is available for Email destinations only.</span>
+                </div>
             </div>
-            <div class="form-row" id="edit-drip-fields-${echoId}">
-                <label>Max posts per hour
-                    <input type="number" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}">
-                </label>
-            </div>
+            <details class="echo-advanced-options"${hasAdvanced ? ' open' : ''}>
+                <summary>Filters, content warning &amp; rate limits (optional)</summary>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="edit-filter-kw-${echoId}">Keyword filter</label>
+                        <input type="text" id="edit-filter-kw-${echoId}" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason" aria-describedby="edit-filter-kw-hint-${echoId}">
+                        <span class="hint" id="edit-filter-kw-hint-${echoId}">Comma-separated, case-insensitive; supports <code>tag:</code>, <code>author:</code>, <code>url:</code>, <code>content:</code>.</span>
+                    </div>
+                    <div class="form-field">
+                        <label for="edit-filter-mode-${echoId}">Filter mode</label>
+                        <select id="edit-filter-mode-${echoId}" name="filter_mode">
+                            <option value="exclude"${filterMode === 'exclude' ? ' selected' : ''}>Exclude matching items</option>
+                            <option value="include"${filterMode === 'include' ? ' selected' : ''}>Only include matching items</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="edit-cw-${echoId}">Content warning</label>
+                        <input type="text" id="edit-cw-${echoId}" name="content_warning" value="${escapeHTML(contentWarning)}" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="edit-cw-hint-${echoId}">
+                        <span class="hint" id="edit-cw-hint-${echoId}">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+                    </div>
+                </div>
+                <div class="form-row" id="edit-drip-fields-${echoId}">
+                    <div class="form-field">
+                        <label for="edit-drip-${echoId}">Max posts per hour</label>
+                        <input type="number" id="edit-drip-${echoId}" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}" style="max-width: 8rem;" aria-describedby="edit-drip-hint-${echoId}">
+                        <span class="hint" id="edit-drip-hint-${echoId}">0 = off. Excess items queue and release as the 1-hour window slides.</span>
+                    </div>
+                </div>
+            </details>
             <div class="form-row edit-actions">
-                <button type="submit" class="btn-sm">Save</button>
                 <button type="button" class="btn-sm" onclick="cancelEdit(${echoId})">Cancel</button>
+                <button type="submit" class="btn-sm btn-primary">Save</button>
             </div>
         </form>
     </td>`;
@@ -515,6 +563,52 @@ function editEcho(echoId) {
     row.querySelector('input, select, textarea')?.focus();
 }
 
+function toggleDestFields() {
+    const destSelect = document.getElementById('destination-type');
+    if (!destSelect) return;
+    const destType = destSelect.value;
+    document.getElementById('mastodon-fields').style.display = destType === 'mastodon' ? '' : 'none';
+    document.getElementById('email-fields').style.display = destType === 'email' ? '' : 'none';
+    document.getElementById('bluesky-fields').style.display = destType === 'bluesky' ? '' : 'none';
+    document.getElementById('microblog-fields').style.display = destType === 'microblog' ? '' : 'none';
+    document.getElementById('matrix-fields').style.display = destType === 'matrix' ? '' : 'none';
+    document.getElementById('discord-fields').style.display = destType === 'discord' ? '' : 'none';
+    document.getElementById('telegram-fields').style.display = destType === 'telegram' ? '' : 'none';
+    document.getElementById('webhook-fields').style.display = destType === 'webhook' ? '' : 'none';
+    document.getElementById('github-fields').style.display = destType === 'github' ? '' : 'none';
+    const githubRow = document.getElementById('github-fields');
+    if (githubRow) {
+        githubRow.querySelectorAll('input, select').forEach((el) => {
+            el.disabled = githubRow.style.display === 'none';
+        });
+    }
+    const form = destSelect.closest('form') || document;
+    const deliveryMode = form.querySelector('select[name="delivery_mode"]');
+    const digestOption = deliveryMode?.querySelector('option[value="digest"]');
+    if (digestOption) digestOption.disabled = destType !== 'email';
+    if (deliveryMode && destType !== 'email' && deliveryMode.value === 'digest') {
+        deliveryMode.value = 'instant';
+    }
+    const dripFields = document.getElementById('drip-fields');
+    if (dripFields) {
+        dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
+    }
+    const attachRow = document.getElementById('attach-image-fields');
+    const attachCb = document.getElementById('echo-attach-image') || form.querySelector('input[name="attach_image"]');
+    if (attachRow) attachRow.style.display = destType === 'github' ? 'none' : '';
+    if (attachCb) {
+        attachCb.disabled = destType === 'github';
+        if (destType === 'github') attachCb.checked = false;
+    }
+    form.querySelectorAll('input[name="render_html"]').forEach((cb) => {
+        const row = cb.closest('.form-row');
+        cb.disabled = !row || row.style.display === 'none';
+    });
+}
+if (document.getElementById('destination-type')) {
+    toggleDestFields();
+}
+
 function toggleEditDest(echoId) {
     const destType = document.getElementById(`edit-dest-type-${echoId}`).value;
     document.getElementById(`edit-mastodon-fields-${echoId}`).style.display = destType === 'mastodon' ? '' : 'none';
@@ -541,12 +635,22 @@ function toggleEditDest(echoId) {
     // The delivery-mode row is always visible; digest is only selectable for
     // email destinations, and the drip row applies to instant mode alone.
     if (digestFields) digestFields.style.display = '';
-    const digestOption = digestFields?.querySelector('option[value="digest"]');
+    const deliveryMode = digestFields?.querySelector('select[name="delivery_mode"]');
+    const digestOption = deliveryMode?.querySelector('option[value="digest"]');
     if (digestOption) digestOption.disabled = destType !== 'email';
+    if (deliveryMode && destType !== 'email' && deliveryMode.value === 'digest') {
+        deliveryMode.value = 'instant';
+    }
     const dripFields = document.getElementById(`edit-drip-fields-${echoId}`);
     if (dripFields) {
-        const deliveryMode = digestFields?.querySelector('select[name="delivery_mode"]');
         dripFields.style.display = (deliveryMode && deliveryMode.value === 'instant') ? '' : 'none';
+    }
+    const attachEditRow = document.getElementById(`edit-attach-image-fields-${echoId}`);
+    const attachEditCb = attachEditRow?.querySelector('input[name="attach_image"]');
+    if (attachEditRow) attachEditRow.style.display = destType === 'github' ? 'none' : '';
+    if (attachEditCb) {
+        attachEditCb.disabled = destType === 'github';
+        if (destType === 'github') attachEditCb.checked = false;
     }
     // render_html checkboxes live in BOTH the email and Matrix edit rows;
     // hidden ones still submit, so disable them to prevent a hidden row's
@@ -935,12 +1039,12 @@ async function readerMarkFolderRead(folderId, btn) {
     finally { btn.disabled = false; }
 }
 
-function readerToggleFolderCollapse(folderId) {
+function readerToggleFolderCollapse(folderId, btn) {
     const group = document.querySelector(`.reader-folder-group[data-folder-id="${folderId}"]`);
     if (!group) return;
     const isCollapsed = group.classList.toggle('is-collapsed');
-    const toggleBtn = group.querySelector('.reader-folder-toggle');
-    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', !isCollapsed);
+    const toggleBtn = btn || group.querySelector('.reader-folder-toggle');
+    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
     try {
         const key = 'feedecho-folder-collapsed-' + folderId;
         if (isCollapsed) localStorage.setItem(key, '1');
@@ -952,18 +1056,19 @@ function readerApplyFolderCollapses() {
     document.querySelectorAll('.reader-folder-group').forEach((group) => {
         const folderId = group.dataset.folderId;
         if (!folderId) return;
+        const toggleBtn = group.querySelector('.reader-folder-toggle');
+        let isCollapsed = false;
         try {
-            if (localStorage.getItem('feedecho-folder-collapsed-' + folderId) === '1') {
-                group.classList.add('is-collapsed');
-                const toggleBtn = group.querySelector('.reader-folder-toggle');
-                if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
-            }
+            isCollapsed = localStorage.getItem('feedecho-folder-collapsed-' + folderId) === '1';
         } catch (e) {}
+        group.classList.toggle('is-collapsed', isCollapsed);
+        if (toggleBtn) toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
     });
 }
 
 // ── Reader Compose Dialog (Phase 2) ──────────────────────────────────────────
 let readerComposeItemData = null;
+let readerComposeReqSeq = 0;
 
 function readerCountGraphemes(str) {
     if (typeof Intl !== 'undefined' && Intl.Segmenter) {
@@ -980,6 +1085,7 @@ function readerUpdateComposeCounters() {
     const text = textarea.value;
     const graphemeCount = readerCountGraphemes(text);
     const charCount = text.length;
+    const overLimitDests = [];
 
     document.querySelectorAll('#compose-destinations .compose-dest-label').forEach((label) => {
         const input = label.querySelector('input[type="checkbox"]');
@@ -988,6 +1094,7 @@ function readerUpdateComposeCounters() {
         const limitStr = input.dataset.limit;
         if (!limitStr) {
             counter.textContent = '';
+            counter.classList.remove('is-over');
             return;
         }
         const limit = parseInt(limitStr, 10);
@@ -996,10 +1103,29 @@ function readerUpdateComposeCounters() {
         counter.textContent = `${currentCount}/${limit}`;
         if (currentCount > limit) {
             counter.classList.add('is-over');
+            if (input.checked) {
+                const nameSpan = label.querySelector('span:not(.compose-dest-counter)');
+                const destName = nameSpan ? nameSpan.textContent.trim() : input.value;
+                overLimitDests.push(`${destName} (${currentCount}/${limit})`);
+            }
         } else {
             counter.classList.remove('is-over');
         }
     });
+
+    const warnEl = document.getElementById('compose-overlimit-warning');
+    if (warnEl) {
+        if (overLimitDests.length > 0) {
+            warnEl.textContent =
+                'Over character limit for ' +
+                overLimitDests.join(', ') +
+                ' — over-limit posts may be rejected or truncated by that platform.';
+            warnEl.hidden = false;
+        } else {
+            warnEl.textContent = '';
+            warnEl.hidden = true;
+        }
+    }
 }
 
 // ── Saved Searches (Phase 5) ──────────────────────────────────────────────
@@ -1057,6 +1183,160 @@ async function readerSubmitSaveSearch(form) {
         btn.textContent = origText;
     }
     return false;
+}
+
+function readerOpenManageSearch(btn, promptDelete = false) {
+    const dlg = document.getElementById('reader-manage-search-dialog');
+    if (!dlg || !btn) return;
+    const searchId = btn.dataset.searchId || '';
+    const searchName = btn.dataset.searchName || '';
+    const searchQuery = btn.dataset.searchQuery || '';
+
+    const idInput = document.getElementById('manage-search-id-input');
+    const nameInput = document.getElementById('manage-search-name-input');
+    const queryDisplay = document.getElementById('manage-search-query-display');
+    const errBox = document.getElementById('manage-search-error');
+    const confirmWrap = document.getElementById('manage-search-delete-confirm');
+    const confirmName = document.getElementById('manage-search-confirm-name');
+
+    if (idInput) idInput.value = searchId;
+    if (nameInput) nameInput.value = searchName;
+    if (queryDisplay) queryDisplay.value = searchQuery;
+    if (errBox) {
+        errBox.textContent = '';
+        errBox.hidden = true;
+    }
+    if (confirmWrap) confirmWrap.hidden = !promptDelete;
+    if (confirmName) confirmName.textContent = searchName;
+
+    dlg.showModal();
+    if (promptDelete) {
+        document.getElementById('manage-search-delete-confirm-btn')?.focus();
+    } else {
+        nameInput?.focus();
+    }
+}
+
+function readerPromptDeleteSearch() {
+    const confirmWrap = document.getElementById('manage-search-delete-confirm');
+    const errBox = document.getElementById('manage-search-error');
+    if (errBox) {
+        errBox.textContent = '';
+        errBox.hidden = true;
+    }
+    if (confirmWrap) {
+        confirmWrap.hidden = false;
+        document.getElementById('manage-search-delete-confirm-btn')?.focus();
+    }
+}
+
+function readerCancelDeleteSearch() {
+    const confirmWrap = document.getElementById('manage-search-delete-confirm');
+    if (confirmWrap) confirmWrap.hidden = true;
+    document.getElementById('manage-search-delete-btn')?.focus();
+}
+
+function readerExtractErrorDetail(data, fallback) {
+    if (!data) return fallback;
+    if (typeof data.detail === 'string' && data.detail) return data.detail;
+    if (Array.isArray(data.detail) && data.detail.length) {
+        return data.detail.map((d) => (d && d.msg ? d.msg : String(d))).join('; ');
+    }
+    return fallback;
+}
+
+async function readerSubmitRenameSearch(form) {
+    const btn = document.getElementById('manage-search-rename-btn');
+    const errBox = document.getElementById('manage-search-error');
+    if (!btn || btn.disabled) return false;
+    const searchId = document.getElementById('manage-search-id-input')?.value || '';
+    const name = (document.getElementById('manage-search-name-input')?.value || '').trim();
+
+    if (!searchId) return false;
+    if (errBox) {
+        errBox.textContent = '';
+        errBox.hidden = true;
+    }
+    if (name.length < 1 || name.length > 60) {
+        if (errBox) {
+            errBox.textContent = 'Name must be between 1 and 60 characters';
+            errBox.hidden = false;
+        }
+        return false;
+    }
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Saving...';
+
+    try {
+        const resp = await fetch(`/api/saved-searches/${encodeURIComponent(searchId)}/rename`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+            body: new URLSearchParams({ name }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (errBox) {
+                errBox.textContent = readerExtractErrorDetail(data, 'Failed to rename saved search');
+                errBox.hidden = false;
+            }
+            return false;
+        }
+        document.getElementById('reader-manage-search-dialog')?.close();
+        reloadPreservingScroll();
+    } catch (e) {
+        if (errBox) {
+            errBox.textContent = 'Request failed: ' + e.message;
+            errBox.hidden = false;
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
+    return false;
+}
+
+async function readerConfirmDeleteSearch(btn) {
+    if (!btn || btn.disabled) return;
+    const searchId = document.getElementById('manage-search-id-input')?.value || '';
+    const errBox = document.getElementById('manage-search-error');
+    if (!searchId) return;
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Deleting...';
+
+    try {
+        const resp = await fetch(`/api/saved-searches/${encodeURIComponent(searchId)}/delete`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (errBox) {
+                errBox.textContent = data.detail || 'Failed to delete saved search';
+                errBox.hidden = false;
+            }
+            return;
+        }
+        document.getElementById('reader-manage-search-dialog')?.close();
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('saved') === String(searchId)) {
+            url.searchParams.delete('saved');
+            window.location = url.pathname + url.search;
+        } else {
+            reloadPreservingScroll();
+        }
+    } catch (e) {
+        if (errBox) {
+            errBox.textContent = 'Request failed: ' + e.message;
+            errBox.hidden = false;
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
 }
 
 // ── Reader Mute Training (Phase 4) ──────────────────────────────────────────
@@ -1124,13 +1404,42 @@ async function readerOpenCompose(itemId) {
     const dlg = document.getElementById('reader-compose');
     if (!dlg) return;
 
+    const reqSeq = ++readerComposeReqSeq;
+    readerComposeItemData = null;
+
     const form = document.getElementById('reader-compose-form');
     if (form) form.reset();
     document.getElementById('compose-item-id').value = itemId;
-    document.getElementById('compose-results').style.display = 'none';
-    document.getElementById('compose-results').innerHTML = '';
+
+    const subtitleEl = document.getElementById('compose-subtitle');
+    if (subtitleEl) subtitleEl.textContent = 'Loading item…';
+
+    const textarea = document.getElementById('compose-body');
+    if (textarea) textarea.value = '';
+
+    const resultsEl = document.getElementById('compose-results');
+    if (resultsEl) {
+        resultsEl.style.display = 'none';
+        resultsEl.replaceChildren();
+    }
+    dlg.querySelectorAll('.action-status').forEach((el) => el.remove());
+
+    const warnEl = document.getElementById('compose-overlimit-warning');
+    if (warnEl) {
+        warnEl.textContent = '';
+        warnEl.hidden = true;
+    }
+
+    const mediaWrap = document.getElementById('compose-media-wrap');
+    if (mediaWrap) mediaWrap.style.display = 'none';
+
     document.getElementById('compose-comment-wrap').style.display = 'none';
     document.getElementById('compose-commentary').value = '';
+
+    const submitBtn = document.getElementById('compose-submit-btn');
+    const queueBtn = document.getElementById('compose-queue-btn');
+    if (submitBtn) submitBtn.disabled = true;
+    if (queueBtn) queueBtn.disabled = true;
 
     // Restore last selected destinations from localStorage
     try {
@@ -1142,29 +1451,29 @@ async function readerOpenCompose(itemId) {
         }
     } catch (e) {}
 
+    readerUpdateComposeCounters();
     dlg.showModal();
 
     try {
         const resp = await fetch(`/api/reader/${itemId}/compose`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
+        if (reqSeq !== readerComposeReqSeq) return;
         readerComposeItemData = data;
 
-        document.getElementById('compose-subtitle').textContent = data.item.title || '(untitled)';
-        const textarea = document.getElementById('compose-body');
+        if (subtitleEl) subtitleEl.textContent = data.item.title || '(untitled)';
         const firstDest = document.querySelector('#compose-destinations input[type="checkbox"]:checked') ||
                           document.querySelector('#compose-destinations input[type="checkbox"]');
         const defaultVal = (firstDest && data.rendered && data.rendered[firstDest.value]) ||
                            (data.item.title + (data.item.link ? ' ' + data.item.link : ''));
-        textarea.value = defaultVal;
+        if (textarea) textarea.value = defaultVal;
 
         // Image section
-        const mediaWrap = document.getElementById('compose-media-wrap');
         const imgPrev = document.getElementById('compose-image-preview');
         const altInput = document.getElementById('compose-image-alt');
         const altHint = document.getElementById('compose-alt-hint');
 
-        if (data.item.image_url) {
+        if (data.item.image_url && mediaWrap) {
             mediaWrap.style.display = 'flex';
             imgPrev.src = data.item.image_url;
             altInput.value = data.item.image_alt || '';
@@ -1174,13 +1483,25 @@ async function readerOpenCompose(itemId) {
             } else {
                 altHint.textContent = 'AI alt text will be generated if configured in Settings.';
             }
-        } else {
+        } else if (mediaWrap) {
             mediaWrap.style.display = 'none';
         }
 
+        if (submitBtn) submitBtn.disabled = false;
+        if (queueBtn) queueBtn.disabled = false;
         readerUpdateComposeCounters();
     } catch (e) {
-        showStatus(document.getElementById('compose-submit-btn'), 'Failed to load preview: ' + e.message, 'error');
+        if (reqSeq !== readerComposeReqSeq) return;
+        if (subtitleEl) subtitleEl.textContent = 'Unable to load item';
+        if (resultsEl) {
+            resultsEl.replaceChildren();
+            const errDiv = document.createElement('div');
+            errDiv.className = 'compose-res-item is-error';
+            errDiv.setAttribute('role', 'alert');
+            errDiv.textContent = 'Failed to load preview: ' + e.message;
+            resultsEl.appendChild(errDiv);
+            resultsEl.style.display = 'flex';
+        }
     }
 }
 
@@ -1314,35 +1635,222 @@ async function queuePostNow(postId, btn) {
     }
 }
 
-// Live character / grapheme counter updates
+let _queueEditOpener = null;
+
+function _pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+function _dateToDatetimeLocal(d) {
+    return (
+        d.getFullYear() + '-' +
+        _pad2(d.getMonth() + 1) + '-' +
+        _pad2(d.getDate()) + 'T' +
+        _pad2(d.getHours()) + ':' +
+        _pad2(d.getMinutes())
+    );
+}
+
+function _parseDatetimeLocal(localVal) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec((localVal || '').trim());
+    if (!m) return null;
+    const d = new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        m[6] ? Number(m[6]) : 0
+    );
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function _dateToUtcSql(d) {
+    return (
+        d.getUTCFullYear() + '-' +
+        _pad2(d.getUTCMonth() + 1) + '-' +
+        _pad2(d.getUTCDate()) + ' ' +
+        _pad2(d.getUTCHours()) + ':' +
+        _pad2(d.getUTCMinutes()) + ':' +
+        _pad2(d.getUTCSeconds())
+    );
+}
+
+function updateQueueEditPreview() {
+    const localInput = document.getElementById('queue-edit-local-dt');
+    const utcInput = document.getElementById('queue-edit-utc-dt');
+    const preview = document.getElementById('queue-edit-tz-preview');
+    if (!localInput || !utcInput) return false;
+    const d = _parseDatetimeLocal(localInput.value);
+    if (!d) {
+        utcInput.value = '';
+        if (preview) preview.textContent = 'Select a valid local date and time.';
+        return false;
+    }
+    const utcStr = _dateToUtcSql(d);
+    utcInput.value = utcStr;
+    const locales = (navigator.languages && navigator.languages.length) ? navigator.languages : undefined;
+    if (preview) {
+        preview.textContent = `Local: ${d.toLocaleString(locales)} · UTC: ${utcStr} UTC`;
+    }
+    return true;
+}
+
+function openQueueEdit(postId, btn) {
+    const row = document.getElementById(`queue-row-${postId}`);
+    const dlg = document.getElementById('queue-edit-dialog');
+    const form = document.getElementById('queue-edit-form');
+    if (!row || !dlg || !form) return;
+    _queueEditOpener = btn || null;
+
+    form.action = `/api/queue/${postId}/edit`;
+    const titleEl = document.getElementById('queue-edit-title');
+    if (titleEl) {
+        titleEl.textContent = row.dataset.status === 'draft' ? 'Edit draft post' : 'Edit queued post';
+    }
+    const subEl = document.getElementById('queue-edit-subtitle');
+    if (subEl) {
+        subEl.textContent = row.dataset.destination || '';
+    }
+    const contentEl = document.getElementById('queue-edit-content');
+    if (contentEl) {
+        contentEl.value = row.dataset.content || '';
+    }
+
+    const localInput = document.getElementById('queue-edit-local-dt');
+    let d = row.dataset.scheduledIso ? new Date(row.dataset.scheduledIso) : null;
+    if (!d || isNaN(d.getTime())) {
+        d = new Date();
+        d.setSeconds(0, 0);
+    }
+    if (localInput) {
+        localInput.value = _dateToDatetimeLocal(d);
+    }
+    updateQueueEditPreview();
+    dlg.showModal();
+    if (contentEl) contentEl.focus();
+}
+
+function closeQueueEdit() {
+    const dlg = document.getElementById('queue-edit-dialog');
+    if (dlg && dlg.open) dlg.close();
+}
+
+function syncQueueEditSubmit(form) {
+    if (!updateQueueEditPreview()) return false;
+    const contentEl = form.querySelector('textarea[name="content"]');
+    if (!contentEl || !contentEl.value.trim()) return false;
+    return true;
+}
+
+function _utcHmToLocal(hm, tzOffsetMins) {
+    const m = /^(\d{2}):(\d{2})$/.exec(hm || '');
+    if (!m) return hm || '';
+    const utcMins = Number(m[1]) * 60 + Number(m[2]);
+    const localMins = ((utcMins - tzOffsetMins) % 1440 + 1440) % 1440;
+    return _pad2(Math.floor(localMins / 60)) + ':' + _pad2(localMins % 60);
+}
+
+function _localHmToUtc(hm, tzOffsetMins) {
+    const m = /^(\d{2}):(\d{2})$/.exec(hm || '');
+    if (!m) return '';
+    const localMins = Number(m[1]) * 60 + Number(m[2]);
+    const utcMins = ((localMins + tzOffsetMins) % 1440 + 1440) % 1440;
+    return _pad2(Math.floor(utcMins / 60)) + ':' + _pad2(utcMins % 60);
+}
+
+function initQueuePage() {
+    if (window.location.pathname === '/queue' && window.history && history.replaceState) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('status')) {
+            url.searchParams.delete('status');
+            history.replaceState(null, '', url.pathname + (url.search || '') + (url.hash || ''));
+        }
+    }
+
+    const editLocalInput = document.getElementById('queue-edit-local-dt');
+    if (editLocalInput) {
+        editLocalInput.addEventListener('input', updateQueueEditPreview);
+        editLocalInput.addEventListener('change', updateQueueEditPreview);
+    }
+    const editDlg = document.getElementById('queue-edit-dialog');
+    if (editDlg) {
+        editDlg.addEventListener('close', () => {
+            if (_queueEditOpener && typeof _queueEditOpener.focus === 'function') {
+                _queueEditOpener.focus();
+            }
+            _queueEditOpener = null;
+        });
+    }
+
+    document.querySelectorAll('form.queue-cadence-form').forEach((form) => {
+        const tzInput = form.querySelector('input[name="tz_offset_minutes"]');
+        const enabledBox = form.querySelector('input[name="active_hours_enabled"]');
+        const startInput = form.querySelector('input[name="active_start"]');
+        const endInput = form.querySelector('input[name="active_end"]');
+        const previewEl = form.querySelector('.queue-cadence-preview');
+        const utcWindow = (form.dataset.utcWindow || '').trim();
+        const tzOffset = new Date().getTimezoneOffset();
+
+        if (tzInput) tzInput.value = String(tzOffset);
+        const winMatch = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(utcWindow);
+        if (winMatch) {
+            if (enabledBox) enabledBox.checked = true;
+            if (startInput) startInput.value = _utcHmToLocal(winMatch[1], tzOffset);
+            if (endInput) endInput.value = _utcHmToLocal(winMatch[2], tzOffset);
+        } else {
+            if (enabledBox) enabledBox.checked = false;
+            if (startInput && !startInput.value) startInput.value = '09:00';
+            if (endInput && !endInput.value) endInput.value = '21:00';
+        }
+
+        const syncState = () => {
+            const curOffset = new Date().getTimezoneOffset();
+            if (tzInput) tzInput.value = String(curOffset);
+            const on = enabledBox ? enabledBox.checked : false;
+            if (startInput) {
+                startInput.disabled = !on;
+                startInput.required = on;
+            }
+            if (endInput) {
+                endInput.disabled = !on;
+                endInput.required = on;
+            }
+            if (previewEl) {
+                if (!on) {
+                    previewEl.textContent = '24h (posts any hour)';
+                } else {
+                    const uStart = _localHmToUtc(startInput ? startInput.value : '', curOffset);
+                    const uEnd = _localHmToUtc(endInput ? endInput.value : '', curOffset);
+                    previewEl.textContent = (uStart && uEnd) ? `UTC window: ${uStart}–${uEnd}` : '';
+                }
+            }
+        };
+
+        syncState();
+        if (enabledBox) enabledBox.addEventListener('change', syncState);
+        if (startInput) {
+            startInput.addEventListener('input', syncState);
+            startInput.addEventListener('change', syncState);
+        }
+        if (endInput) {
+            endInput.addEventListener('input', syncState);
+            endInput.addEventListener('change', syncState);
+        }
+        form.addEventListener('submit', syncState);
+    });
+}
+initQueuePage();
+
+// Live character / grapheme counter & over-limit warning updates
 document.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'compose-body') {
         readerUpdateComposeCounters();
     }
 });
-
-function readerOpenShout(itemId) {
-    readerOpenCompose(itemId);
-}
-
-// Toggle the variables tooltip (tap/click/Enter on the ⓘ trigger). On touch
-// devices there is no :hover; this is the sole reveal path. The document-level
-// click listener below dismisses if the user taps/clicks outside the trigger.
-function readerToggleVars(btn) {
-    const open = btn.classList.toggle('is-open');
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-
-// Dismiss any open variables tooltip when the user taps/clicks outside its
-// trigger. This is the primary close mechanism on touch (where :hover is
-// disabled and re-tapping the small trigger is unreliable).
-document.addEventListener('click', function (e) {
-    var btns = document.querySelectorAll('.reader-shout-vars.is-open');
-    for (var i = 0; i < btns.length; i++) {
-        if (!btns[i].contains(e.target)) {
-            btns[i].classList.remove('is-open');
-            btns[i].setAttribute('aria-expanded', 'false');
-        }
+document.addEventListener('change', (e) => {
+    if (e.target && e.target.matches && e.target.matches('#compose-destinations input[type="checkbox"]')) {
+        readerUpdateComposeCounters();
     }
 });
 
@@ -1355,30 +1863,6 @@ function readerToast(text) {
     toast.textContent = text;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
-}
-
-async function readerShout(itemId, form) {
-    const btn = form.querySelector('button[type="submit"]');
-    if (btn.disabled) return false;
-    const data = new URLSearchParams(new FormData(form));
-    btn.disabled = true;
-    const dlg = form.closest('dialog');
-    try {
-        const resp = await fetch(`/api/reader/${itemId}/shout`, { method: 'POST', body: data });
-        const result = await resp.json();
-        if (!resp.ok) { showStatus(btn, result.detail || 'Shout failed', 'error'); return false; }
-        if (result.success) {
-            const box = form.querySelector('.action-status');
-            if (box) box.remove();
-            form.reset();
-            if (dlg) dlg.close();
-            readerToast('Shouted' + (result.post_url ? ' — view in History' : ''));
-        } else {
-            showStatus(btn, result.error_message || 'Shout failed', 'error');
-        }
-    } catch (e) { showStatus(btn, 'Request failed: ' + e.message, 'error'); }
-    finally { btn.disabled = false; }
-    return false;
 }
 
 // ── Reader keyboard shortcuts ────────────────────────────────────────────────
@@ -1570,17 +2054,39 @@ function readerDisableAutoRead() {
     readerAutoReadQueue.clear();
 }
 
+function readerIsStarredView() {
+    const list = document.querySelector('.reader-item-list');
+    if (list && list.dataset.view) return list.dataset.view === 'starred';
+    const readerEl = document.querySelector('.reader');
+    if (readerEl && readerEl.dataset.view) return readerEl.dataset.view === 'starred';
+    return new URLSearchParams(window.location.search).get('view') === 'starred';
+}
+
 function readerApplyAutoRead() {
     const btn = document.getElementById('reader-autoread-btn');
-    const on = localStorage.getItem('feedecho-reader-autoread') === '1';
+    const isStarred = readerIsStarredView();
+    const on = !isStarred && localStorage.getItem('feedecho-reader-autoread') === '1';
     if (btn) {
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         btn.textContent = on ? 'Auto-read ✓' : 'Auto-read';
+        if (isStarred) {
+            btn.setAttribute('aria-disabled', 'true');
+            btn.setAttribute('title', 'Auto-read is paused in Starred view');
+        } else {
+            btn.removeAttribute('aria-disabled');
+            btn.setAttribute('title', 'Mark items read as you scroll past them');
+        }
     }
-    if (on) readerEnableAutoRead();
+    if (isStarred) readerDisableAutoRead();
+    else if (on) readerEnableAutoRead();
 }
 
 function readerToggleAutoRead() {
+    const btn = document.getElementById('reader-autoread-btn');
+    if (readerIsStarredView() || (btn && btn.getAttribute('aria-disabled') === 'true')) {
+        readerToast('Auto-read is paused in Starred view');
+        return;
+    }
     const on = localStorage.getItem('feedecho-reader-autoread') === '1';
     localStorage.setItem('feedecho-reader-autoread', on ? '0' : '1');
     if (on) readerDisableAutoRead(); else readerEnableAutoRead();
@@ -1603,6 +2109,25 @@ function readerToggleFullText() {
 let readerMaxItemId = 0;
 let readerPollTimer = null;
 
+function readerRenderPlainParagraphs(container, rawText) {
+    if (!container) return;
+    const normalized = String(rawText || '').replace(/\r\n?/g, '\n');
+    const blocks = normalized
+        .split(/\n\s*\n/)
+        .map((b) => b.replace(/^\n+|\n+$/g, ''))
+        .filter((b) => b.trim().length > 0);
+    if (!blocks.length) {
+        container.replaceChildren();
+        return;
+    }
+    const paragraphs = blocks.map((block) => {
+        const p = document.createElement('p');
+        p.textContent = block;
+        return p;
+    });
+    container.replaceChildren(...paragraphs);
+}
+
 function readerLoadBody(details) {
     const content = details.querySelector('.reader-item-content');
     if (!content || content.dataset.loaded === '1') return;
@@ -1615,7 +2140,7 @@ function readerLoadBody(details) {
     content.setAttribute('aria-live', 'polite');
     fetch(`/api/reader/${itemId}/body`)
         .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((d) => { content.textContent = d.content || ''; content.classList.remove('is-loading'); })
+        .then((d) => { readerRenderPlainParagraphs(content, d.content || ''); content.classList.remove('is-loading'); })
         .catch(() => { content.dataset.loaded = '0'; content.classList.remove('is-loading'); });
 }
 
@@ -1624,11 +2149,61 @@ document.addEventListener('toggle', (e) => {
     if (details && details.matches && details.matches('details.reader-item') && details.open) {
         readerLoadBody(details);
     }
+}, true);
+
+function readerSyncDrawerViewport() {
+    const readerMain = document.querySelector('.reader-main');
+    if (!readerMain) return;
+    const isMobile = window.matchMedia('(max-width: 720px)').matches;
+    if (!isMobile) {
+        readerMain.inert = false;
+        return;
+    }
+    const aside = document.getElementById('reader-feeds-sidebar') || document.querySelector('.reader-feeds');
+    readerMain.inert = Boolean(aside && aside.classList.contains('open'));
+}
+
+function readerToggleFeeds(forceState) {
+    const aside = document.getElementById('reader-feeds-sidebar') || document.querySelector('.reader-feeds');
+    if (!aside) return;
+    const wasOpen = aside.classList.contains('open');
+    const isOpen = typeof forceState === 'boolean' ? forceState : !wasOpen;
+    aside.classList.toggle('open', isOpen);
+
+    const backdrop = document.getElementById('reader-drawer-backdrop');
+    if (backdrop) backdrop.hidden = !isOpen;
+
+    const toggleBtn = document.querySelector('.reader-feeds-toggle');
+    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+
+    const readerMain = document.querySelector('.reader-main');
+    const isMobile = window.matchMedia('(max-width: 720px)').matches;
+    if (readerMain) {
+        readerMain.inert = Boolean(isOpen && isMobile);
+    }
+
+    if (isOpen) {
+        aside.querySelector('.reader-feeds-close')?.focus();
+    } else if (wasOpen) {
+        toggleBtn?.focus();
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const aside = document.getElementById('reader-feeds-sidebar') || document.querySelector('.reader-feeds');
+    if (!aside || !aside.classList.contains('open')) return;
+    if (document.querySelector('dialog[open]')) return;
+    e.preventDefault();
+    readerToggleFeeds(false);
 });
 
-function readerToggleFeeds() {
-    const feeds = document.querySelector('.reader-feeds');
-    if (feeds) feeds.classList.toggle('open');
+window.addEventListener('resize', readerSyncDrawerViewport, { passive: true });
+if (typeof window.matchMedia === 'function') {
+    const readerDrawerMq = window.matchMedia('(max-width: 720px)');
+    if (typeof readerDrawerMq.addEventListener === 'function') {
+        readerDrawerMq.addEventListener('change', readerSyncDrawerViewport);
+    }
 }
 
 function readerStartPolling() {

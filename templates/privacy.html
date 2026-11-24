@@ -10,19 +10,19 @@
     <h2>What we collect and why</h2>
     <table class="data-table">
         <thead>
-            <tr><th>Data</th><th>Why we need it</th></tr>
+            <tr><th scope="col">Data</th><th scope="col">Why we need it</th></tr>
         </thead>
         <tbody>
-            <tr><td>Email address</td><td>Account identity, verification, password reset, and operational alerts about your feeds.</td></tr>
-            <tr><td>Password</td><td>Stored only as a salted scrypt hash. Never in plain text.</td></tr>
-            <tr><td>Feed URLs</td><td>The feeds you ask us to watch, and a cursor (last seen item) per feed so posts are not duplicated.</td></tr>
-            <tr><td>Feed content</td><td>Titles, authors, summaries, article bodies, and image references from recent items, stored so the built-in reader can display them. The newest 200 unstarred items per feed are kept (older ones are pruned automatically); items you star are kept until you unstar them, delete the feed, or delete your account.</td></tr>
-            <tr><td>Reader organization</td><td>Your folders, saved searches, and per-item read/starred state.</td></tr>
-            <tr><td>Destination credentials</td><td>Tokens, app passwords, webhook URLs, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, webhooks). Required to post on your behalf; nothing else is done with them. They are encrypted at rest.</td></tr>
-            <tr><td>AI alt-text API key</td><td>Optional. If you enable AI-generated alt text, the API key for the OpenAI-compatible vision provider you choose. Stored encrypted at rest, used only to request alt text for images you attach to posts.</td></tr>
-            <tr><td>Echo configuration</td><td>Your templates, filters, and delivery settings.</td></tr>
-            <tr><td>Post history</td><td>Which feed items were delivered where, when, and with what outcome — needed for retries, duplicate prevention, and failure diagnosis.</td></tr>
-            <tr><td>Server logs</td><td>Request paths, client IP addresses, your account id when you are signed in, status codes, and timestamps — for debugging and abuse prevention. Paths only: query strings (which could contain tokens) are never logged.</td></tr>
+            <tr><td data-label="Data">Email address</td><td data-label="Why we need it">Account identity, verification, password reset, and operational alerts about your feeds.</td></tr>
+            <tr><td data-label="Data">Password</td><td data-label="Why we need it">Stored only as a salted scrypt hash. Never in plain text.</td></tr>
+            <tr><td data-label="Data">Feed URLs</td><td data-label="Why we need it">The feeds you ask us to watch, and a cursor (last seen item) per feed so posts are not duplicated.</td></tr>
+            <tr><td data-label="Data">Feed content</td><td data-label="Why we need it">Titles, authors, summaries, article bodies, and image references from recent items, stored so the built-in reader can display them. The newest 200 unstarred items per feed are kept (older ones are pruned automatically); items you star are kept until you unstar them, delete the feed, or delete your account.</td></tr>
+            <tr><td data-label="Data">Reader organization</td><td data-label="Why we need it">Your folders, saved searches, and per-item read/starred state.</td></tr>
+            <tr><td data-label="Data">Destination credentials</td><td data-label="Why we need it">Tokens, app passwords, webhook URLs, and SMTP credentials for the accounts you connect (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, email, webhooks). Required to post on your behalf; nothing else is done with them. They are encrypted at rest.</td></tr>
+            <tr><td data-label="Data">AI alt-text API key</td><td data-label="Why we need it">Optional. If you enable AI-generated alt text, the API key for the OpenAI-compatible vision provider you choose. Stored encrypted at rest, used only to request alt text for images you attach to posts.</td></tr>
+            <tr><td data-label="Data">Echo configuration</td><td data-label="Why we need it">Your templates, filters, and delivery settings.</td></tr>
+            <tr><td data-label="Data">Post history</td><td data-label="Why we need it">Which feed items were delivered where, when, and with what outcome — needed for retries, duplicate prevention, and failure diagnosis.</td></tr>
+            <tr><td data-label="Data">Server logs</td><td data-label="Why we need it">Request paths, client IP addresses, your account id when you are signed in, status codes, and timestamps — for debugging and abuse prevention. Paths only: query strings (which could contain tokens) are never logged.</td></tr>
         </tbody>
     </table>
 </section>

@@ -3,6 +3,9 @@
 {% block content %}
 <h1>Settings</h1>
 
+{% if request.query_params.get('status') == 'saved' %}
+<div class="flash flash-ok" role="status">Settings saved.</div>
+{% endif %}
 {% if import_success %}
 <div class="alert alert-success" role="status">{{ import_success }}</div>
 {% endif %}
@@ -33,9 +36,13 @@
             <label>Username
                 <input type="text" name="smtp_username" value="{{ smtp_settings.smtp_username or '' }}" placeholder="user@example.com" required>
             </label>
-            <label>Password
-                <input type="password" name="smtp_password" value="{{ smtp_settings.smtp_password or '' }}" placeholder="App password">
-            </label>
+            <div class="form-field">
+                <label for="smtp-password">Password</label>
+                <input type="password" id="smtp-password" name="smtp_password" value="" placeholder="{{ 'Stored' if smtp_has_password else 'App password' }}" autocomplete="new-password"{% if smtp_has_password %} aria-describedby="smtp-password-hint"{% endif %}>
+                {% if smtp_has_password %}
+                <span class="hint" id="smtp-password-hint">A password is stored. Enter a new password to replace it.</span>
+                {% endif %}
+            </div>
         </div>
         <div class="form-row">
             <label>From Email
@@ -46,12 +53,14 @@
             </label>
         </div>
         <div class="form-row">
-            <label for="smtp-use-tls">Use TLS</label>
-            <select id="smtp-use-tls" name="smtp_use_tls">
-                <option value="1" {{ 'selected' if smtp_settings.smtp_use_tls != '0' else '' }}>STARTTLS</option>
-                <option value="0" {{ 'selected' if smtp_settings.smtp_use_tls == '0' else '' }}>SSL/TLS (implicit)</option>
-            </select>
-            <span class="hint" style="margin: 0.2rem 0 0;">STARTTLS usually pairs with port 587; implicit SSL/TLS with port 465. Set the Port field to match your provider.</span>
+            <div class="form-field">
+                <label for="smtp-use-tls">Use TLS</label>
+                <select id="smtp-use-tls" name="smtp_use_tls" aria-describedby="smtp-use-tls-hint">
+                    <option value="1" {{ 'selected' if smtp_settings.smtp_use_tls != '0' else '' }}>STARTTLS</option>
+                    <option value="0" {{ 'selected' if smtp_settings.smtp_use_tls == '0' else '' }}>SSL/TLS (implicit)</option>
+                </select>
+                <span class="hint" id="smtp-use-tls-hint">STARTTLS usually pairs with port 587; implicit SSL/TLS with port 465. Set the Port field to match your provider.</span>
+            </div>
         </div>
         <button type="submit">Save SMTP Settings</button>
     </form>
@@ -70,23 +79,31 @@
 
     <form method="post" action="/api/settings/retry-notify" class="echo-form">
         <div class="form-row">
-            <label for="retry-max-attempts">Max delivery attempts</label>
-            <input type="number" id="retry-max-attempts" name="retry_max_attempts" value="{{ retry_notify.get('retry_max_attempts', '5') }}" min="0" max="100" aria-describedby="retry-max-attempts-hint">
-            <span class="hint" id="retry-max-attempts-hint" style="margin: 0.2rem 0 0;">0 = retry forever</span>
+            <div class="form-field">
+                <label for="retry-max-attempts">Max delivery attempts</label>
+                <input type="number" id="retry-max-attempts" name="retry_max_attempts" value="{{ retry_notify.get('retry_max_attempts', '5') }}" min="0" max="100" aria-describedby="retry-max-attempts-hint">
+                <span class="hint" id="retry-max-attempts-hint">0 = retry forever</span>
+            </div>
         </div>
         <div class="form-row">
-            <label for="retry-backoff">Retry backoff (minutes)</label>
-            <input type="number" id="retry-backoff" name="retry_backoff_minutes" value="{{ retry_notify.get('retry_backoff_minutes', '5') }}" min="1" max="1440" aria-describedby="retry-backoff-hint">
-            <span class="hint" id="retry-backoff-hint" style="margin: 0.2rem 0 0;">First retry delay; doubles each attempt</span>
+            <div class="form-field">
+                <label for="retry-backoff">Retry backoff (minutes)</label>
+                <input type="number" id="retry-backoff" name="retry_backoff_minutes" value="{{ retry_notify.get('retry_backoff_minutes', '5') }}" min="1" max="1440" aria-describedby="retry-backoff-hint">
+                <span class="hint" id="retry-backoff-hint">First retry delay; doubles each attempt</span>
+            </div>
         </div>
         <div class="form-row">
-            <label for="notify-threshold">Notify after consecutive failures</label>
-            <input type="number" id="notify-threshold" name="notify_failure_threshold" value="{{ retry_notify.get('notify_failure_threshold', '3') }}" min="0" max="100" aria-describedby="notify-threshold-hint">
-            <span class="hint" id="notify-threshold-hint" style="margin: 0.2rem 0 0;">0 = notifications off</span>
+            <div class="form-field">
+                <label for="notify-threshold">Notify after consecutive failures</label>
+                <input type="number" id="notify-threshold" name="notify_failure_threshold" value="{{ retry_notify.get('notify_failure_threshold', '3') }}" min="0" max="100" aria-describedby="notify-threshold-hint">
+                <span class="hint" id="notify-threshold-hint">0 = notifications off</span>
+            </div>
         </div>
         <div class="form-row">
-            <label for="notify-email">Notification email</label>
-            <input type="email" id="notify-email" name="notify_email" value="{{ retry_notify.get('notify_email', '') }}" placeholder="defaults to first email account">
+            <div class="form-field">
+                <label for="notify-email">Notification email</label>
+                <input type="email" id="notify-email" name="notify_email" value="{{ retry_notify.get('notify_email', '') }}" placeholder="defaults to first email account">
+            </div>
         </div>
         <button type="submit">Save Retry &amp; Notification Settings</button>
     </form>
@@ -104,9 +121,11 @@
 
     <form method="post" action="/api/settings/alt-text" class="echo-form">
         <div class="form-row">
-            <label for="alt-text-enabled">Enable AI alt text</label>
-            <input type="checkbox" id="alt-text-enabled" name="alt_text_ai_enabled" value="1" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }} aria-describedby="alt-text-enabled-hint">
-            <span class="hint" id="alt-text-enabled-hint" style="margin: 0.2rem 0 0;">Generate alt text for attached images before they are posted to your connected accounts.</span>
+            <div class="check-field">
+                <input type="checkbox" id="alt-text-enabled" name="alt_text_ai_enabled" value="1" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }} aria-describedby="alt-text-enabled-hint">
+                <label for="alt-text-enabled">Enable AI alt text</label>
+                <span class="hint" id="alt-text-enabled-hint">Generate alt text for attached images before they are posted to your connected accounts.</span>
+            </div>
         </div>
         <div class="form-row">
             <label>API Base URL
@@ -117,9 +136,13 @@
             </label>
         </div>
         <div class="form-row">
-            <label>API Key
-                <input type="password" name="alt_text_ai_api_key" value="{{ alt_text_settings.get('alt_text_ai_api_key', '') }}" placeholder="sk-...">
-            </label>
+            <div class="form-field">
+                <label for="alt-text-api-key">API Key</label>
+                <input type="password" id="alt-text-api-key" name="alt_text_ai_api_key" value="" placeholder="{{ 'Stored' if alt_text_has_api_key else 'sk-...' }}" autocomplete="off"{% if alt_text_has_api_key %} aria-describedby="alt-text-api-key-hint"{% endif %}>
+                {% if alt_text_has_api_key %}
+                <span class="hint" id="alt-text-api-key-hint">An API key is stored. Enter a new key to replace it.</span>
+                {% endif %}
+            </div>
         </div>
         <button type="submit">Save Alt Text Settings</button>
     </form>
@@ -205,4 +228,15 @@
     </form>
 </section>
 {% endif %}
+
+<script>
+(function () {
+    if (!window.history || !history.replaceState) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('status')) {
+        url.searchParams.delete('status');
+        history.replaceState(null, '', url.pathname + (url.search || ''));
+    }
+})();
+</script>
 {% endblock %}

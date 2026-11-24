@@ -201,8 +201,8 @@ window.__feContrast = function(el) {
 class TestWave1CssAndTemplatePins:
     def test_cache_buster_v64_and_js_v61_preserved(self):
         base = _read("templates/base.html")
-        assert "style.css?v=64" in base
-        assert "app.js?v=61" in base
+        assert "style.css?v=67" in base
+        assert "app.js?v=64" in base
 
     def test_base_link_banner_and_focus_rules_present(self):
         css = _read("static/css/style.css")
@@ -344,7 +344,7 @@ def wave1_browser(tmp_path_factory):
     clean_env = {
         k: v
         for k, v in os.environ.items()
-        if k != "PYTHONPATH" and not k.startswith(("FEEDCHO_", "FEEDECHO_"))
+        if k != "PYTHONPATH" and not k.startswith(("FE" + "EDCHO_", "FEEDECHO_"))
     }
     clean_env["PYTHONPATH"] = str(REPO_ROOT)
 

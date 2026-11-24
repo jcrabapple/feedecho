@@ -6,15 +6,16 @@
 {%- endmacro %}
 <h1 class="reader-heading">Reader</h1>
 
-<div class="reader" data-max-item-id="{{ max_item_id }}">
-  <aside class="reader-feeds" aria-label="Feeds">
-    <button class="reader-feeds-close" type="button" onclick="readerToggleFeeds()" aria-label="Close feeds">×</button>
+<div class="reader" data-max-item-id="{{ max_item_id }}" data-view="{{ view }}">
+  <div class="reader-drawer-backdrop" id="reader-drawer-backdrop" hidden onclick="readerToggleFeeds(false)"></div>
+  <aside class="reader-feeds" id="reader-feeds-sidebar" aria-label="Feeds">
+    <button class="reader-feeds-close" type="button" onclick="readerToggleFeeds(false)" aria-label="Close feeds">×</button>
     {% if saved_searches %}
     <div class="reader-saved-searches" style="margin-bottom: 1.25rem;">
       <h2 style="font-size: 0.95rem; margin-bottom: 0.4rem;">Saved Searches</h2>
       <ul class="reader-feed-list">
         {% for s in saved_searches %}
-        <li class="reader-feed {% if current_saved_search == s.id | string %}active{% endif %}">
+        <li class="reader-feed reader-saved-search-item {% if current_saved_search == s.id | string %}active{% endif %}" data-saved-search-id="{{ s.id }}">
           <a class="reader-feed-link" href="/reader?saved={{ s.id }}{% if fulltext %}&fulltext=1{% endif %}">
             <span class="reader-feed-avatar" aria-hidden="true" style="background:var(--primary-wash); color:var(--primary);">🔍</span>
             <span class="reader-feed-name" title="{{ s.query }}">{{ s.name }}</span>
@@ -24,6 +25,15 @@
               {% endif %}
             </span>
           </a>
+          <button type="button" class="reader-saved-search-manage"
+                  data-search-id="{{ s.id }}"
+                  data-search-name="{{ s.name }}"
+                  data-search-query="{{ s.query }}"
+                  onclick="readerOpenManageSearch(this)"
+                  title="Manage saved search {{ s.name }}"
+                  aria-label="Manage saved search {{ s.name }}">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          </button>
         </li>
         {% endfor %}
       </ul>
@@ -40,10 +50,10 @@
         {% set fol_unread = fol_feeds | sum(attribute='unread') %}
         <div class="reader-folder-group" data-folder-id="{{ fol.id }}">
           <div class="reader-folder-header">
-            <button type="button" class="reader-folder-toggle" onclick="readerToggleFolderCollapse({{ fol.id }})" aria-expanded="true">
+            <button type="button" class="reader-folder-toggle" aria-expanded="true" aria-controls="reader-folder-feeds-{{ fol.id }}" aria-label="Toggle {{ fol.name }} feeds" onclick="readerToggleFolderCollapse({{ fol.id }}, this)">
               <span class="reader-folder-arrow" aria-hidden="true">▾</span>
-              <span class="reader-folder-name">{{ fol.name }}</span>
             </button>
+            <a class="reader-folder-link{% if current_folder == (fol.id | string) %} active{% endif %}" href="/reader?folder={{ fol.id }}&view={{ view }}{% if fulltext %}&fulltext=1{% endif %}">{{ fol.name }}</a>
             <div class="reader-folder-meta">
               {% if fol_unread %}<span class="reader-feed-unread">{{ fol_unread }}</span>{% endif %}
               <button type="button" class="reader-folder-mark-read" onclick="readerMarkFolderRead({{ fol.id }}, this)" title="Mark folder read" aria-label="Mark folder read">✓</button>
@@ -102,21 +112,26 @@
 
   <section class="reader-main" aria-label="Items">
     <div class="reader-toolbar">
-      <button class="btn-sm reader-feeds-toggle" type="button" onclick="readerToggleFeeds()" title="Show feeds">☰ Feeds</button>
+      <button class="btn-sm reader-feeds-toggle" type="button" onclick="readerToggleFeeds()" title="Show feeds" aria-expanded="false" aria-controls="reader-feeds-sidebar">☰ Feeds</button>
       <div class="reader-tabs" role="tablist" aria-label="Filter">
-        <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Unread</a>
-        <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">All</a>
-        <a class="reader-tab {% if not q and view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Starred</a>
-        <a class="reader-tab {% if not q and view == 'today' %}active{% endif %}" href="/reader?view=today{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Today</a>
+        <a class="reader-tab {% if not q and view == 'unread' %}active{% endif %}" href="/reader?view=unread{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Unread</a>
+        <a class="reader-tab {% if not q and view == 'all' %}active{% endif %}" href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">All</a>
+        <a class="reader-tab {% if not q and view == 'starred' %}active{% endif %}" href="/reader?view=starred{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Starred</a>
+        <a class="reader-tab {% if not q and view == 'today' %}active{% endif %}" href="/reader?view=today{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">Today</a>
       </div>
       <form method="get" action="/reader" class="reader-search" role="search">
         <input type="search" name="q" value="{{ q }}" placeholder="Search…" aria-label="Search titles and articles" title="Operators: is:starred, is:unread, is:read, feed:NAME, in:title, in:body">
         {% if current_feed %}<input type="hidden" name="feed" value="{{ current_feed }}">{% endif %}
+        {% if current_folder %}<input type="hidden" name="folder" value="{{ current_folder }}">{% endif %}
         {% if fulltext %}<input type="hidden" name="fulltext" value="1">{% endif %}
         <button type="submit" class="btn-sm">Search</button>
         {% if q %}
+        {% set clear_params = [] %}
+        {% if current_feed %}{% set _ = clear_params.append('feed=' ~ current_feed) %}{% endif %}
+        {% if current_folder %}{% set _ = clear_params.append('folder=' ~ current_folder) %}{% endif %}
+        {% if fulltext %}{% set _ = clear_params.append('fulltext=1') %}{% endif %}
         <button type="button" class="btn-sm reader-save-search-btn" data-search-query="{{ q | e }}" onclick="readerOpenSaveSearch(this.dataset.searchQuery)">Save</button>
-        <a class="reader-search-clear" href="/reader{% if current_feed or fulltext %}?{% endif %}{% if current_feed %}feed={{ current_feed }}{% endif %}{% if current_feed and fulltext %}&{% endif %}{% if fulltext %}fulltext=1{% endif %}">Clear</a>
+        <a class="reader-search-clear" href="/reader{% if clear_params %}?{{ clear_params | join('&') }}{% endif %}">Clear</a>
         {% endif %}
       </form>
       <div class="reader-toolbar-right">
@@ -129,9 +144,29 @@
         <button class="btn-sm" type="button" id="reader-density-btn" onclick="readerToggleDensity()" title="Toggle list density" aria-pressed="false">Compact</button>
         <button class="btn-sm" type="button" id="reader-autoread-btn" onclick="readerToggleAutoRead()" title="Mark items read as you scroll past them" aria-pressed="false">Auto-read</button>
         <button class="btn-sm" type="button" id="reader-fulltext-btn" onclick="readerToggleFullText()" title="Show the full article text instead of the summary teaser" aria-pressed="{{ 'true' if fulltext else 'false' }}">Full text</button>
-        <button class="btn-sm reader-shortcuts-btn" type="button" onclick="readerShowShortcuts()" title="Keyboard shortcuts">?</button>
+        <button class="btn-sm reader-shortcuts-btn" type="button" onclick="readerShowShortcuts()" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
       </div>
     </div>
+
+    {% if active_saved_search %}
+    <div class="reader-saved-banner">
+      <span class="reader-saved-banner-label">Saved search: <strong>{{ active_saved_search.name }}</strong> <code>{{ active_saved_search.query }}</code></span>
+      <div class="reader-saved-banner-actions">
+        <button type="button" class="btn-sm reader-saved-banner-rename"
+                data-search-id="{{ active_saved_search.id }}"
+                data-search-name="{{ active_saved_search.name }}"
+                data-search-query="{{ active_saved_search.query }}"
+                onclick="readerOpenManageSearch(this)"
+                aria-label="Rename saved search {{ active_saved_search.name }}">Rename</button>
+        <button type="button" class="btn-sm btn-danger reader-saved-banner-delete"
+                data-search-id="{{ active_saved_search.id }}"
+                data-search-name="{{ active_saved_search.name }}"
+                data-search-query="{{ active_saved_search.query }}"
+                onclick="readerOpenManageSearch(this, true)"
+                aria-label="Delete saved search {{ active_saved_search.name }}">Delete</button>
+      </div>
+    </div>
+    {% endif %}
 
     {% if items %}
     <ul class="reader-item-list" data-view="{{ view }}">
@@ -147,7 +182,7 @@
       {% if q %}No results for "{{ q }}".
       {% elif view == 'starred' %}No starred items. Star an item to keep it here.
       {% elif view == 'all' %}No items stored yet. Enable reading on a feed, then it fills in on the next poll.
-      {% else %}No unread items. <a href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">View all</a>.
+      {% else %}No unread items. <a href="/reader?view=all{% if current_feed %}&feed={{ current_feed }}{% endif %}{% if current_folder %}&folder={{ current_folder }}{% endif %}{% if fulltext %}&fulltext=1{% endif %}">View all</a>.
       {% endif %}
     </p>
     {% endif %}
@@ -178,7 +213,7 @@
   <form id="reader-compose-form" onsubmit="readerSubmitCompose(this); return false;">
     <input type="hidden" name="item_id" id="compose-item-id">
     <div class="compose-header">
-      <h3 id="compose-dialog-title" class="compose-title">Compose post</h3>
+      <h2 id="compose-dialog-title" class="compose-title">Compose post</h2>
       <p id="compose-subtitle" class="compose-subtitle"></p>
     </div>
 
@@ -206,6 +241,8 @@
       </div>
       <textarea name="content" id="compose-body" rows="4" spellcheck="true" required></textarea>
     </div>
+
+    <div id="compose-overlimit-warning" class="compose-overlimit-warning" role="status" aria-live="polite" hidden></div>
 
     <div class="compose-section compose-media-section" id="compose-media-wrap" style="display: none;">
       <span class="compose-label">Image</span>
@@ -236,7 +273,7 @@
 <dialog id="reader-mute-dialog" class="reader-compose" aria-labelledby="mute-dialog-title">
   <form id="reader-mute-form" onsubmit="readerSubmitMute(this); return false;">
     <input type="hidden" name="item_id" id="mute-item-id" value="">
-    <h3 id="mute-dialog-title" style="margin-top:0;">Mute phrase</h3>
+    <h2 id="mute-dialog-title" class="compose-title">Mute phrase</h2>
     <p class="hint">Hide articles containing this phrase from your reader view.</p>
     <div class="form-row">
       <label>Phrase to mute
@@ -260,7 +297,7 @@
 
 <dialog id="reader-save-search-dialog" class="reader-compose" aria-labelledby="save-search-dialog-title">
   <form id="reader-save-search-form" onsubmit="readerSubmitSaveSearch(this); return false;">
-    <h3 id="save-search-dialog-title" style="margin-top:0;">Save Search</h3>
+    <h2 id="save-search-dialog-title" class="compose-title">Save Search</h2>
     <p class="hint">Save this search query to your sidebar as a smart feed with unread counts.</p>
     <div class="form-row">
       <label>Name
@@ -273,6 +310,35 @@
     <div class="compose-actions" style="margin-top: 1rem;">
       <button type="button" class="btn-sm" onclick="document.getElementById('reader-save-search-dialog').close()">Cancel</button>
       <button type="submit" class="btn-sm btn-primary" id="save-search-submit-btn">Save search</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="reader-manage-search-dialog" class="reader-compose" aria-labelledby="manage-search-dialog-title">
+  <form id="reader-manage-search-form" onsubmit="readerSubmitRenameSearch(this); return false;">
+    <input type="hidden" name="search_id" id="manage-search-id-input" value="">
+    <h2 id="manage-search-dialog-title" class="compose-title">Manage saved search</h2>
+    <p class="hint">Rename this saved search or remove it from your sidebar.</p>
+    <div class="form-row">
+      <label>Name
+        <input type="text" name="name" id="manage-search-name-input" maxlength="60" required>
+      </label>
+      <label>Query
+        <input type="text" id="manage-search-query-display" class="manage-search-readonly" readonly>
+      </label>
+    </div>
+    <div id="manage-search-error" class="action-status action-status-error" role="alert" hidden></div>
+    <div class="compose-actions" style="margin-top: 1rem;">
+      <button type="button" class="btn-sm btn-danger manage-search-delete-btn" id="manage-search-delete-btn" onclick="readerPromptDeleteSearch()">Delete…</button>
+      <button type="button" class="btn-sm" onclick="document.getElementById('reader-manage-search-dialog').close()">Cancel</button>
+      <button type="submit" class="btn-sm btn-primary" id="manage-search-rename-btn">Rename</button>
+    </div>
+    <div id="manage-search-delete-confirm" class="manage-search-confirm" hidden>
+      <p class="manage-search-confirm-text">Delete saved search <strong id="manage-search-confirm-name"></strong>?</p>
+      <div class="compose-actions" style="margin-top: 0.5rem;">
+        <button type="button" class="btn-sm" id="manage-search-delete-cancel-btn" onclick="readerCancelDeleteSearch()">Keep search</button>
+        <button type="button" class="btn-sm btn-danger" id="manage-search-delete-confirm-btn" onclick="readerConfirmDeleteSearch(this)">Confirm delete</button>
+      </div>
     </div>
   </form>
 </dialog>

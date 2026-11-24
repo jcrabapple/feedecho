@@ -1,24 +1,72 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Curation Queue{% endblock %}
 {% block content %}
+<div class="queue-page">
 <h1>Curation Queue</h1>
+
+{% if request.query_params.get('status') == 'saved' %}
+<div class="flash flash-ok" role="status">Queue cadence settings saved.</div>
+{% endif %}
+
+{% if cadence_destinations %}
+<details class="queue-cadence-panel">
+    <summary class="queue-cadence-summary">Queue Cadence &amp; Active Hours</summary>
+    <div class="queue-cadence-body">
+        <p class="hint" style="margin-bottom: 0;">Set the minimum spacing between auto-queued posts and the local hours when each destination may send.</p>
+        {% for dest in cadence_destinations %}
+        <form method="post" action="/api/queue/settings" class="queue-cadence-form" data-utc-window="{{ dest.queue_active_hours }}">
+            <input type="hidden" name="destination_key" value="{{ dest.destination_key }}">
+            <input type="hidden" name="tz_offset_minutes" value="0">
+            <input type="hidden" name="form_mode" value="1">
+            <div class="queue-cadence-dest">
+                <strong>{{ dest.label }}</strong>
+                <span class="queue-cadence-preview">{% if dest.queue_active_hours %}UTC window: {{ dest.queue_active_hours }}{% else %}24h (posts any hour){% endif %}</span>
+            </div>
+            <label class="queue-cadence-field">
+                <span>Interval (minutes)</span>
+                <input type="number" name="queue_interval_minutes" min="15" max="10080" step="1" value="{{ dest.queue_interval_minutes }}" required>
+            </label>
+            <label class="queue-cadence-check">
+                <input type="checkbox" name="active_hours_enabled" value="1" {% if dest.queue_active_hours %}checked{% endif %}>
+                <span>Active hours</span>
+            </label>
+            <label class="queue-cadence-field">
+                <span>Start (local)</span>
+                <input type="time" name="active_start" value="{{ dest.active_start_utc }}" {% if not dest.queue_active_hours %}disabled{% else %}required{% endif %}>
+            </label>
+            <label class="queue-cadence-field">
+                <span>End (local)</span>
+                <input type="time" name="active_end" value="{{ dest.active_end_utc }}" {% if not dest.queue_active_hours %}disabled{% else %}required{% endif %}>
+            </label>
+            <button class="btn-sm btn-primary" type="submit">Save</button>
+        </form>
+        {% endfor %}
+    </div>
+</details>
+{% endif %}
 
 {% if posts %}
 <div class="data-table-wrapper">
 <table class="data-table">
     <thead>
         <tr>
-            <th>Scheduled For</th>
-            <th>Destination</th>
-            <th>Feed</th>
-            <th>Content</th>
-            <th>Status</th>
-            <th>Actions</th>
+            <th scope="col">Scheduled For</th>
+            <th scope="col">Destination</th>
+            <th scope="col">Feed</th>
+            <th scope="col">Content</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
         </tr>
     </thead>
     <tbody>
         {% for post in posts %}
-        <tr id="queue-row-{{ post.id }}">
+        <tr id="queue-row-{{ post.id }}"
+            data-post-id="{{ post.id }}"
+            data-content="{{ post.content }}"
+            data-scheduled-iso="{{ post.scheduled_at | iso_utc }}"
+            data-scheduled-utc="{{ post.scheduled_at | utc_text }}"
+            data-destination="{{ post.destination_label }}"
+            data-status="{{ post.status }}">
             <td data-label="Scheduled For">
                 <small>
                     {% if post.scheduled_at %}
@@ -41,15 +89,23 @@
                     <button class="btn-sm" type="submit" title="Retry dispatch">Retry</button>
                 </form>
                 {% else %}
+                {% if post.status == 'draft' %}
+                <form method="post" action="/api/queue/{{ post.id }}/approve" class="inline">
+                    <button class="btn-sm btn-primary" type="submit">Approve &amp; Schedule</button>
+                </form>
+                {% endif %}
+                {% if post.status == 'queued' or post.status == 'draft' %}
+                <button class="btn-sm queue-edit-btn" type="button" onclick="openQueueEdit({{ post.id }}, this)">Edit</button>
+                {% endif %}
                 <button class="btn-sm" type="button" onclick="withBusy(this, () => queuePostNow({{ post.id }}, this))">Post now</button>
                 {% if post.status == 'queued' %}
                 <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
                     <input type="hidden" name="direction" value="up">
-                    <button class="btn-sm" type="submit" title="Move earlier">&uarr;</button>
+                    <button class="btn-sm" type="submit" aria-label="Move earlier" title="Move earlier"><span aria-hidden="true">&uarr;</span></button>
                 </form>
                 <form method="post" action="/api/queue/{{ post.id }}/reorder" class="inline">
                     <input type="hidden" name="direction" value="down">
-                    <button class="btn-sm" type="submit" title="Move later">&darr;</button>
+                    <button class="btn-sm" type="submit" aria-label="Move later" title="Move later"><span aria-hidden="true">&darr;</span></button>
                 </form>
                 {% endif %}
                 {% endif %}
@@ -62,7 +118,31 @@
     </tbody>
 </table>
 </div>
+
+<dialog id="queue-edit-dialog" class="reader-compose queue-edit-dialog" aria-labelledby="queue-edit-title">
+    <form method="post" action="" id="queue-edit-form" onsubmit="return syncQueueEditSubmit(this);">
+        <div class="compose-header">
+            <h2 id="queue-edit-title" class="compose-title">Edit queued post</h2>
+            <p id="queue-edit-subtitle" class="compose-subtitle"></p>
+        </div>
+        <div class="compose-section">
+            <label for="queue-edit-content" class="compose-label">Post body</label>
+            <textarea name="content" id="queue-edit-content" rows="4" required></textarea>
+        </div>
+        <div class="compose-section">
+            <label for="queue-edit-local-dt" class="compose-label">Scheduled time (local)</label>
+            <input type="datetime-local" id="queue-edit-local-dt" required>
+            <input type="hidden" name="scheduled_at" id="queue-edit-utc-dt" value="">
+            <p id="queue-edit-tz-preview" class="hint" style="margin-bottom: 0;"></p>
+        </div>
+        <div class="compose-actions">
+            <button type="button" class="btn-sm" id="queue-edit-cancel" onclick="closeQueueEdit()">Cancel</button>
+            <button type="submit" class="btn-sm btn-primary" id="queue-edit-save">Save</button>
+        </div>
+    </form>
+</dialog>
 {% else %}
 <p class="empty-state">No posts scheduled in the queue. Open <a href="/reader">Reader</a> to compose and queue posts.</p>
 {% endif %}
+</div>
 {% endblock %}

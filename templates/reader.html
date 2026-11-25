@@ -281,10 +281,10 @@
       </label>
     </div>
     <div class="form-row" style="margin-top: 0.5rem;">
-      <label style="display:inline-flex; align-items:center; gap: 0.4rem; margin-right: 1rem;">
+      <label class="checkbox-label">
         <input type="radio" name="scope" value="feed" checked> This feed only
       </label>
-      <label style="display:inline-flex; align-items:center; gap: 0.4rem;">
+      <label class="checkbox-label">
         <input type="radio" name="scope" value="all"> All read-enabled feeds
       </label>
     </div>
@@ -304,7 +304,7 @@
         <input type="text" name="name" id="save-search-name-input" maxlength="60" required placeholder="e.g. AI News">
       </label>
       <label>Query
-        <input type="text" name="query" id="save-search-query-input" required readonly style="background:var(--bg-card); opacity:0.85;">
+        <input type="text" name="query" id="save-search-query-input" class="manage-search-readonly" required readonly>
       </label>
     </div>
     <div class="compose-actions" style="margin-top: 1rem;">

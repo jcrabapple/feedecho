@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Settings{% endblock %}
 {% block content %}
-<h1>Settings</h1>
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Settings</h1>
+        </div>
+        <p class="page-header-subtitle">Configure outbound SMTP, delivery retries, AI alt text, backups{% if billing_enabled %}, and billing{% endif %}.</p>
+    </div>
+</div>
 
 {% if request.query_params.get('status') == 'saved' %}
 <div class="flash flash-ok" role="status">Settings saved.</div>
@@ -13,9 +20,13 @@
 <div class="alert alert-warning" role="status">{{ import_error }}</div>
 {% endif %}
 
-<section>
-    <h2>SMTP Configuration</h2>
-    <p class="hint">Configure the SMTP server used to send email echoes. Required if you want to route feed items to email addresses.</p>
+<section class="settings-card">
+    <div class="settings-card-header">
+        <div>
+            <h2>SMTP Configuration</h2>
+            <p class="hint">Configure the SMTP server used to send email echoes. Required if you want to route feed items to email addresses.</p>
+        </div>
+    </div>
 
     {% if smtp_configured %}
     <div class="alert alert-success" role="status">SMTP is configured ({{ smtp_settings.smtp_host }}:{{ smtp_settings.smtp_port }}).</div>
@@ -25,10 +36,10 @@
 
     <form method="post" action="/api/settings/smtp" class="echo-form">
         <div class="form-row">
-            <label>SMTP Host
+            <label class="form-field--wide">SMTP Host
                 <input type="text" name="smtp_host" value="{{ smtp_settings.smtp_host or '' }}" placeholder="smtp.fastmail.com" required>
             </label>
-            <label>Port
+            <label class="field-compact">Port
                 <input type="number" name="smtp_port" value="{{ smtp_settings.smtp_port or '587' }}" min="1" max="65535" required>
             </label>
         </div>
@@ -53,7 +64,7 @@
             </label>
         </div>
         <div class="form-row">
-            <div class="form-field">
+            <div class="form-field form-field--medium">
                 <label for="smtp-use-tls">Use TLS</label>
                 <select id="smtp-use-tls" name="smtp_use_tls" aria-describedby="smtp-use-tls-hint">
                     <option value="1" {{ 'selected' if smtp_settings.smtp_use_tls != '0' else '' }}>STARTTLS</option>
@@ -62,56 +73,71 @@
                 <span class="hint" id="smtp-use-tls-hint">STARTTLS usually pairs with port 587; implicit SSL/TLS with port 465. Set the Port field to match your provider.</span>
             </div>
         </div>
-        <button type="submit">Save SMTP Settings</button>
+        <div class="form-footer form-footer--start">
+            <button type="submit">Save SMTP Settings</button>
+        </div>
     </form>
 
-    <form method="post" action="/api/settings/smtp/test" class="inline-form" style="margin-top: 0.5rem;">
-        <label for="smtp-test-email">Test recipient (optional, defaults to From Email)</label>
-        <input type="email" name="test_email" id="smtp-test-email"
-               placeholder="email@example.com">
-        <button type="submit" class="btn-sm">Send Test Email</button>
-    </form>
+    <div class="card-divider">
+        <form method="post" action="/api/settings/smtp/test" class="inline-form" style="margin-bottom: 0; max-width: 38rem;">
+            <label for="smtp-test-email" style="width: 100%; font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Test recipient (optional, defaults to From Email)</label>
+            <input type="email" name="test_email" id="smtp-test-email" placeholder="email@example.com">
+            <button type="submit" class="btn-sm">Send Test Email</button>
+        </form>
+    </div>
 </section>
 
-<section>
-    <h2>Retries &amp; Failure Notifications</h2>
-    <p class="hint">Failed deliveries retry automatically with exponential backoff. After the max attempts, the item is marked "Gave up" and the feed moves on. Notifications require SMTP to be configured above.</p>
+<section class="settings-card">
+    <div class="settings-card-header">
+        <div>
+            <h2>Retries &amp; Failure Notifications</h2>
+            <p class="hint">Failed deliveries retry automatically with exponential backoff. After the max attempts, the item is marked "Gave up" and the feed moves on. Notifications require SMTP to be configured above.</p>
+        </div>
+    </div>
 
     <form method="post" action="/api/settings/retry-notify" class="echo-form">
-        <div class="form-row">
-            <div class="form-field">
-                <label for="retry-max-attempts">Max delivery attempts</label>
-                <input type="number" id="retry-max-attempts" name="retry_max_attempts" value="{{ retry_notify.get('retry_max_attempts', '5') }}" min="0" max="100" aria-describedby="retry-max-attempts-hint">
-                <span class="hint" id="retry-max-attempts-hint">0 = retry forever</span>
+        <div class="form-grid-2">
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="retry-max-attempts">Max delivery attempts</label>
+                    <input type="number" id="retry-max-attempts" name="retry_max_attempts" value="{{ retry_notify.get('retry_max_attempts', '5') }}" min="0" max="100" aria-describedby="retry-max-attempts-hint">
+                    <span class="hint" id="retry-max-attempts-hint">0 = retry forever</span>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="retry-backoff">Retry backoff (minutes)</label>
+                    <input type="number" id="retry-backoff" name="retry_backoff_minutes" value="{{ retry_notify.get('retry_backoff_minutes', '5') }}" min="1" max="1440" aria-describedby="retry-backoff-hint">
+                    <span class="hint" id="retry-backoff-hint">First retry delay; doubles each attempt</span>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="notify-threshold">Notify after consecutive failures</label>
+                    <input type="number" id="notify-threshold" name="notify_failure_threshold" value="{{ retry_notify.get('notify_failure_threshold', '3') }}" min="0" max="100" aria-describedby="notify-threshold-hint">
+                    <span class="hint" id="notify-threshold-hint">0 = notifications off</span>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="notify-email">Notification email</label>
+                    <input type="email" id="notify-email" name="notify_email" value="{{ retry_notify.get('notify_email', '') }}" placeholder="defaults to first email account">
+                </div>
             </div>
         </div>
-        <div class="form-row">
-            <div class="form-field">
-                <label for="retry-backoff">Retry backoff (minutes)</label>
-                <input type="number" id="retry-backoff" name="retry_backoff_minutes" value="{{ retry_notify.get('retry_backoff_minutes', '5') }}" min="1" max="1440" aria-describedby="retry-backoff-hint">
-                <span class="hint" id="retry-backoff-hint">First retry delay; doubles each attempt</span>
-            </div>
+        <div class="form-footer form-footer--start">
+            <button type="submit">Save Retry &amp; Notification Settings</button>
         </div>
-        <div class="form-row">
-            <div class="form-field">
-                <label for="notify-threshold">Notify after consecutive failures</label>
-                <input type="number" id="notify-threshold" name="notify_failure_threshold" value="{{ retry_notify.get('notify_failure_threshold', '3') }}" min="0" max="100" aria-describedby="notify-threshold-hint">
-                <span class="hint" id="notify-threshold-hint">0 = notifications off</span>
-            </div>
-        </div>
-        <div class="form-row">
-            <div class="form-field">
-                <label for="notify-email">Notification email</label>
-                <input type="email" id="notify-email" name="notify_email" value="{{ retry_notify.get('notify_email', '') }}" placeholder="defaults to first email account">
-            </div>
-        </div>
-        <button type="submit">Save Retry &amp; Notification Settings</button>
     </form>
 </section>
 
-<section>
-    <h2>AI Alt Text (Optional)</h2>
-    <p class="hint">When enabled, FeedEcho generates alt text for attached images using an OpenAI-compatible vision API. Requires a vision-capable model endpoint. If disabled or unconfigured, images are uploaded without alt text.</p>
+<section class="settings-card">
+    <div class="settings-card-header">
+        <div>
+            <h2>AI Alt Text (Optional)</h2>
+            <p class="hint">When enabled, FeedEcho generates alt text for attached images using an OpenAI-compatible vision API. Requires a vision-capable model endpoint. If disabled or unconfigured, images are uploaded without alt text.</p>
+        </div>
+    </div>
 
     {% if alt_text_configured %}
     <div class="alert alert-success" role="status">Vision API configured ({{ alt_text_settings.alt_text_ai_base_url }}, model: {{ alt_text_settings.alt_text_ai_model }}).</div>
@@ -120,7 +146,7 @@
     {% endif %}
 
     <form method="post" action="/api/settings/alt-text" class="echo-form">
-        <div class="form-row">
+        <div class="check-group">
             <div class="check-field">
                 <input type="checkbox" id="alt-text-enabled" name="alt_text_ai_enabled" value="1" {{ 'checked' if alt_text_settings.get('alt_text_ai_enabled') == '1' else '' }} aria-describedby="alt-text-enabled-hint">
                 <label for="alt-text-enabled">Enable AI alt text</label>
@@ -136,7 +162,7 @@
             </label>
         </div>
         <div class="form-row">
-            <div class="form-field">
+            <div class="form-field form-field--medium">
                 <label for="alt-text-api-key">API Key</label>
                 <input type="password" id="alt-text-api-key" name="alt_text_ai_api_key" value="" placeholder="{{ 'Stored' if alt_text_has_api_key else 'sk-...' }}" autocomplete="off"{% if alt_text_has_api_key %} aria-describedby="alt-text-api-key-hint"{% endif %}>
                 {% if alt_text_has_api_key %}
@@ -144,31 +170,44 @@
                 {% endif %}
             </div>
         </div>
-        <button type="submit">Save Alt Text Settings</button>
+        <div class="form-footer form-footer--start">
+            <button type="submit">Save Alt Text Settings</button>
+            <button type="button" class="btn-sm" onclick="testAltText(this)" style="margin: 0;">Test Vision API</button>
+        </div>
     </form>
-
-    <button type="button" class="btn-sm" onclick="testAltText(this)">Test Vision API</button>
 </section>
 
-<section>
-    <h2>Backup &amp; Migration</h2>
-    <p class="hint">Download your feeds, connected accounts, and echoes as a single file you can import into another FeedEcho instance — including the hosted service — and the reverse. <strong>The file contains account credentials</strong> (access tokens, app passwords, webhook URLs), so store it somewhere safe.</p>
-
-    <p><a class="btn-sm" href="/api/export" download>Download backup</a></p>
-
-    <form method="post" action="/api/import" enctype="multipart/form-data" class="echo-form">
-        <div class="form-row">
-            <label for="import-file">Import a backup file
-                <input type="file" id="import-file" name="file" accept=".json,application/json" required>
-            </label>
+<section class="settings-card">
+    <div class="settings-card-header">
+        <div>
+            <h2>Backup &amp; Migration</h2>
+            <p class="hint">Download your feeds, connected accounts, and echoes as a single file you can import into another FeedEcho instance — including the hosted service — and the reverse. <strong>The file contains account credentials</strong> (access tokens, app passwords, webhook URLs), so store it somewhere safe.</p>
         </div>
-        <button type="submit">Import</button>
-    </form>
+    </div>
+
+    <p style="margin-bottom: 0;"><a class="btn-sm" href="/api/export" download>Download backup</a></p>
+
+    <div class="card-divider">
+        <form method="post" action="/api/import" enctype="multipart/form-data" class="echo-form">
+            <div class="form-row">
+                <label for="import-file" class="form-field--medium">Import a backup file
+                    <input type="file" id="import-file" name="file" accept=".json,application/json" required>
+                </label>
+            </div>
+            <div class="form-footer form-footer--start">
+                <button type="submit">Import</button>
+            </div>
+        </form>
+    </div>
 </section>
 
 {% if billing_enabled %}
-<section id="billing">
-    <h2>Billing</h2>
+<section id="billing" class="settings-card">
+    <div class="settings-card-header">
+        <div>
+            <h2>Billing</h2>
+        </div>
+    </div>
     {% if request.query_params.get('billing') == 'upgraded' %}
     <div class="flash flash-ok" role="status">Your subscription is starting — your card will be charged now and your account upgrades to the paid plan.</div>
     {% elif request.query_params.get('billing') == 'too-many' %}
@@ -185,26 +224,30 @@
     <p class="hint">You're on the free trial{% if trial_ends_date %} — it ends <time class="local-time" datetime="{{ trial_ends_date }}">{{ trial_ends_date }}</time>{% endif %}. Subscribe to unlock higher limits and keep posting.</p>
     {% endif %}
     {% if subscription_status == 'trialing' %}
-    <form method="post" action="/api/billing/portal" class="inline-form">
-        <button type="submit" class="btn-sm">Manage subscription</button>
-    </form>
-    <form method="post" action="/api/billing/upgrade-now" class="inline-form"
-          onsubmit="return confirm('Skip the rest of your trial and start your subscription now? You will be charged immediately.');">
-        <button type="submit">Start my subscription now</button>
-    </form>
+    <div class="form-footer form-footer--start">
+        <form method="post" action="/api/billing/portal" class="inline-form" style="margin: 0;">
+            <button type="submit" class="btn-sm">Manage subscription</button>
+        </form>
+        <form method="post" action="/api/billing/upgrade-now" class="inline-form" style="margin: 0;"
+              onsubmit="return confirm('Skip the rest of your trial and start your subscription now? You will be charged immediately.');">
+            <button type="submit">Start my subscription now</button>
+        </form>
+    </div>
     {% else %}
-    <form method="post" action="/api/billing/checkout" class="inline-form">
-        <input type="hidden" name="interval" value="monthly">
-        <button type="submit">Subscribe — $4/month</button>
-    </form>
-    <form method="post" action="/api/billing/checkout" class="inline-form">
-        <input type="hidden" name="interval" value="yearly">
-        <button type="submit">Subscribe — $40/year</button>
-    </form>
+    <div class="form-footer form-footer--start">
+        <form method="post" action="/api/billing/checkout" class="inline-form" style="margin: 0;">
+            <input type="hidden" name="interval" value="monthly">
+            <button type="submit">Subscribe — $4/month</button>
+        </form>
+        <form method="post" action="/api/billing/checkout" class="inline-form" style="margin: 0;">
+            <input type="hidden" name="interval" value="yearly">
+            <button type="submit">Subscribe — $40/year</button>
+        </form>
+    </div>
     {% endif %}
     {% elif plan == 'paid' %}
     <div class="alert alert-success" role="status">You're on the paid plan.</div>
-    <form method="post" action="/api/billing/portal" class="inline-form">
+    <form method="post" action="/api/billing/portal" class="inline-form" style="margin-bottom: 0;">
         <button type="submit">Manage subscription</button>
     </form>
     {% endif %}
@@ -212,19 +255,25 @@
 {% endif %}
 
 {% if MULTI %}
-<section class="danger-zone">
-    <h2>Delete account</h2>
-    <p class="hint">Permanently deletes your account, every feed and echo, all connected destinations, and all stored credentials. This cannot be undone. Any active subscription is cancelled.</p>
+<section class="settings-card danger-zone">
+    <div class="settings-card-header">
+        <div>
+            <h2>Delete account</h2>
+            <p class="hint">Permanently deletes your account, every feed and echo, all connected destinations, and all stored credentials. This cannot be undone. Any active subscription is cancelled.</p>
+        </div>
+    </div>
     {% if delete_error %}
     <div class="alert alert-error" role="alert">{{ delete_error }}</div>
     {% endif %}
     <form method="post" action="/settings/delete-account" class="echo-form">
         <div class="form-row">
-            <label for="delete-password">Enter your password to confirm
+            <label for="delete-password" class="form-field--medium">Enter your password to confirm
                 <input type="password" id="delete-password" name="password" autocomplete="current-password" required>
             </label>
         </div>
-        <button type="submit" class="btn-danger">Delete my account</button>
+        <div class="form-footer form-footer--start">
+            <button type="submit" class="btn-danger">Delete my account</button>
+        </div>
     </form>
 </section>
 {% endif %}

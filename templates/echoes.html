@@ -1,15 +1,27 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Echoes{% endblock %}
 {% block content %}
-<h1>Echoes</h1>
+{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or telegram_accounts or webhook_accounts or github_accounts %}
+
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Echoes</h1>
+            {% if echoes %}<span class="count-pill">{{ echoes | length }}</span>{% endif %}
+        </div>
+        <p class="page-header-subtitle">Route items from a Feed to a destination using a Jinja2 template, filters, and pacing rules.</p>
+    </div>
+    {% if feeds and has_destination %}
+    <div class="page-header-actions">
+        <button type="button" onclick="openPageDrawer('new-echo-drawer', 'destination-type')">+ New Echo</button>
+    </div>
+    {% endif %}
+</div>
 
 {% if error %}
 <div class="alert alert-error" role="alert">{{ error }}</div>
 {% endif %}
 
-<p class="hint">An Echo routes items from a Feed to a destination (Mastodon, Bluesky, micro.blog, Matrix, Discord, Telegram, a generic webhook, a GitHub repository, or email) using a template.</p>
-
-{% set has_destination = mastodon_accounts or email_accounts or bluesky_accounts or microblog_accounts or matrix_accounts or discord_accounts or telegram_accounts or webhook_accounts or github_accounts %}
 {% if not feeds or not has_destination %}
 <p class="empty-state">
     You'll need
@@ -20,256 +32,305 @@
     {% if not has_destination %}<a href="/accounts">Connect a destination</a>{% endif %}
 </p>
 {% else %}
-<form method="post" action="/api/echoes" class="echo-form">
-    <div class="form-row">
-        <label>Feed
-            <select name="feed_id" required>
-                {% for feed in feeds %}
-                <option value="{{ feed.id }}"{% if preselect_feed_id == feed.id %} selected{% endif %}>{{ feed.name }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Destination
-            <select name="destination_type" id="destination-type" onchange="toggleDestFields()">
-                {% if mastodon_accounts %}
-                <option value="mastodon">Mastodon Account</option>
-                {% endif %}
-                {% if email_accounts %}
-                <option value="email">Email Address</option>
-                {% endif %}
-                {% if bluesky_accounts %}
-                <option value="bluesky">Bluesky Account</option>
-                {% endif %}
-                {% if microblog_accounts %}
-                <option value="microblog">Micro.blog Blog</option>
-                {% endif %}
-                {% if matrix_accounts %}
-                <option value="matrix">Matrix Room</option>
-                {% endif %}
-                {% if discord_accounts %}
-                <option value="discord">Discord Channel</option>
-                {% endif %}
-                {% if telegram_accounts %}
-                <option value="telegram">Telegram Chat</option>
-                {% endif %}
-                {% if webhook_accounts %}
-                <option value="webhook">Webhook</option>
-                {% endif %}
-                {% if github_accounts %}
-                <option value="github">GitHub Repository</option>
-                {% endif %}
-            </select>
-        </label>
-    </div>
-{# The first <option> in #destination-type is whichever account type exists
-   first in the same if-chain below. Its field row must start visible and the
-   rest hidden server-side: hiding only via the inline script flashes the
-   Mastodon row on every load and leaves it wrong with JS disabled. #}
-{% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('telegram' if telegram_accounts else ('webhook' if webhook_accounts else ('github' if github_accounts else '')))))))) %}
-{% macro dest_hidden(dest) %}{% if dest != first_dest %} style="display: none;"{% endif %}{% endmacro %}
-<div class="form-row" id="mastodon-fields"{{ dest_hidden('mastodon') }}>
-    <label>Mastodon Account
-        <select name="account_id">
-            {% for account in mastodon_accounts %}
-            <option value="{{ account.id }}">@{{ account.username }}@{{ account.instance | replace('https://', '') }}</option>
-            {% endfor %}
-        </select>
-    </label>
-    <label>Visibility
-        <select name="visibility">
-            <option value="public">Public</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="private">Private (followers only)</option>
-            <option value="direct">Direct</option>
-        </select>
-    </label>
-    <div class="check-field">
-        <input type="checkbox" id="echo-use-markdown" name="use_markdown" value="true" aria-describedby="echo-use-markdown-hint">
-        <label for="echo-use-markdown">Parse as Markdown</label>
-        <span class="hint" id="echo-use-markdown-hint">Send <code>content_type=text/markdown</code> (GoToSocial and other Markdown-capable APIs). Stock Mastodon ignores the field and treats the body as plain text.</span>
-    </div>
-</div>
-    <div class="form-row" id="email-fields"{{ dest_hidden('email') }}>
-        <label>Email Address
-            <select name="email_account_id">
-                {% for account in email_accounts %}
-                <option value="{{ account.id }}">{{ account.name }} ({{ account.email }})</option>
-                {% endfor %}
-            </select>
-        </label>
-        <div class="check-field">
-            <input type="checkbox" id="echo-email-render-html" name="render_html" value="true" aria-describedby="echo-email-render-html-hint">
-            <label for="echo-email-render-html">Render body as HTML</label>
-            <span class="hint" id="echo-email-render-html-hint">Instant mode only. The email's HTML part is your template output as-is — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links. Digests stay text-only.</span>
-        </div>
-    </div>
-    <div class="form-row" id="bluesky-fields"{{ dest_hidden('bluesky') }}>
-        <label>Bluesky Account
-            <select name="bluesky_account_id">
-                {% for account in bluesky_accounts %}
-                <option value="{{ account.id }}">@{{ account.handle }}</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-    <div class="form-row" id="microblog-fields"{{ dest_hidden('microblog') }}>
-        <label>Micro.blog Blog
-            <select name="microblog_account_id">
-                {% for account in microblog_accounts %}
-                <option value="{{ account.id }}">{{ account.name }} ({{ account.uid }})</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-    <div class="form-row" id="matrix-fields"{{ dest_hidden('matrix') }}>
-        <label>Matrix Room
-            <select name="matrix_account_id">
-                {% for account in matrix_accounts %}
-                <option value="{{ account.id }}">{{ account.name }} ({{ account.room_alias or account.room_id }})</option>
-                {% endfor %}
-            </select>
-        </label>
-        <div class="check-field">
-            <input type="checkbox" id="echo-matrix-render-html" name="render_html" value="true" aria-describedby="echo-matrix-render-html-hint">
-            <label for="echo-matrix-render-html">Render body as HTML</label>
-            <span class="hint" id="echo-matrix-render-html-hint">Send the rendered output as the room's formatted body — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links.</span>
-        </div>
-    </div>
-    <div class="form-row" id="discord-fields"{{ dest_hidden('discord') }}>
-        <label>Discord Channel
-            <select name="discord_account_id">
-                {% for account in discord_accounts %}
-                <option value="{{ account.id }}">{{ account.name }}</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-    <div class="form-row" id="telegram-fields"{{ dest_hidden('telegram') }}>
-        <label>Telegram Chat
-            <select name="telegram_account_id">
-                {% for account in telegram_accounts %}
-                <option value="{{ account.id }}">{{ account.name }}</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-    <div class="form-row" id="webhook-fields"{{ dest_hidden('webhook') }}>
-        <label>Webhook
-            <select name="webhook_account_id">
-                {% for account in webhook_accounts %}
-                <option value="{{ account.id }}">{{ account.name }}</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-    <div class="form-row" id="github-fields"{{ dest_hidden('github') }}>
-        <label>GitHub Repository
-            <select name="github_account_id">
-                {% for account in github_accounts %}
-                <option value="{{ account.id }}">{{ account.name }} ({{ account.repo }}, {{ account.branch }})</option>
-                {% endfor %}
-            </select>
-        </label>
-        <div class="form-field">
-            <label for="echo-github-path">File path template</label>
-            {% raw %}<input type="text" id="echo-github-path" name="github_path" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="echo-github-path-hint">{% endraw %}
-            <span class="hint" id="echo-github-path-hint">Repo-relative path for each item's file, rendered per item. Required — use <code>{% raw %}{{ title | slug }}{% endraw %}</code> for filename-safe titles and <code>{% raw %}{{ date_iso }}{% endraw %}</code>/<code>{% raw %}{{ date_short }}{% endraw %}</code> for dates. A file that already exists at the path is overwritten (re-echoes update in place). Paths containing <code>..</code> are rejected.</span>
-        </div>
-        <div class="form-field">
-            <label for="echo-github-commit">Commit message template (optional)</label>
-            {% raw %}<input type="text" id="echo-github-commit" name="github_commit" placeholder="Add {{ title }}" aria-describedby="echo-github-commit-hint">{% endraw %}
-            <span class="hint" id="echo-github-commit-hint">Defaults to <code>{% raw %}Add {{ title }}{% endraw %}</code>. Your echo template becomes the file body — write any front matter there.</span>
-        </div>
-    </div>
-    <div class="form-row">
-        <div class="check-field">
-            <input type="checkbox" id="echo-enabled" name="enabled" value="true" checked>
-            <label for="echo-enabled">Enabled</label>
-        </div>
-        <div class="check-field" id="attach-image-fields">
-            <input type="checkbox" id="echo-attach-image" name="attach_image" value="true" aria-describedby="echo-attach-image-hint">
-            <label for="echo-attach-image">Attach image</label>
-            <span class="hint" id="echo-attach-image-hint">Attach the feed item's images. Mastodon and Bluesky attach up to 4 with alt text where available; email embeds up to 4 inline in instant mode; Matrix, micro.blog, and Discord use the first image. Webhook deliveries always include image_url in the payload.</span>
-        </div>
-    </div>
-    <div class="form-row">
-        <div class="form-field">
-            <label for="echo-template">Template</label>
-            <textarea id="echo-template" name="template" rows="3" placeholder="{{ '{{ title }} {{ link }}' }}" aria-describedby="echo-template-hint">{{ '{{ title }} {{ link }}' }}</textarea>
-            <span class="hint" id="echo-template-hint">Jinja2 template. Use Preview to render it against this feed's latest items before saving.</span>
-        </div>
-        <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
-    </div>
-    <details class="template-vars">
-        <summary>Available template variables</summary>
-        <div class="vars-table-wrap">
-        <table class="vars-table">
-            {% for v in template_vars %}
-            <tr>
-                <td><code>{{ v.var }}</code></td>
-                <td>{{ v.desc }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        </div>
-        <div class="template-help">
-            <p>Templates are Jinja2, so you can use conditionals and filters:</p>
-            {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
-            <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
-            <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
-            <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
-        </div>
-    </details>
-    <div class="form-row" id="delivery-mode-fields">
-        <div class="form-field">
-            <label for="echo-delivery-mode">Delivery mode</label>
-            <select id="echo-delivery-mode" name="delivery_mode" onchange="toggleDestFields()" aria-describedby="echo-delivery-mode-hint">
-                <option value="instant">Instant (post each item as it arrives)</option>
-                <option value="digest">Digest (batch items into one email, sent hourly)</option>
-                <option value="queue">Auto-queue (schedule into the curation queue)</option>
-                <option value="review">Review (stage in the queue as a draft for approval)</option>
-            </select>
-            <span class="hint" id="echo-delivery-mode-hint">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only. Auto-queue and Review stage items in the curation queue instead of posting immediately.</span>
-        </div>
-    </div>
-    <details class="echo-advanced-options">
-        <summary>Filters, content warning &amp; rate limits (optional)</summary>
-        <div class="form-row">
-            <div class="form-field">
-                <label for="echo-filter-keywords">Keyword filter</label>
-                <input type="text" id="echo-filter-keywords" name="filter_keywords" placeholder="e.g. spoiler, giveaway, nsfw" aria-describedby="echo-filter-keywords-hint">
-                <span class="hint" id="echo-filter-keywords-hint">Comma-separated, case-insensitive. Plain text matches title and summary; prefixes <code>tag:</code>, <code>author:</code>, <code>url:</code> (or <code>link:</code>), and <code>content:</code> match that field.</span>
+<details class="page-drawer" id="new-echo-drawer"{% if not echoes or preselect_feed_id or error %} open{% endif %}>
+    <summary class="page-drawer-summary">Create a new echo</summary>
+    <div class="page-drawer-body">
+        <form method="post" action="/api/echoes" class="echo-form">
+            <div class="form-section">
+                <div class="form-section-title">1. Route</div>
+                <div class="form-row">
+                    <label>Feed
+                        <select name="feed_id" required>
+                            {% for feed in feeds %}
+                            <option value="{{ feed.id }}"{% if preselect_feed_id == feed.id %} selected{% endif %}>{{ feed.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label>Destination
+                        <select name="destination_type" id="destination-type" onchange="toggleDestFields()">
+                            {% if mastodon_accounts %}
+                            <option value="mastodon">Mastodon Account</option>
+                            {% endif %}
+                            {% if email_accounts %}
+                            <option value="email">Email Address</option>
+                            {% endif %}
+                            {% if bluesky_accounts %}
+                            <option value="bluesky">Bluesky Account</option>
+                            {% endif %}
+                            {% if microblog_accounts %}
+                            <option value="microblog">Micro.blog Blog</option>
+                            {% endif %}
+                            {% if matrix_accounts %}
+                            <option value="matrix">Matrix Room</option>
+                            {% endif %}
+                            {% if discord_accounts %}
+                            <option value="discord">Discord Channel</option>
+                            {% endif %}
+                            {% if telegram_accounts %}
+                            <option value="telegram">Telegram Chat</option>
+                            {% endif %}
+                            {% if webhook_accounts %}
+                            <option value="webhook">Webhook</option>
+                            {% endif %}
+                            {% if github_accounts %}
+                            <option value="github">GitHub Repository</option>
+                            {% endif %}
+                        </select>
+                    </label>
+                </div>
+
+                {# The first <option> in #destination-type is whichever account type exists
+                   first in the same if-chain below. Its field block starts visible and the
+                   rest hidden server-side so there is no flash on load. #}
+                {% set first_dest = 'mastodon' if mastodon_accounts else ('email' if email_accounts else ('bluesky' if bluesky_accounts else ('microblog' if microblog_accounts else ('matrix' if matrix_accounts else ('discord' if discord_accounts else ('telegram' if telegram_accounts else ('webhook' if webhook_accounts else ('github' if github_accounts else '')))))))) %}
+                {% macro dest_hidden(dest) %}{% if dest != first_dest %} style="display: none;"{% endif %}{% endmacro %}
+
+                <div class="dest-block" id="mastodon-fields"{{ dest_hidden('mastodon') }}>
+                    <div class="form-row">
+                        <label>Mastodon Account
+                            <select name="account_id">
+                                {% for account in mastodon_accounts %}
+                                <option value="{{ account.id }}">@{{ account.username }}@{{ account.instance | replace('https://', '') }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label>Visibility
+                            <select name="visibility">
+                                <option value="public">Public</option>
+                                <option value="unlisted">Unlisted</option>
+                                <option value="private">Private (followers only)</option>
+                                <option value="direct">Direct</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="check-field">
+                        <input type="checkbox" id="echo-use-markdown" name="use_markdown" value="true" aria-describedby="echo-use-markdown-hint">
+                        <label for="echo-use-markdown">Parse as Markdown</label>
+                        <span class="hint" id="echo-use-markdown-hint">Send <code>content_type=text/markdown</code> (GoToSocial and other Markdown-capable APIs). Stock Mastodon ignores the field and treats the body as plain text.</span>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="email-fields"{{ dest_hidden('email') }}>
+                    <div class="form-row">
+                        <label>Email Address
+                            <select name="email_account_id">
+                                {% for account in email_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }} ({{ account.email }})</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                    <div class="check-field">
+                        <input type="checkbox" id="echo-email-render-html" name="render_html" value="true" aria-describedby="echo-email-render-html-hint">
+                        <label for="echo-email-render-html">Render body as HTML</label>
+                        <span class="hint" id="echo-email-render-html-hint">Instant mode only. The email's HTML part is your template output as-is — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links. Digests stay text-only.</span>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="bluesky-fields"{{ dest_hidden('bluesky') }}>
+                    <div class="form-row">
+                        <label>Bluesky Account
+                            <select name="bluesky_account_id">
+                                {% for account in bluesky_accounts %}
+                                <option value="{{ account.id }}">@{{ account.handle }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="microblog-fields"{{ dest_hidden('microblog') }}>
+                    <div class="form-row">
+                        <label>Micro.blog Blog
+                            <select name="microblog_account_id">
+                                {% for account in microblog_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }} ({{ account.uid }})</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="matrix-fields"{{ dest_hidden('matrix') }}>
+                    <div class="form-row">
+                        <label>Matrix Room
+                            <select name="matrix_account_id">
+                                {% for account in matrix_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }} ({{ account.room_alias or account.room_id }})</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                    <div class="check-field">
+                        <input type="checkbox" id="echo-matrix-render-html" name="render_html" value="true" aria-describedby="echo-matrix-render-html-hint">
+                        <label for="echo-matrix-render-html">Render body as HTML</label>
+                        <span class="hint" id="echo-matrix-render-html-hint">Send the rendered output as the room's formatted body — use {% raw %}<code>{{ content_html }}</code>{% endraw %} to keep the article's formatting and links.</span>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="discord-fields"{{ dest_hidden('discord') }}>
+                    <div class="form-row">
+                        <label>Discord Channel
+                            <select name="discord_account_id">
+                                {% for account in discord_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="telegram-fields"{{ dest_hidden('telegram') }}>
+                    <div class="form-row">
+                        <label>Telegram Chat
+                            <select name="telegram_account_id">
+                                {% for account in telegram_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="webhook-fields"{{ dest_hidden('webhook') }}>
+                    <div class="form-row">
+                        <label>Webhook
+                            <select name="webhook_account_id">
+                                {% for account in webhook_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dest-block" id="github-fields"{{ dest_hidden('github') }}>
+                    <div class="form-row">
+                        <label>GitHub Repository
+                            <select name="github_account_id">
+                                {% for account in github_accounts %}
+                                <option value="{{ account.id }}">{{ account.name }} ({{ account.repo }}, {{ account.branch }})</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label for="echo-github-path">File path template</label>
+                            {% raw %}<input type="text" id="echo-github-path" name="github_path" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="echo-github-path-hint">{% endraw %}
+                            <span class="hint" id="echo-github-path-hint">Repo-relative path for each item's file, rendered per item. Required — use <code>{% raw %}{{ title | slug }}{% endraw %}</code> for filename-safe titles and <code>{% raw %}{{ date_iso }}{% endraw %}</code>/<code>{% raw %}{{ date_short }}{% endraw %}</code> for dates. A file that already exists at the path is overwritten (re-echoes update in place). Paths containing <code>..</code> are rejected.</span>
+                        </div>
+                        <div class="form-field">
+                            <label for="echo-github-commit">Commit message template (optional)</label>
+                            {% raw %}<input type="text" id="echo-github-commit" name="github_commit" placeholder="Add {{ title }}" aria-describedby="echo-github-commit-hint">{% endraw %}
+                            <span class="hint" id="echo-github-commit-hint">Defaults to <code>{% raw %}Add {{ title }}{% endraw %}</code>. Your echo template becomes the file body — write any front matter there.</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="form-field">
-                <label for="echo-filter-mode">Filter mode</label>
-                <select id="echo-filter-mode" name="filter_mode">
-                    <option value="exclude">Exclude matching items</option>
-                    <option value="include">Only include matching items</option>
-                </select>
+
+            <div class="form-section">
+                <div class="form-section-title">2. Post Template</div>
+                <div class="form-row">
+                    <div class="form-field">
+                        <div class="template-field-head">
+                            <label for="echo-template">Template</label>
+                            <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
+                        </div>
+                        <textarea id="echo-template" name="template" rows="3" placeholder="{{ '{{ title }} {{ link }}' }}" aria-describedby="echo-template-hint">{{ '{{ title }} {{ link }}' }}</textarea>
+                        <span class="hint" id="echo-template-hint">Jinja2 template. Use Preview to render it against this feed's latest items before saving.</span>
+                    </div>
+                </div>
+                <details class="template-vars">
+                    <summary>Available template variables</summary>
+                    <div class="vars-table-wrap">
+                    <table class="vars-table">
+                        {% for v in template_vars %}
+                        <tr>
+                            <td><code>{{ v.var }}</code></td>
+                            <td>{{ v.desc }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                    </div>
+                    <div class="template-help">
+                        <p>Templates are Jinja2, so you can use conditionals and filters:</p>
+                        {% raw %}<p><code>{% if summary %}{{ title }} - {{ summary | truncate(80) }}{% else %}{{ title }} {{ link }}{% endif %}</code></p>
+                        <p><code>{{ title | default('Untitled') }} {{ link }}</code></p>
+                        <p><code>{{ item['title'] }} by {{ author | default('unknown') }}</code></p>{% endraw %}
+                        <p>Mastodon posts cap at 500 characters and Bluesky at 300 graphemes; rendered text longer than the limit is truncated before posting. Micro.blog has no hard cap — long posts appear in the timeline with a "more" link. Use <code>| truncate(N)</code> to control where the cut happens yourself.</p>
+                    </div>
+                </details>
             </div>
-        </div>
-        <div class="form-row">
-            <div class="form-field">
-                <label for="echo-content-warning">Content warning</label>
-                <input type="text" id="echo-content-warning" name="content_warning" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="echo-content-warning-hint">
-                <span class="hint" id="echo-content-warning-hint">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+
+            <div class="form-section">
+                <div class="form-section-title">3. Delivery &amp; Options</div>
+                <div class="form-row form-row--delivery" id="delivery-mode-fields">
+                    <div class="form-field">
+                        <label for="echo-delivery-mode">Delivery mode</label>
+                        <select id="echo-delivery-mode" name="delivery_mode" onchange="toggleDestFields()" aria-describedby="echo-delivery-mode-hint">
+                            <option value="instant">Instant (post each item as it arrives)</option>
+                            <option value="digest">Digest (batch items into one email, sent hourly)</option>
+                            <option value="queue">Auto-queue (schedule into the curation queue)</option>
+                            <option value="review">Review (stage in the queue as a draft for approval)</option>
+                        </select>
+                        <span class="hint" id="echo-delivery-mode-hint">Digest mode batches items into a single email instead of sending each one immediately. Email destinations only. Auto-queue and Review stage items in the curation queue instead of posting immediately.</span>
+                    </div>
+                </div>
+
+                <div class="check-group">
+                    <div class="check-field">
+                        <input type="checkbox" id="echo-enabled" name="enabled" value="true" checked>
+                        <label for="echo-enabled">Enabled</label>
+                    </div>
+                    <div class="check-field" id="attach-image-fields">
+                        <input type="checkbox" id="echo-attach-image" name="attach_image" value="true" aria-describedby="echo-attach-image-hint">
+                        <label for="echo-attach-image">Attach image</label>
+                        <span class="hint" id="echo-attach-image-hint">Attach the feed item's images. Mastodon and Bluesky attach up to 4 with alt text where available; email embeds up to 4 inline in instant mode; Matrix, micro.blog, and Discord use the first image. Webhook deliveries always include image_url in the payload.</span>
+                    </div>
+                </div>
+
+                <details class="echo-advanced-options">
+                    <summary>Filters, content warning &amp; rate limits (optional)</summary>
+                    <div class="form-row">
+                        <div class="form-field form-field--wide">
+                            <label for="echo-filter-keywords">Keyword filter</label>
+                            <input type="text" id="echo-filter-keywords" name="filter_keywords" placeholder="e.g. spoiler, giveaway, nsfw" aria-describedby="echo-filter-keywords-hint">
+                            <span class="hint" id="echo-filter-keywords-hint">Comma-separated, case-insensitive. Plain text matches title and summary; prefixes <code>tag:</code>, <code>author:</code>, <code>url:</code> (or <code>link:</code>), and <code>content:</code> match that field.</span>
+                        </div>
+                        <div class="form-field form-field--medium">
+                            <label for="echo-filter-mode">Filter mode</label>
+                            <select id="echo-filter-mode" name="filter_mode">
+                                <option value="exclude">Exclude matching items</option>
+                                <option value="include">Only include matching items</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field form-field--wide">
+                            <label for="echo-content-warning">Content warning</label>
+                            <input type="text" id="echo-content-warning" name="content_warning" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="echo-content-warning-hint">
+                            <span class="hint" id="echo-content-warning-hint">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+                        </div>
+                        <div class="form-field form-field--compact" id="drip-fields">
+                            <label for="echo-drip-limit">Max posts per hour</label>
+                            <input type="number" id="echo-drip-limit" name="drip_limit" min="0" max="1000" value="0" style="max-width: 8rem;" aria-describedby="echo-drip-limit-hint">
+                            <span class="hint" id="echo-drip-limit-hint">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
+                        </div>
+                    </div>
+                </details>
             </div>
-        </div>
-        <div class="form-row" id="drip-fields">
-            <div class="form-field">
-                <label for="echo-drip-limit">Max posts per hour</label>
-                <input type="number" id="echo-drip-limit" name="drip_limit" min="0" max="1000" value="0" style="max-width: 8rem;" aria-describedby="echo-drip-limit-hint">
-                <span class="hint" id="echo-drip-limit-hint">Drip mode: once an echo posts N times in the last hour, further items wait in a queue and release as the window slides. 0 = off. Digest-mode echoes ignore this, and disabling an echo discards its queued backlog.</span>
+
+            <input type="hidden" name="return_to" value="{{ return_to }}">
+            <div class="form-footer form-footer--start">
+                <button type="submit">Create Echo</button>
             </div>
-        </div>
-    </details>
-    <input type="hidden" name="return_to" value="{{ return_to }}">
-    <button type="submit">Create Echo</button>
-</form>
+        </form>
+    </div>
+</details>
 {% endif %}
 
 {% if echoes %}
-<h2>Existing Echoes</h2>
 <div class="data-table-wrapper">
 <table class="data-table">
     <thead>
@@ -300,7 +361,7 @@
             data-github-path="{{ echo.github_path | e if echo.github_path else '' }}"
             data-github-commit="{{ echo.github_commit | e if echo.github_commit else '' }}"
             data-enabled="{{ echo.enabled }}">
-            <td data-label="Feed">{{ echo.feed_name }}</td>
+            <td data-label="Feed"><strong>{{ echo.feed_name }}</strong></td>
             <td data-label="Destination">
                 <span class="dest-cell">
                     <span class="dest-type">
@@ -326,37 +387,40 @@
                     </span>
                     <code class="dest-name">{{ echo.destination_name }}</code>
                 </span>
-                {% if echo.filter_keywords %}
-                <br><span class="badge badge-warning" title="Filter keywords: {{ echo.filter_keywords | e }}">
-                    {{ 'only' if echo.filter_mode == 'include' else 'not' }}: {{ echo.filter_keywords }}
-                </span>
-                {% endif %}
-                {% if echo.content_warning %}
-                <br><span class="badge badge-muted" title="Content warning">CW: {{ echo.content_warning }}</span>
-                {% endif %}
-                {% if echo.attach_image %}
-                <br><span class="badge badge-info">IMG</span>
-                {% endif %}
-                {% if echo.destination_type in ('email', 'matrix') and echo.render_html %}
-                <br><span class="badge badge-info">HTML</span>
-                {% endif %}
-                {% if echo.destination_type == 'mastodon' and echo.use_markdown %}
-                <br><span class="badge badge-info">MD</span>
-                {% endif %}
-                {% if echo.delivery_mode == 'queue' %}
-                <br><span class="badge badge-info">AUTO-QUEUE</span>
-                {% endif %}
-                {% if echo.delivery_mode == 'review' %}
-                <br><span class="badge badge-info">REVIEW</span>
-                {% endif %}
-                {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
-                <br><span class="badge badge-info">DIGEST</span>
-                {% endif %}
-                {% if echo.destination_type == 'github' and echo.github_path %}
-                <br><span class="badge badge-muted" title="GitHub file path template">path: {{ echo.github_path }}</span>
-                {% endif %}
-                {% if echo.drip_limit and echo.delivery_mode != 'digest' %}
-                <br><span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
+                {% set has_badges = echo.filter_keywords or echo.content_warning or echo.attach_image or (echo.destination_type in ('email', 'matrix') and echo.render_html) or (echo.destination_type == 'mastodon' and echo.use_markdown) or echo.delivery_mode in ('queue', 'review') or (echo.destination_type == 'email' and echo.delivery_mode == 'digest') or (echo.destination_type == 'github' and echo.github_path) or (echo.drip_limit and echo.delivery_mode != 'digest') %}
+                {% if has_badges %}
+                <div class="echo-badges">
+                    {% if echo.filter_keywords %}
+                    <span class="badge badge-warning" title="Filter keywords: {{ echo.filter_keywords | e }}">{{ 'only' if echo.filter_mode == 'include' else 'not' }}: {{ echo.filter_keywords }}</span>
+                    {% endif %}
+                    {% if echo.content_warning %}
+                    <span class="badge badge-muted" title="Content warning">CW: {{ echo.content_warning }}</span>
+                    {% endif %}
+                    {% if echo.attach_image %}
+                    <span class="badge badge-info">IMG</span>
+                    {% endif %}
+                    {% if echo.destination_type in ('email', 'matrix') and echo.render_html %}
+                    <span class="badge badge-info">HTML</span>
+                    {% endif %}
+                    {% if echo.destination_type == 'mastodon' and echo.use_markdown %}
+                    <span class="badge badge-info">MD</span>
+                    {% endif %}
+                    {% if echo.delivery_mode == 'queue' %}
+                    <span class="badge badge-info">AUTO-QUEUE</span>
+                    {% endif %}
+                    {% if echo.delivery_mode == 'review' %}
+                    <span class="badge badge-info">REVIEW</span>
+                    {% endif %}
+                    {% if echo.destination_type == 'email' and echo.delivery_mode == 'digest' %}
+                    <span class="badge badge-info">DIGEST</span>
+                    {% endif %}
+                    {% if echo.destination_type == 'github' and echo.github_path %}
+                    <span class="badge badge-muted" title="GitHub file path template">path: {{ echo.github_path }}</span>
+                    {% endif %}
+                    {% if echo.drip_limit and echo.delivery_mode != 'digest' %}
+                    <span class="badge badge-warning">DRIP {{ echo.drip_limit }}/h</span>
+                    {% endif %}
+                </div>
                 {% endif %}
             </td>
             <td data-label="Visibility">{{ '—' if echo.destination_type in ('bluesky', 'microblog', 'matrix', 'discord', 'telegram', 'webhook', 'github') else echo.visibility }}</td>
@@ -409,27 +473,21 @@
 <script id="bluesky-options" type="text/html">
     {% for a in bluesky_accounts %}<option value="{{ a.id }}">@{{ a.handle }}</option>{% endfor %}
 </script>
-
 <script id="microblog-options" type="text/html">
     {% for a in microblog_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
-
 <script id="matrix-options" type="text/html">
     {% for a in matrix_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
-
 <script id="discord-options" type="text/html">
     {% for a in discord_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
-
 <script id="telegram-options" type="text/html">
     {% for a in telegram_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
-
 <script id="webhook-options" type="text/html">
     {% for a in webhook_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
 </script>
-
 <script id="github-options" type="text/html">
     {% for a in github_accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ a.repo }}, {{ a.branch }})</option>{% endfor %}
 </script>

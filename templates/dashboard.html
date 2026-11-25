@@ -1,7 +1,18 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Dashboard{% endblock %}
 {% block content %}
-<h1>Dashboard</h1>
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Dashboard</h1>
+        </div>
+        <p class="page-header-subtitle">Overview of your feeds, active echoes, and recent deliveries.</p>
+    </div>
+    <div class="page-header-actions">
+        <a href="/reader" class="btn-sm">Open Reader</a>
+        <a href="/echoes" class="btn-sm btn-primary">+ New Echo</a>
+    </div>
+</div>
 
 {% if MULTI and plan == 'trial' %}
 <div class="trial-banner">
@@ -72,7 +83,10 @@
 </div>
 
 <section>
-    <h2>Active Echoes</h2>
+    <div class="section-header">
+        <h2>Active Echoes</h2>
+        {% if echoes %}<a href="/echoes" class="section-header-link">Manage echoes &rarr;</a>{% endif %}
+    </div>
     {% if echoes %}
     <div class="data-table-wrapper">
     <table class="data-table">
@@ -86,7 +100,7 @@
         <tbody>
             {% for echo in echoes %}
             <tr>
-                <td data-label="Feed">{{ echo.feed_name }}</td>
+                <td data-label="Feed"><strong>{{ echo.feed_name }}</strong></td>
                 <td data-label="Destination"><code>{{ echo.destination_name or 'Unknown' }}</code></td>
                 <td data-label="Status">
                     {% if echo.enabled %}
@@ -106,7 +120,10 @@
 </section>
 
 <section>
-    <h2>Recent Posts</h2>
+    <div class="section-header">
+        <h2>Recent Posts</h2>
+        {% if recent_posts %}<a href="/history" class="section-header-link">View full history &rarr;</a>{% endif %}
+    </div>
     {% if recent_posts %}
     <div class="data-table-wrapper">
     <table class="data-table">

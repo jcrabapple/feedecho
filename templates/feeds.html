@@ -1,94 +1,53 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Feeds{% endblock %}
 {% block content %}
-<h1>Feeds</h1>
-
-<details class="account-section" id="bookmarklet-details">
-    <summary>Add from any page</summary>
-    <div style="padding: 0.5rem 0;">
-        <p class="hint">Drag this link to your bookmarks bar, then click it on any article or blog page to open FeedEcho with that page's URL prefilled — FeedEcho resolves the site's feed link automatically.</p>
-        <p><a href="javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ request.url.scheme }}://{{ request.url.netloc }}/feeds?add='+encodeURIComponent(u);})()" title="Drag me to your bookmarks bar">+ Subscribe</a></p>
-        <p>Or copy this snippet into a bookmark's URL field (replace <code>{% raw %}{{ scheme }}://{{ netloc }}{% endraw %}</code> with this page's base URL):</p>
-        {% raw %}<pre>javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ scheme }}://{{ netloc }}/feeds?add='+encodeURIComponent(u);})()</pre>{% endraw %}
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Feeds</h1>
+            {% if feeds %}<span class="count-pill">{{ feeds | length }}</span>{% endif %}
+        </div>
+        <p class="page-header-subtitle">RSS, Atom, and JSON feeds FeedEcho monitors for new items.</p>
     </div>
-</details>
-
-<form method="post" action="/api/feeds" class="inline-form add-feed-form" data-add-url="{{ add_url | e }}" data-add-name="{{ add_name | e }}">
-    <div id="feed-discover-status" class="hint" role="status" {% if not add_url %}hidden{% endif %}></div>
-    <div class="add-feed-row">
-        <label for="feed-name">Name</label>
-        <input type="text" name="name" id="feed-name" placeholder="Feed name" required{% if add_name %} value="{{ add_name | e }}"{% endif %}>
-        <label for="feed-url">URL</label>
-        <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required{% if add_url %} value="{{ add_url | e }}"{% endif %}>
-        <button type="button" class="btn-sm" onclick="discoverFeed(this)" title="If this is a site page, find its feed URL automatically">Find feed URL</button>
+    <div class="page-header-actions">
+        <button type="button" onclick="openPageDrawer('add-feed-drawer', 'feed-name')">+ Add Feed</button>
     </div>
-    <div class="add-feed-row">
-        <label for="feed-poll-interval">Poll interval (minutes)</label>
-        <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
-        <label for="feed-folder">Folder</label>
-        <select name="folder_id" id="feed-folder">
-            <option value="">(No folder)</option>
-            {% for folder in folders %}
-            <option value="{{ folder.id }}">{{ folder.name }}</option>
-            {% endfor %}
-        </select>
-        <button type="submit">Add Feed</button>
-    </div>
-    <p class="hint">A new feed starts tracking automatically: the first check records the feed's latest item as the starting point, so nothing already published is back-posted. After that, each check cross-posts only items newer than the last one seen.</p>
-</form>
+</div>
 
-<details class="account-section">
-    <summary>Folders</summary>
-    <div style="padding: 0.5rem 0;">
-        <form method="post" action="/api/folders" class="inline-form" style="margin-bottom: 1rem;">
-            <label for="new-folder-name">New folder</label>
-            <input type="text" name="name" id="new-folder-name" placeholder="Folder name" maxlength="60" required>
-            <button type="submit" class="btn-sm">Create Folder</button>
-        </form>
-        {% if folders %}
-        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem;">
-            {% for folder in folders %}
-            <li style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.4rem 0.6rem; background: var(--surface-light); border-radius: 6px;">
-                <span style="font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> {{ folder.name }}</span>
-                <span style="display: inline-flex; gap: 0.4rem;">
-                    <form method="post" action="/api/folders/{{ folder.id }}/rename" class="inline"
-                          data-folder-name="{{ folder.name }}"
-                          onsubmit="return folderConfirmRename(this)">
-                        <input type="hidden" name="name" value="">
-                        <button type="submit" class="btn-sm">Rename</button>
-                    </form>
-                    <form method="post" action="/api/folders/{{ folder.id }}/delete" class="inline"
-                          data-folder-name="{{ folder.name }}"
-                          onsubmit="return folderConfirmDelete(this)">
-                        <button type="submit" class="btn-sm btn-danger">Delete</button>
-                    </form>
+<details class="page-drawer" id="add-feed-drawer"{% if not feeds or add_url %} open{% endif %}>
+    <summary class="page-drawer-summary">Add a new feed</summary>
+    <div class="page-drawer-body">
+        <form method="post" action="/api/feeds" class="inline-form add-feed-form" data-add-url="{{ add_url | e }}" data-add-name="{{ add_name | e }}">
+            <div id="feed-discover-status" class="hint" role="status" {% if not add_url %}hidden{% endif %}></div>
+            <div class="add-feed-row">
+                <span class="field-group field-group--name">
+                    <label for="feed-name">Name</label>
+                    <input type="text" name="name" id="feed-name" placeholder="Feed name" required{% if add_name %} value="{{ add_name | e }}"{% endif %}>
                 </span>
-            </li>
-            {% endfor %}
-        </ul>
-        {% endif %}
-    </div>
-</details>
-
-<details class="account-section">
-    <summary>Import / export subscriptions (OPML)</summary>
-    <div class="opml-actions">
-        <a class="btn-sm" href="/api/feeds/opml">Export OPML</a>
-        <form method="post" action="/api/feeds/opml" enctype="multipart/form-data" class="opml-import-form">
-            <label for="opml-file">Upload OPML file</label>
-            <input type="file" name="file" id="opml-file" accept=".opml,.xml,text/xml,text/x-opml">
-            <label for="opml">Or paste OPML XML</label>
-            <textarea name="opml" id="opml" rows="4" placeholder="Paste an OPML document to bulk-add subscriptions…"></textarea>
-            <button type="submit" class="btn-sm">Import</button>
+                <span class="field-group field-group--url">
+                    <label for="feed-url">URL</label>
+                    <input type="url" name="url" id="feed-url" placeholder="https://example.com/feed.xml" required{% if add_url %} value="{{ add_url | e }}"{% endif %}>
+                </span>
+                <button type="button" class="btn-sm" onclick="discoverFeed(this)" title="If this is a site page, find its feed URL automatically">Find feed URL</button>
+            </div>
+            <div class="add-feed-row">
+                <span class="field-group field-group--interval">
+                    <label for="feed-poll-interval">Poll interval (minutes)</label>
+                    <input type="number" name="poll_interval" id="feed-poll-interval" value="15" min="1" max="1440">
+                </span>
+                <span class="field-group field-group--folder">
+                    <label for="feed-folder">Folder</label>
+                    <select name="folder_id" id="feed-folder">
+                        <option value="">(No folder)</option>
+                        {% for folder in folders %}
+                        <option value="{{ folder.id }}">{{ folder.name }}</option>
+                        {% endfor %}
+                    </select>
+                </span>
+                <button type="submit">Add Feed</button>
+            </div>
+            <p class="hint" style="margin-bottom: 0;">A new feed starts tracking automatically: the first check records the feed's latest item as the starting point, so nothing already published is back-posted. After that, each check cross-posts only items newer than the last one seen.</p>
         </form>
-        {% if request.query_params.get('imported') is not none %}
-        <p class="hint">
-            Import summary: {{ request.query_params.get('imported', 0) }} imported,
-            {{ request.query_params.get('duplicate', 0) }} duplicate,
-            {{ request.query_params.get('invalid', 0) }} invalid,
-            {{ request.query_params.get('capped', 0) }} skipped by plan cap.
-        </p>
-        {% endif %}
     </div>
 </details>
 
@@ -116,18 +75,20 @@
             data-ai-alt-override="{{ 1 if feed.ai_alt_override else 0 }}"
             data-has-poke-token="{{ 1 if feed.poke_token else 0 }}">
             <td data-label="Name">
-                {{ feed.name }}
-                {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
-                {% if feed.last_error %}<span class="badge badge-warning" title="Last fetch failed: {{ feed.last_error }}" aria-label="Fetch warning"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>{% endif %}
+                <div class="feed-name-cell">
+                    <span>{{ feed.name }}</span>
+                    {% if feed.paused %}<span class="badge badge-warning">Paused</span>{% endif %}
+                    {% if feed.last_error %}<span class="badge badge-warning" title="Last fetch failed: {{ feed.last_error }}" aria-label="Fetch warning"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>{% endif %}
+                </div>
             </td>
-            <td data-label="URL"><a href="{{ feed.url | safe_url }}" target="_blank" rel="noopener"><small>{{ feed.url[:50] }}{% if feed.url|length > 50 %}…{% endif %}</small></a></td>
+            <td data-label="URL"><a class="feed-url-link" href="{{ feed.url | safe_url }}" target="_blank" rel="noopener" title="{{ feed.url | e }}"><small>{{ feed.url }}</small></a></td>
             <td data-label="Interval">{{ feed.poll_interval }} min</td>
             <td data-label="Last Fetched"><small>{% if feed.last_fetched %}<time class="local-time" datetime="{{ feed.last_fetched | iso_utc }}">{{ feed.last_fetched | utc_text }} UTC</time>{% else %}Never{% endif %}</small></td>
             <td data-label="Echoes">
                 {% if feed_echoes[feed.id] %}
                 <a href="/echoes" class="badge badge-success" title="{{ feed_echoes[feed.id] }} active echo{{ 's' if feed_echoes[feed.id] != 1 else '' }} — manage on the Echoes page">{{ feed_echoes[feed.id] }} echo{{ 's' if feed_echoes[feed.id] != 1 else '' }}</a>
                 {% else %}
-                —
+                <span class="hint">—</span>
                 {% endif %}
             </td>
             <td data-label="Actions" class="action-cell">
@@ -135,11 +96,16 @@
                 <button class="btn-sm" onclick="withBusy(this, (btn) => testFeed({{ feed.id }}, btn))" title="Fetch the feed now and show a preview of its items">Test</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => fetchNow({{ feed.id }}, btn))" title="Check the feed for new items right now">Fetch</button>
                 <button class="btn-sm" onclick="withBusy(this, (btn) => pauseFeed({{ feed.id }}, btn))">{{ 'Resume' if feed.paused else 'Pause' }}</button>
-                <button class="btn-sm" onclick="readerToggleFeed({{ feed.id }}, this)"
+                <button class="btn-sm btn-read-toggle" onclick="readerToggleFeed({{ feed.id }}, this)"
                         title="Reading is {{ 'on' if feed.read_enabled else 'off' }} — click to toggle"
                         aria-label="Toggle reading (currently {{ 'on' if feed.read_enabled else 'off' }})"
                         aria-pressed="{{ 'true' if feed.read_enabled else 'false' }}">
-                  {% if feed.read_enabled %}📖{% else %}📕{% endif %}
+                    {% if feed.read_enabled %}
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                    {% else %}
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                    {% endif %}
+                    <span>Read</span>
                 </button>
                 <form method="post" action="/api/feeds/{{ feed.id }}/delete" class="inline">
                     <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete this feed? Echoes and post history are preserved.')">Delete</button>
@@ -153,4 +119,84 @@
 {% else %}
 <p class="empty-state">No feeds yet. Add one above to get started.</p>
 {% endif %}
+
+<section class="utilities-section" aria-label="Feed tools and organization">
+    <h2>Tools &amp; Organization</h2>
+
+    <details class="account-section">
+        <summary>
+            <span class="account-section-title">Folders</span>
+            <span class="account-count{% if folders %} count-active{% endif %}">{{ folders | length if folders else 0 }} folder{{ '' if folders | length == 1 else 's' }}</span>
+        </summary>
+        <div class="utility-body">
+            <form method="post" action="/api/folders" class="inline-form" style="max-width: 30rem;">
+                <label for="new-folder-name" class="sr-only">New folder</label>
+                <input type="text" name="name" id="new-folder-name" placeholder="New folder name…" maxlength="60" required>
+                <button type="submit" class="btn-sm btn-primary">Create Folder</button>
+            </form>
+            {% if folders %}
+            <ul class="folder-list">
+                {% for folder in folders %}
+                <li class="folder-list-item">
+                    <span class="folder-list-name"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> {{ folder.name }}</span>
+                    <span class="folder-list-actions">
+                        <form method="post" action="/api/folders/{{ folder.id }}/rename" class="inline"
+                              data-folder-name="{{ folder.name }}"
+                              onsubmit="return folderConfirmRename(this)">
+                            <input type="hidden" name="name" value="">
+                            <button type="submit" class="btn-sm">Rename</button>
+                        </form>
+                        <form method="post" action="/api/folders/{{ folder.id }}/delete" class="inline"
+                              data-folder-name="{{ folder.name }}"
+                              onsubmit="return folderConfirmDelete(this)">
+                            <button type="submit" class="btn-sm btn-danger">Delete</button>
+                        </form>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="hint" style="margin-bottom: 0;">No folders yet. Create one to group feeds in the Reader sidebar.</p>
+            {% endif %}
+        </div>
+    </details>
+
+    <details class="account-section"{% if request.query_params.get('imported') is not none %} open{% endif %}>
+        <summary>
+            <span class="account-section-title">Import / export subscriptions (OPML)</span>
+        </summary>
+        <div class="utility-body">
+            <div class="opml-actions">
+                <a class="btn-sm" href="/api/feeds/opml">Export OPML</a>
+                <form method="post" action="/api/feeds/opml" enctype="multipart/form-data" class="opml-import-form">
+                    <label for="opml-file">Upload OPML file</label>
+                    <input type="file" name="file" id="opml-file" accept=".opml,.xml,text/xml,text/x-opml">
+                    <label for="opml">Or paste OPML XML</label>
+                    <textarea name="opml" id="opml" rows="4" placeholder="Paste an OPML document to bulk-add subscriptions…"></textarea>
+                    <button type="submit" class="btn-sm btn-primary">Import OPML</button>
+                </form>
+                {% if request.query_params.get('imported') is not none %}
+                <p class="hint" style="margin-bottom: 0;">
+                    Import summary: {{ request.query_params.get('imported', 0) }} imported,
+                    {{ request.query_params.get('duplicate', 0) }} duplicate,
+                    {{ request.query_params.get('invalid', 0) }} invalid,
+                    {{ request.query_params.get('capped', 0) }} skipped by plan cap.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </details>
+
+    <details class="account-section" id="bookmarklet-details">
+        <summary>
+            <span class="account-section-title">Add from any page (Bookmarklet)</span>
+        </summary>
+        <div class="utility-body">
+            <p class="hint">Drag this link to your bookmarks bar, then click it on any article or blog page to open FeedEcho with that page's URL prefilled — FeedEcho resolves the site's feed link automatically.</p>
+            <p><a class="bookmarklet-link" href="javascript:(function(){var u=location.href;if(u.indexOf('?add=')<0){u=u.split('#')[0];}location.href='{{ request.url.scheme }}://{{ request.url.netloc }}/feeds?add='+encodeURIComponent(u);})()" title="Drag me to your bookmarks bar">+ Subscribe in FeedEcho</a></p>
+            <p class="hint">Or copy this snippet into a bookmark's URL field (replace <code>{% raw %}{{ scheme }}://{{ netloc }}{% endraw %}</code> with this page's base URL):</p>
+            {% raw %}<pre class="bookmarklet-code">javascript:(function(){var u=location.href;if(u.indexOf('?add=')&lt;0){u=u.split('#')[0];}location.href='{{ scheme }}://{{ netloc }}/feeds?add='+encodeURIComponent(u);})()</pre>{% endraw %}
+        </div>
+    </details>
+</section>
 {% endblock %}

@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — History{% endblock %}
 {% block content %}
-<h1>Post History</h1>
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Post History</h1>
+        </div>
+        <p class="page-header-subtitle">Audit every delivered, filtered, queued, or failed item across your feeds and destinations.</p>
+    </div>
+</div>
 
 {% if feed_options or destination_options or filtered %}
 <form method="get" action="/history" class="inline-form filter-form">

@@ -1,7 +1,18 @@
 {% extends "base.html" %}
 {% block title %}FeedEcho — Accounts{% endblock %}
 {% block content %}
-<h1>Accounts</h1>
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Accounts</h1>
+        </div>
+        <p class="page-header-subtitle">Connect social accounts, chat rooms, email addresses, webhooks, and GitHub repositories for FeedEcho to post to.</p>
+    </div>
+    <div class="page-header-actions account-sections-toolbar">
+        <button type="button" class="btn-sm" onclick="setAccountSections(true)">Expand all</button>
+        <button type="button" class="btn-sm" onclick="setAccountSections(false)">Collapse all</button>
+    </div>
+</div>
 
 {% if error %}
 <div class="alert alert-error" role="alert">{{ error }}</div>
@@ -74,11 +85,6 @@
 {% if request.query_params.get('status') == 'updated' %}
 <div class="alert alert-success" role="status">Account credentials updated.</div>
 {% endif %}
-
-<div class="account-sections-toolbar">
-    <button type="button" class="btn-sm" onclick="setAccountSections(true)">Expand all</button>
-    <button type="button" class="btn-sm" onclick="setAccountSections(false)">Collapse all</button>
-</div>
 
 <details class="account-section"{% if mastodon_accounts %} open{% endif %}>
     <summary>

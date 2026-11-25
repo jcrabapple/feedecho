@@ -306,6 +306,19 @@ async function toggleEcho(echoId, btn) {
     }
 }
 
+function openPageDrawer(drawerId, focusId) {
+    const drawer = document.getElementById(drawerId);
+    if (!drawer) return;
+    drawer.open = true;
+    drawer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (focusId) {
+        const target = document.getElementById(focusId);
+        if (target) {
+            setTimeout(() => target.focus(), 60);
+        }
+    }
+}
+
 function editEcho(echoId) {
     const row = document.getElementById(`echo-row-${echoId}`);
     if (!row) return;
@@ -366,164 +379,193 @@ function editEcho(echoId) {
 
     row.innerHTML = `<td colspan="5">
         <form method="post" action="/api/echoes/${echoId}/edit" class="echo-edit-form" aria-label="Edit echo">
-            <div class="form-row">
-                <label>Feed
-                    <select name="feed_id" required>${feedOpts}</select>
-                </label>
-                <label>Destination
-                    <select name="destination_type" id="edit-dest-type-${echoId}" onchange="toggleEditDest(${echoId})">
-                        ${mastoOpts ? '<option value="mastodon"' + (destType === 'mastodon' ? ' selected' : '') + '>Mastodon Account</option>' : ''}
-                        ${emailOpts ? '<option value="email"' + (destType === 'email' ? ' selected' : '') + '>Email Address</option>' : ''}
-                        ${blueskyOpts ? '<option value="bluesky"' + (destType === 'bluesky' ? ' selected' : '') + '>Bluesky Account</option>' : ''}
-                        ${microblogOpts ? '<option value="microblog"' + (destType === 'microblog' ? ' selected' : '') + '>Micro.blog Blog</option>' : ''}
-                        ${matrixOpts ? '<option value="matrix"' + (destType === 'matrix' ? ' selected' : '') + '>Matrix Room</option>' : ''}
-                        ${discordOpts ? '<option value="discord"' + (destType === 'discord' ? ' selected' : '') + '>Discord Channel</option>' : ''}
-                        ${telegramOpts ? '<option value="telegram"' + (destType === 'telegram' ? ' selected' : '') + '>Telegram Chat</option>' : ''}
-                        ${webhookOpts ? '<option value="webhook"' + (destType === 'webhook' ? ' selected' : '') + '>Webhook</option>' : ''}
-                        ${githubOpts ? '<option value="github"' + (destType === 'github' ? ' selected' : '') + '>GitHub Repository</option>' : ''}
-                    </select>
-                </label>
-            </div>
-            <div class="form-row" id="edit-mastodon-fields-${echoId}" style="${mastoStyle}">
-                <label>Mastodon Account
-                    <select name="account_id">${mastoOpts}</select>
-                </label>
-                <label>Visibility
-                    <select name="visibility">
-                        <option value="public"${visibility === 'public' ? ' selected' : ''}>Public</option>
-                        <option value="unlisted"${visibility === 'unlisted' ? ' selected' : ''}>Unlisted</option>
-                        <option value="private"${visibility === 'private' ? ' selected' : ''}>Private (followers only)</option>
-                        <option value="direct"${visibility === 'direct' ? ' selected' : ''}>Direct</option>
-                    </select>
-                </label>
-                <div class="check-field">
-                    <input type="checkbox" id="edit-use-md-${echoId}" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''} aria-describedby="edit-use-md-hint-${echoId}">
-                    <label for="edit-use-md-${echoId}">Parse as Markdown</label>
-                    <span class="hint" id="edit-use-md-hint-${echoId}">Send <code>content_type=text/markdown</code> (GoToSocial and Markdown-capable APIs).</span>
-                </div>
-            </div>
-            <div class="form-row" id="edit-email-fields-${echoId}" style="${emailStyle}">
-                <label>Email Address
-                    <select name="email_account_id">${emailOpts}</select>
-                </label>
-                <div class="check-field">
-                    <input type="checkbox" id="edit-email-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-email-html-hint-${echoId}">
-                    <label for="edit-email-html-${echoId}">Render body as HTML</label>
-                    <span class="hint" id="edit-email-html-hint-${echoId}">Instant mode only. Digests stay text-only.</span>
-                </div>
-            </div>
-            <div class="form-row" id="edit-bluesky-fields-${echoId}" style="${blueskyStyle}">
-                <label>Bluesky Account
-                    <select name="bluesky_account_id">${blueskyOpts}</select>
-                </label>
-            </div>
-            <div class="form-row" id="edit-microblog-fields-${echoId}" style="${microblogStyle}">
-                <label>Micro.blog Blog
-                    <select name="microblog_account_id">${microblogOpts}</select>
-                </label>
-            </div>
-            <div class="form-row" id="edit-matrix-fields-${echoId}" style="${matrixStyle}">
-                <label>Matrix Room
-                    <select name="matrix_account_id">${matrixOpts}</select>
-                </label>
-                <div class="check-field">
-                    <input type="checkbox" id="edit-matrix-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-matrix-html-hint-${echoId}">
-                    <label for="edit-matrix-html-${echoId}">Render body as HTML</label>
-                    <span class="hint" id="edit-matrix-html-hint-${echoId}">Send rendered output as formatted room body.</span>
-                </div>
-            </div>
-            <div class="form-row" id="edit-discord-fields-${echoId}" style="${discordStyle}">
-                <label>Discord Channel
-                    <select name="discord_account_id">${discordOpts}</select>
-                </label>
-            </div>
-            <div class="form-row" id="edit-telegram-fields-${echoId}" style="${telegramStyle}">
-                <label>Telegram Chat
-                    <select name="telegram_account_id">${telegramOpts}</select>
-                </label>
-            </div>
-            <div class="form-row" id="edit-webhook-fields-${echoId}" style="${webhookStyle}">
-                <label>Webhook
-                    <select name="webhook_account_id">${webhookOpts}</select>
-                </label>
-            </div>
-            <div class="form-row" id="edit-github-fields-${echoId}" style="${githubStyle}">
-                <label>GitHub Repository
-                    <select name="github_account_id">${githubOpts}</select>
-                </label>
-                <div class="form-field">
-                    <label for="edit-gh-path-${echoId}">File path template</label>
-                    <input type="text" id="edit-gh-path-${echoId}" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="edit-gh-path-hint-${echoId}">
-                    <span class="hint" id="edit-gh-path-hint-${echoId}">Repo-relative path rendered per item (paths containing <code>..</code> are rejected).</span>
-                </div>
-                <div class="form-field">
-                    <label for="edit-gh-commit-${echoId}">Commit message template (optional)</label>
-                    <input type="text" id="edit-gh-commit-${echoId}" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="check-field">
-                    <input type="checkbox" id="edit-enabled-${echoId}" name="enabled" value="true"${enabled ? ' checked' : ''}>
-                    <label for="edit-enabled-${echoId}">Enabled</label>
-                </div>
-                <div class="check-field" id="edit-attach-image-fields-${echoId}">
-                    <input type="checkbox" id="edit-attach-img-${echoId}" name="attach_image" value="true"${attachImage ? ' checked' : ''} aria-describedby="edit-attach-img-hint-${echoId}">
-                    <label for="edit-attach-img-${echoId}">Attach image</label>
-                    <span class="hint" id="edit-attach-img-hint-${echoId}">Attach feed item images when supported by the destination.</span>
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-field">
-                    <label for="edit-template-${echoId}">Template</label>
-                    <textarea id="edit-template-${echoId}" name="template" rows="3" aria-describedby="edit-template-hint-${echoId}">${escapeHTML(template)}</textarea>
-                    <span class="hint" id="edit-template-hint-${echoId}">Jinja2 template. Use Preview to render against latest items.</span>
-                </div>
-                <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
-            </div>
-            <details class="template-vars">${varsInner}</details>
-            <div class="form-row" id="edit-digest-fields-${echoId}">
-                <div class="form-field">
-                    <label for="edit-delivery-mode-${echoId}">Delivery mode</label>
-                    <select id="edit-delivery-mode-${echoId}" name="delivery_mode" onchange="toggleEditDest(${echoId})" aria-describedby="edit-delivery-hint-${echoId}">
-                        <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (post each item as it arrives)</option>
-                        <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
-                        <option value="queue"${deliveryMode === 'queue' ? ' selected' : ''}>Auto-queue (schedule into the curation queue)</option>
-                        <option value="review"${deliveryMode === 'review' ? ' selected' : ''}>Review (stage in the queue as a draft for approval)</option>
-                    </select>
-                    <span class="hint" id="edit-delivery-hint-${echoId}">Digest mode is available for Email destinations only.</span>
-                </div>
-            </div>
-            <details class="echo-advanced-options"${hasAdvanced ? ' open' : ''}>
-                <summary>Filters, content warning &amp; rate limits (optional)</summary>
+            <div class="form-section">
+                <div class="form-section-title">1. Route</div>
                 <div class="form-row">
-                    <div class="form-field">
-                        <label for="edit-filter-kw-${echoId}">Keyword filter</label>
-                        <input type="text" id="edit-filter-kw-${echoId}" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason" aria-describedby="edit-filter-kw-hint-${echoId}">
-                        <span class="hint" id="edit-filter-kw-hint-${echoId}">Comma-separated, case-insensitive; supports <code>tag:</code>, <code>author:</code>, <code>url:</code>, <code>content:</code>.</span>
-                    </div>
-                    <div class="form-field">
-                        <label for="edit-filter-mode-${echoId}">Filter mode</label>
-                        <select id="edit-filter-mode-${echoId}" name="filter_mode">
-                            <option value="exclude"${filterMode === 'exclude' ? ' selected' : ''}>Exclude matching items</option>
-                            <option value="include"${filterMode === 'include' ? ' selected' : ''}>Only include matching items</option>
+                    <label>Feed
+                        <select name="feed_id" required>${feedOpts}</select>
+                    </label>
+                    <label>Destination
+                        <select name="destination_type" id="edit-dest-type-${echoId}" onchange="toggleEditDest(${echoId})">
+                            ${mastoOpts ? '<option value="mastodon"' + (destType === 'mastodon' ? ' selected' : '') + '>Mastodon Account</option>' : ''}
+                            ${emailOpts ? '<option value="email"' + (destType === 'email' ? ' selected' : '') + '>Email Address</option>' : ''}
+                            ${blueskyOpts ? '<option value="bluesky"' + (destType === 'bluesky' ? ' selected' : '') + '>Bluesky Account</option>' : ''}
+                            ${microblogOpts ? '<option value="microblog"' + (destType === 'microblog' ? ' selected' : '') + '>Micro.blog Blog</option>' : ''}
+                            ${matrixOpts ? '<option value="matrix"' + (destType === 'matrix' ? ' selected' : '') + '>Matrix Room</option>' : ''}
+                            ${discordOpts ? '<option value="discord"' + (destType === 'discord' ? ' selected' : '') + '>Discord Channel</option>' : ''}
+                            ${telegramOpts ? '<option value="telegram"' + (destType === 'telegram' ? ' selected' : '') + '>Telegram Chat</option>' : ''}
+                            ${webhookOpts ? '<option value="webhook"' + (destType === 'webhook' ? ' selected' : '') + '>Webhook</option>' : ''}
+                            ${githubOpts ? '<option value="github"' + (destType === 'github' ? ' selected' : '') + '>GitHub Repository</option>' : ''}
                         </select>
+                    </label>
+                </div>
+                <div class="dest-block" id="edit-mastodon-fields-${echoId}" style="${mastoStyle}">
+                    <div class="form-row">
+                        <label>Mastodon Account
+                            <select name="account_id">${mastoOpts}</select>
+                        </label>
+                        <label>Visibility
+                            <select name="visibility">
+                                <option value="public"${visibility === 'public' ? ' selected' : ''}>Public</option>
+                                <option value="unlisted"${visibility === 'unlisted' ? ' selected' : ''}>Unlisted</option>
+                                <option value="private"${visibility === 'private' ? ' selected' : ''}>Private (followers only)</option>
+                                <option value="direct"${visibility === 'direct' ? ' selected' : ''}>Direct</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="check-field">
+                        <input type="checkbox" id="edit-use-md-${echoId}" name="use_markdown" value="true"${useMarkdown ? ' checked' : ''} aria-describedby="edit-use-md-hint-${echoId}">
+                        <label for="edit-use-md-${echoId}">Parse as Markdown</label>
+                        <span class="hint" id="edit-use-md-hint-${echoId}">Send <code>content_type=text/markdown</code> (GoToSocial and Markdown-capable APIs).</span>
                     </div>
                 </div>
+                <div class="dest-block" id="edit-email-fields-${echoId}" style="${emailStyle}">
+                    <div class="form-row">
+                        <label>Email Address
+                            <select name="email_account_id">${emailOpts}</select>
+                        </label>
+                    </div>
+                    <div class="check-field">
+                        <input type="checkbox" id="edit-email-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-email-html-hint-${echoId}">
+                        <label for="edit-email-html-${echoId}">Render body as HTML</label>
+                        <span class="hint" id="edit-email-html-hint-${echoId}">Instant mode only. Digests stay text-only.</span>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-bluesky-fields-${echoId}" style="${blueskyStyle}">
+                    <div class="form-row">
+                        <label>Bluesky Account
+                            <select name="bluesky_account_id">${blueskyOpts}</select>
+                        </label>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-microblog-fields-${echoId}" style="${microblogStyle}">
+                    <div class="form-row">
+                        <label>Micro.blog Blog
+                            <select name="microblog_account_id">${microblogOpts}</select>
+                        </label>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-matrix-fields-${echoId}" style="${matrixStyle}">
+                    <div class="form-row">
+                        <label>Matrix Room
+                            <select name="matrix_account_id">${matrixOpts}</select>
+                        </label>
+                    </div>
+                    <div class="check-field">
+                        <input type="checkbox" id="edit-matrix-html-${echoId}" name="render_html" value="true"${renderHtml ? ' checked' : ''} aria-describedby="edit-matrix-html-hint-${echoId}">
+                        <label for="edit-matrix-html-${echoId}">Render body as HTML</label>
+                        <span class="hint" id="edit-matrix-html-hint-${echoId}">Send rendered output as formatted room body.</span>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-discord-fields-${echoId}" style="${discordStyle}">
+                    <div class="form-row">
+                        <label>Discord Channel
+                            <select name="discord_account_id">${discordOpts}</select>
+                        </label>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-telegram-fields-${echoId}" style="${telegramStyle}">
+                    <div class="form-row">
+                        <label>Telegram Chat
+                            <select name="telegram_account_id">${telegramOpts}</select>
+                        </label>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-webhook-fields-${echoId}" style="${webhookStyle}">
+                    <div class="form-row">
+                        <label>Webhook
+                            <select name="webhook_account_id">${webhookOpts}</select>
+                        </label>
+                    </div>
+                </div>
+                <div class="dest-block" id="edit-github-fields-${echoId}" style="${githubStyle}">
+                    <div class="form-row">
+                        <label>GitHub Repository
+                            <select name="github_account_id">${githubOpts}</select>
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label for="edit-gh-path-${echoId}">File path template</label>
+                            <input type="text" id="edit-gh-path-${echoId}" name="github_path" value="${escapeHTML(githubPath)}" placeholder="content/blog/{{ title | slug }}_{{ date_iso }}.md" aria-describedby="edit-gh-path-hint-${echoId}">
+                            <span class="hint" id="edit-gh-path-hint-${echoId}">Repo-relative path rendered per item (paths containing <code>..</code> are rejected).</span>
+                        </div>
+                        <div class="form-field">
+                            <label for="edit-gh-commit-${echoId}">Commit message template (optional)</label>
+                            <input type="text" id="edit-gh-commit-${echoId}" name="github_commit" value="${escapeHTML(githubCommit)}" placeholder="Add {{ title }}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-section">
+                <div class="form-section-title">2. Post Template</div>
                 <div class="form-row">
                     <div class="form-field">
-                        <label for="edit-cw-${echoId}">Content warning</label>
-                        <input type="text" id="edit-cw-${echoId}" name="content_warning" value="${escapeHTML(contentWarning)}" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="edit-cw-hint-${echoId}">
-                        <span class="hint" id="edit-cw-hint-${echoId}">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+                        <div class="template-field-head">
+                            <label for="edit-template-${echoId}">Template</label>
+                            <button type="button" class="btn-sm template-preview-btn" onclick="previewTemplate(this)">Preview</button>
+                        </div>
+                        <textarea id="edit-template-${echoId}" name="template" rows="3" aria-describedby="edit-template-hint-${echoId}">${escapeHTML(template)}</textarea>
+                        <span class="hint" id="edit-template-hint-${echoId}">Jinja2 template. Use Preview to render against latest items.</span>
                     </div>
                 </div>
-                <div class="form-row" id="edit-drip-fields-${echoId}">
+                <details class="template-vars">${varsInner}</details>
+            </div>
+            <div class="form-section">
+                <div class="form-section-title">3. Delivery &amp; Options</div>
+                <div class="form-row form-row--delivery" id="edit-digest-fields-${echoId}">
                     <div class="form-field">
-                        <label for="edit-drip-${echoId}">Max posts per hour</label>
-                        <input type="number" id="edit-drip-${echoId}" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}" style="max-width: 8rem;" aria-describedby="edit-drip-hint-${echoId}">
-                        <span class="hint" id="edit-drip-hint-${echoId}">0 = off. Excess items queue and release as the 1-hour window slides.</span>
+                        <label for="edit-delivery-mode-${echoId}">Delivery mode</label>
+                        <select id="edit-delivery-mode-${echoId}" name="delivery_mode" onchange="toggleEditDest(${echoId})" aria-describedby="edit-delivery-hint-${echoId}">
+                            <option value="instant"${deliveryMode === 'instant' ? ' selected' : ''}>Instant (post each item as it arrives)</option>
+                            <option value="digest"${deliveryMode === 'digest' ? ' selected' : ''}>Digest (batch items into one email, sent hourly)</option>
+                            <option value="queue"${deliveryMode === 'queue' ? ' selected' : ''}>Auto-queue (schedule into the curation queue)</option>
+                            <option value="review"${deliveryMode === 'review' ? ' selected' : ''}>Review (stage in the queue as a draft for approval)</option>
+                        </select>
+                        <span class="hint" id="edit-delivery-hint-${echoId}">Digest mode is available for Email destinations only.</span>
                     </div>
                 </div>
-            </details>
+                <div class="check-group">
+                    <div class="check-field">
+                        <input type="checkbox" id="edit-enabled-${echoId}" name="enabled" value="true"${enabled ? ' checked' : ''}>
+                        <label for="edit-enabled-${echoId}">Enabled</label>
+                    </div>
+                    <div class="check-field" id="edit-attach-image-fields-${echoId}">
+                        <input type="checkbox" id="edit-attach-img-${echoId}" name="attach_image" value="true"${attachImage ? ' checked' : ''} aria-describedby="edit-attach-img-hint-${echoId}">
+                        <label for="edit-attach-img-${echoId}">Attach image</label>
+                        <span class="hint" id="edit-attach-img-hint-${echoId}">Attach feed item images when supported by the destination.</span>
+                    </div>
+                </div>
+                <details class="echo-advanced-options"${hasAdvanced ? ' open' : ''}>
+                    <summary>Filters, content warning &amp; rate limits (optional)</summary>
+                    <div class="form-row">
+                        <div class="form-field form-field--wide">
+                            <label for="edit-filter-kw-${echoId}">Keyword filter</label>
+                            <input type="text" id="edit-filter-kw-${echoId}" name="filter_keywords" value="${escapeHTML(filterKeywords)}" placeholder="e.g. spoiler, tag:posse, author:jason" aria-describedby="edit-filter-kw-hint-${echoId}">
+                            <span class="hint" id="edit-filter-kw-hint-${echoId}">Comma-separated, case-insensitive; supports <code>tag:</code>, <code>author:</code>, <code>url:</code>, <code>content:</code>.</span>
+                        </div>
+                        <div class="form-field form-field--medium">
+                            <label for="edit-filter-mode-${echoId}">Filter mode</label>
+                            <select id="edit-filter-mode-${echoId}" name="filter_mode">
+                                <option value="exclude"${filterMode === 'exclude' ? ' selected' : ''}>Exclude matching items</option>
+                                <option value="include"${filterMode === 'include' ? ' selected' : ''}>Only include matching items</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field form-field--wide">
+                            <label for="edit-cw-${echoId}">Content warning</label>
+                            <input type="text" id="edit-cw-${echoId}" name="content_warning" value="${escapeHTML(contentWarning)}" placeholder="e.g. Spoilers, US Politics" maxlength="500" aria-describedby="edit-cw-hint-${echoId}">
+                            <span class="hint" id="edit-cw-hint-${echoId}">Optional. Applied as spoiler text on Mastodon destinations; ignored by other destination types.</span>
+                        </div>
+                        <div class="form-field form-field--compact" id="edit-drip-fields-${echoId}">
+                            <label for="edit-drip-${echoId}">Max posts per hour</label>
+                            <input type="number" id="edit-drip-${echoId}" name="drip_limit" min="0" max="1000" value="${escapeHTML(dripLimit)}" style="max-width: 8rem;" aria-describedby="edit-drip-hint-${echoId}">
+                            <span class="hint" id="edit-drip-hint-${echoId}">0 = off. Excess items queue and release as the 1-hour window slides.</span>
+                        </div>
+                    </div>
+                </details>
+            </div>
             <div class="form-row edit-actions">
                 <button type="button" class="btn-sm" onclick="cancelEdit(${echoId})">Cancel</button>
                 <button type="submit" class="btn-sm btn-primary">Save</button>
@@ -601,7 +643,7 @@ function toggleDestFields() {
         if (destType === 'github') attachCb.checked = false;
     }
     form.querySelectorAll('input[name="render_html"]').forEach((cb) => {
-        const row = cb.closest('.form-row');
+        const row = cb.closest('.dest-block, .form-row');
         cb.disabled = !row || row.style.display === 'none';
     });
 }
@@ -658,7 +700,7 @@ function toggleEditDest(echoId) {
     document.querySelectorAll(
         `#edit-email-fields-${echoId} input[name="render_html"], #edit-matrix-fields-${echoId} input[name="render_html"]`
     ).forEach((cb) => {
-        const row = cb.closest('.form-row');
+        const row = cb.closest('.dest-block, .form-row');
         cb.disabled = !row || row.style.display === 'none';
     });
 }
@@ -702,7 +744,8 @@ async function previewTemplate(btn) {
         return;
     }
 
-    let box = btn.parentElement.querySelector('.template-preview');
+    const previewHost = btn.closest('.form-field') || btn.parentElement;
+    let box = previewHost.querySelector('.template-preview');
     if (!box) {
         box = document.createElement('div');
         box.className = 'template-preview';
@@ -710,7 +753,7 @@ async function previewTemplate(btn) {
         // learns the preview rendered.
         box.setAttribute('role', 'status');
         box.setAttribute('aria-live', 'polite');
-        btn.parentElement.appendChild(box);
+        previewHost.appendChild(box);
     }
     box.innerHTML = '<p class="hint">Rendering against latest feed items...</p>';
 

@@ -2,7 +2,15 @@
 {% block title %}FeedEcho — Curation Queue{% endblock %}
 {% block content %}
 <div class="queue-page">
-<h1>Curation Queue</h1>
+<div class="page-header">
+    <div class="page-header-text">
+        <div class="page-header-title">
+            <h1>Curation Queue</h1>
+            {% if posts %}<span class="count-pill">{{ posts | length }}</span>{% endif %}
+        </div>
+        <p class="page-header-subtitle">Review staged drafts, reorder scheduled posts, and adjust destination posting cadences.</p>
+    </div>
+</div>
 
 {% if request.query_params.get('status') == 'saved' %}
 <div class="flash flash-ok" role="status">Queue cadence settings saved.</div>
